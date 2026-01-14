@@ -1,0 +1,39 @@
+[project]
+name = "fimbox"
+version = "0.1.0"
+description = "A modular open-source testbed framework to standardize Flood Inundation Mapping simulations and evaluation with custom datasets and hydrologic parameters with reproducible workflows."
+authors = [{ name = "Supath Dhital", email = "sdhital@crimson.ua.edu" }]
+maintainers = [{ name = "Supath Dhital", email = "sdhital@crimson.ua.edu" }]
+license = { text = "GPL-3.0" }
+readme = "README.md"
+requires-python = ">=3.10,<3.13"
+dependencies = [
+
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3,<8.4",
+    "black"
+]
+
+[project.urls]
+Homepage = "https://github.com/sdmlua/fimbox"
+Repository = "https://github.com/sdmlua/fimbox"
+Issues = "https://github.com/sdmlua/fimbox/issues"
+
+[build-system]
+requires = ["setuptools>=69.0", "setuptools-scm>=8.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.packages.find]
+where = ["src"]
+exclude = ["tests*"]
+
+[tool.pytest.ini_options]
+minversion = "6.0"
+addopts = "-ra -q"
+testpaths = ["tests"]
