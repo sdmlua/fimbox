@@ -1,5 +1,5 @@
 #preprocessing HUC checker
-from .preprocessing.hucs import HUCChecker, HUCValidationError, HUCCheckResult
+from .preprocessing.huc_test.hucs import HUCChecker, HUCValidationError, HUCCheckResult
 
 __all__ = [
     "HUCChecker", 
