@@ -1,5 +1,5 @@
 ### HUC Validation
-
+<hr style="border: 1px solid blue;">
 This module validates Hydrologic Unit Codes (HUCs) against the acceptable HUC lists packaged in:
 
 `fimbox/config/huc_lists/*.lst`
