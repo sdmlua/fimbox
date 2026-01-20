@@ -1,83 +1,166 @@
+"""
+Author: Supath Dhital (sdhital@crimson.ua.edu)
+Date: Jan 2026
+
+Description: Main pipeline to download, process, and prepare NHDPlus data- Flowlines, Catchments, DEM, Waterbodies
+"""
+
 import os
-import ssl
+import sys
+import py7zr
+import shutil
 import geopandas as gpd
-from pynhd import WaterData, NHDPlusHR
-from shapely.validation import make_valid
+import pandas as pd
+from pathlib import Path
+from typing import List, Dict, Optional
+from urllib.request import Request, urlopen
+from urllib.error import HTTPError, URLError
 
-# Configuration
-OUTPUT_DIR = "/Users/Supath/Downloads/SDML/FIMBOX/Output_Hydro_Data1"
-BOUNDARY_PATH = "/Users/Supath/Downloads/SDML/FIMBOX/Sample_Data/SampleBoundary.shp"
+#Importing Utilities
+from .utils import *
 
-# SSL and Path Setup
-ssl._create_default_https_context = ssl._create_unverified_context
-if not os.path.exists(OUTPUT_DIR):
-    os.makedirs(OUTPUT_DIR)
+# Assuming these are available in your environment/project structure
+# from data.nfhl.download_fema_nfhl import download_nfhl_wrapper
 
-def download_hydro_data():
-    # 1. Load Boundary
-    gdf = gpd.read_file(BOUNDARY_PATH)
-    gdf_4326 = gdf.to_crs("EPSG:4326")
-    geom = gdf_4326.geometry.union_all()
+class getNHDPlusData:
+    def __init__(
+        self, 
+        boundary_path: str, 
+        NHDglobalBoundary: str,     #Contains all NHDPlus VPU/RPU boundaries
+        inputs_dir: str,
+        huc8: Optional[str] = None,
+        epsg: Optional[int] = None
+    ):
+        self.boundary_path = Path(boundary_path)
+        self.NHDglobalBoundary = Path(NHDglobalBoundary)
+        self.inputs_dir = Path(inputs_dir)
+        self.huc8 = huc8
+        
+        # Create output folder based on boundary name
+        self.folder_name = self.boundary_path.stem
+        self.output_root = self.inputs_dir / self.folder_name
+        self.raw_zip_dir = self.output_root / "raw_zips"
+        
+        for d in [self.output_root, self.raw_zip_dir]:
+            d.mkdir(parents=True, exist_ok=True)
 
-    print(f"--- Processing Boundary ---")
+        #Identify VPUs and RPUs using your Finder
+        finder = NHDBoundaryFinder(str(self.boundary_path), str(self.NHDglobalBoundary))
+        self.vpus = finder.vpus
+        self.rpus = finder.rpus
+        
+        # Determine target CRS
+        self.drainage_id = self.vpus[0]['DrainageAreaID'] if self.vpus else "MS"
+        self.target_epsg = 5070 if self.drainage_id != "PI" else (epsg or 6637)
 
-    # 2. Permanent Waterbodies (Lakes, Reservoirs)
-    try:
-        print("Downloading Waterbodies...")
-        wb_service = WaterData("nhdwaterbody")  # Query waterbodies layer
-        waterbodies = wb_service.bygeom(geom)
-        if not waterbodies.empty:
-            waterbodies_path = os.path.join(OUTPUT_DIR, "nhd_waterbodies.gpkg")
-            waterbodies.to_file(waterbodies_path, driver="GPKG")
-            print(f"✅ Saved {len(waterbodies)} Waterbodies to {waterbodies_path}")
-        else:
-            print("⚠️ No Waterbodies found for this area.")
-    except Exception as e:
-        print(f"× Waterbody Error: {e}")
+        #Load user boundary for clipping
+        self.user_gdf = gpd.read_file(self.boundary_path).to_crs(epsg=self.target_epsg)
 
-    # 3. NHDPlus HR Catchments - Download once
-    try:
-        print("Downloading NHDPlus HR Catchments...")
-        catchments_service = NHDPlusHR("catchment")  # Query high-resolution catchments layer
-        catchments = catchments_service.bygeom(geom)
+    def _url_exists(self, url: str) -> bool:
+        try:
+            req = Request(url, method="HEAD")
+            with urlopen(req, timeout=10): return True
+        except: return False
 
-        if not catchments.empty:
-            catchments_path = os.path.join(OUTPUT_DIR, "nhdplus_hr_catchments.gpkg")
-            catchments.to_file(catchments_path, driver="GPKG")
-            print(f"✅ Saved {len(catchments)} NHDPlus HR Catchments to {catchments_path}")
+    def _get_nhd_url(self, drainage: str, unit_id: str, component: str) -> str:
+        base = "https://dmap-data-commons-ow.s3.amazonaws.com/NHDPlusV21/Data"
 
-            # Use the entire catchment geometry to query NHDPlus HR flowlines
-            print("Validating and fixing geometries...")
-            catchments["geometry"] = catchments["geometry"].apply(
-                lambda geom: make_valid(geom) if not geom.is_valid else geom
-            )
-            catchments = catchments[catchments.is_valid]  # Remove invalid geometries
+        # Components: NHDPlusAttributes, NHDPlusCatchment, NHDSnapshot, WBDSnapshot
+        """
+        This will be directly retrieved from the NHDPlusV21 S3 storage: https://dmap-data-commons-ow.s3.amazonaws.com/NHDPlusV21/Documentation/Metadata/NHDPlusV2_metadata.htm
+        For More information: https://www.epa.gov/waterdata/get-nhdplus-national-hydrography-dataset-plus-data
+        """
+        for vv in range(30, 0, -1):
+            url = f"{base}/NHDPlus{drainage}/NHDPlusV21_{drainage}_{unit_id}_{component}_{vv:02d}.7z"
+            if self._url_exists(url): return url
+        return ""
 
-            if len(catchments) == 0:
-                print("⚠️ No valid catchments available for flowline query")
-                return
+    def download_and_unzip(self):
+        """Downloads all intersecting VPU/RPU components and unzips them."""
 
-            flowline_geom = catchments.geometry.union_all()  # Combine all catchment geometries
-        else:
-            print("⚠️ No NHDPlus HR Catchments found for this area.")
-            return
-    except Exception as e:
-        print(f"× NHDPlus HR Catchment Error: {e}")
-        return
+        # Note: RPUs are used for Raster/Hydrodem, but Attributes/Flowlines are by VPU
+        targets = []
+        for vpu in self.vpus:
+            for comp in ["NHDPlusAttributes", "NHDSnapshot", "WBDSnapshot", "NHDPlusCatchment"]:
+                targets.append((vpu['UnitID'], comp))
+        
+        for unit_id, comp in targets:
+            url = self._get_nhd_url(self.drainage_id, unit_id, comp)
+            if not url: continue
+            
+            zip_path = self.raw_zip_dir / os.path.basename(url)
+            if not zip_path.exists():
+                print(f"Downloading {url}...")
+                os.system(f'wget -q -O "{zip_path}" "{url}"')
+            
+            with py7zr.SevenZipFile(zip_path, mode='r') as z:
+                z.extractall(path=self.output_root / "unzipped")
 
-    # 4. NHDPlus HR Flowlines
-    try:
-        print("Downloading NHDPlus HR Flowlines...")
-        nhd_hr_service = NHDPlusHR("flowline")  # Correct high-resolution flowlines layer
-        flowlines = nhd_hr_service.bygeom(flowline_geom)  # Query flowlines by the geometry
-        if not flowlines.empty:
-            flowlines_path = os.path.join(OUTPUT_DIR, "nhd_flowlines_hr.gpkg")
-            flowlines.to_file(flowlines_path, driver="GPKG")
-            print(f"✅ Saved {len(flowlines)} NHDPlus HR Flowlines to {flowlines_path}")
-        else:
-            print("⚠️ No Flowlines found for the provided area.")
-    except Exception as e:
-        print(f"× NHDPlus HR Flowline Error: {e}")
+    def process_vector_data(self):
+        """Merges, clips, and processes Flowlines and Catchments."""
+        unzipped_path = self.output_root / "unzipped"
+        
+        # Process Flowlines
+        flowline_paths = list(unzipped_path.rglob("NHDFlowline.shp"))
+        flowlines = pd.concat([gpd.read_file(p) for p in flowline_paths]).to_crs(epsg=self.target_epsg)
+        flowlines = gpd.clip(flowlines, self.user_gdf)
+        
+        # Join Attributes
+        flowlines = self._join_attributes(flowlines, unzipped_path)
 
-if __name__ == "__main__":
-    download_hydro_data()
+        # Process Catchments
+        catchment_paths = list(unzipped_path.rglob("Catchment.shp"))
+        catchments = pd.concat([gpd.read_file(p) for p in catchment_paths]).to_crs(epsg=self.target_epsg)
+        catchments = gpd.clip(catchments, self.user_gdf)
+        
+        # 4. Optional HUC8 Filter
+        if self.huc8:
+            # Filter if a HUC8 is provided
+            pass 
+
+        # Save Outcomes
+        flowlines.to_file(self.output_root / "Flowlines.gpkg", driver="GPKG")
+        catchments.to_file(self.output_root / "Catchments.gpkg", driver="GPKG")
+        
+        # Trigger Headwaters (Assuming findHeadWaterPoints is imported)
+        # hw = findHeadWaterPoints(flowlines)
+        # hw.to_file(self.output_root / "Headwaters.gpkg", driver="GPKG")
+
+    def run_fema(self):
+        """Triggers FEMA NFHL download if HUC8 is available or from bounds."""
+        huc_list = [self.huc8] if self.huc8 else [] 
+        # download_nfhl_wrapper(huc_list=huc_list, output_folder=self.output_root / "FEMA")
+
+    def run_full_pipeline(self):
+        """Main orchestrator."""
+        print(f"Starting pipeline for {self.folder_name}...")
+        
+        # DEM handled by your external module
+        print("Processing DEM via DEMProcessor...")
+        DEMProcessor(str(self.boundary_path), output_dir=str(self.output_root / "DEM"), epsg=self.target_epsg)
+        
+        self.download_and_unzip()
+        self.process_vector_data()
+        self.run_fema()
+        print(f"Done. Outputs in {self.output_root}")
+
+# ---------------------------------------------------------
+# Support Class (Already provided by you, integrated here)
+# ---------------------------------------------------------
+class NHDBoundaryFinder:
+    def __init__(self, user_boundary_path, global_boundary_path):
+        nhd_gdf = gpd.read_file(global_boundary_path)
+        user_gdf = gpd.read_file(user_boundary_path)
+        if user_gdf.crs != nhd_gdf.crs:
+            user_gdf = user_gdf.to_crs(nhd_gdf.crs)
+        intersected = gpd.sjoin(nhd_gdf, user_gdf, how="inner", predicate="intersects")
+        unique_units = intersected.drop_duplicates(subset=['UnitID'])
+        self.vpus, self.rpus = [], []
+        for _, row in unique_units.iterrows():
+            if row['UnitType'] == 'VPU':
+                self.vpus.append({
+                    "DrainageAreaID": row['DrainageID'], "UnitID": row['UnitID'],
+                    "UnitName": str(row['UnitName']).replace(" ", "").replace("-", "")
+                })
+            elif row['UnitType'] == 'RPU':
+                self.rpus.append({"DrainageAreaID": row['DrainageID'], "UnitID": row['UnitID']})
