@@ -2,14 +2,14 @@
 Author: Supath Dhital (sdhital@crimson.ua.edu)
 Date: Jan 2026
 
-Description: This contains small utilites modules for the NHDPlus data prerocessing.
+Description: This contains small utilities modules for the NHDPlus data preprocessing.
 """
 
 import geopandas as gpd
+import pandas as pd
 from shapely.geometry import Point
 import argparse
 
-#Get the VPU and RPU information to automate the extraction of NHDPlus data
 class NHDBoundaryFinder:
     def __init__(self, user_boundary_path, global_boundary_path):
         """
@@ -17,7 +17,11 @@ class NHDBoundaryFinder:
         """
         # Load datasets
         nhd_gdf = gpd.read_file(global_boundary_path)
-        user_gdf = gpd.read_file(user_boundary_path)
+        
+        if isinstance(user_boundary_path, gpd.GeoDataFrame):
+            user_gdf = user_boundary_path
+        else:
+            user_gdf = gpd.read_file(user_boundary_path)
 
         # Align CRS
         if user_gdf.crs != nhd_gdf.crs:
@@ -25,30 +29,47 @@ class NHDBoundaryFinder:
 
         # Spatial intersection
         intersected = gpd.sjoin(nhd_gdf, user_gdf, how="inner", predicate="intersects")
-        unique_units = intersected.drop_duplicates(subset=['UnitID'])
+        
+        # Case-insensitive column helper
+        def _get_col(df, candidates):
+            for c in df.columns:
+                if c.lower() in [cand.lower() for cand in candidates]:
+                    return c
+            return None
+
+        unit_id_col = _get_col(intersected, ['UnitID'])
+        unit_type_col = _get_col(intersected, ['UnitType'])
+        drainage_col = _get_col(intersected, ['DrainageID', 'DrainageAreaID'])
+        unit_name_col = _get_col(intersected, ['UnitName'])
+
+        if not unit_id_col:
+            raise KeyError(f"Could not find 'UnitID' in {global_boundary_path}")
+
+        unique_units = intersected.drop_duplicates(subset=[unit_id_col])
 
         self.vpus = []
         self.rpus = []
 
         for _, row in unique_units.iterrows():
-            if row['UnitType'] == 'VPU':
-                # Clean VPU UnitName: remove spaces
-                clean_name = str(row['UnitName']).replace(" ", "")
+            u_type = str(row[unit_type_col]).upper() if unit_type_col else ""
+            d_id = row[drainage_col] if drainage_col else "Unknown"
+            u_id = row[unit_id_col]
+            
+            if u_type == 'VPU':
+                u_name = str(row[unit_name_col]).replace(" ", "") if unit_name_col else "None"
                 self.vpus.append({
-                    "DrainageAreaID": row['DrainageID'],
-                    "UnitID": row['UnitID'],
-                    "UnitName": clean_name
+                    "DrainageAreaID": d_id,
+                    "UnitID": u_id,
+                    "UnitName": u_name
                 })
-            elif row['UnitType'] == 'RPU':
-                # RPUs only require ID information
+            elif u_type == 'RPU':
                 self.rpus.append({
-                    "DrainageAreaID": row['DrainageID'],
-                    "UnitID": row['UnitID']
+                    "DrainageAreaID": d_id,
+                    "UnitID": u_id
                 })
 
 #Derive the headwater from the flowline data
 """
-Module: derive_headwaters.py
 Description: Extracts headwater source points from NHDPlus flowlines.
 """
 def find_headwater_points(flowlines_gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:

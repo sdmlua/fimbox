@@ -6,6 +6,7 @@ Description: Module to fetch 3DEP DEM data based on user-defined boundary and re
 It also processes local DEM files if provided or outside CONUS regions. 
 Everything from resolution to CRS can be specified at initialization and runs automatically.
 """
+import logging
 from typing import Union, Tuple, Optional
 from pathlib import Path
 import xarray as xr
@@ -18,20 +19,23 @@ from rasterio.enums import Resampling
 class DEMProcessor:
     def __init__(
         self, 
-        boundary: str, 
+        boundary: Union[str, gpd.GeoDataFrame], 
         layer: Optional[str] = None, 
         output_dir: str = "./dem_output",
         dem_file: Optional[str] = None,
         resolution: int = 10,
         epsg: Optional[int] = None
     ):
-        self.boundary_file = boundary
+        self.boundary_input = boundary
         self.layer = layer
         self.dem_file = dem_file
         self.resolution = resolution
         
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Setup Logger - Uses "DEMProcessor" name to link to pipeline logger
+        self.logger = logging.getLogger("DEMProcessor")
         
         # Load boundary and ensure it is in WGS84
         self.gdf_wgs84 = self._load_gdf().to_crs(epsg=4326)
@@ -48,15 +52,19 @@ class DEMProcessor:
     def _load_gdf(self) -> gpd.GeoDataFrame:
         """Loads the vector boundary file safely."""
         try:
-            gdf = gpd.read_file(self.boundary_file, layer=self.layer)
+            if isinstance(self.boundary_input, gpd.GeoDataFrame):
+                return self.boundary_input
+            
+            gdf = gpd.read_file(self.boundary_input, layer=self.layer)
             if gdf.empty:
                 raise ValueError("The provided boundary file is empty.")
             return gdf
         except Exception as e:
+            self.logger.error(f"Error reading boundary input: {e}")
             raise IOError(f"Error reading boundary file: {e}")
 
     def _estimate_utm_crs(self) -> int:
-        """Calculates UTM EPSG code based on bounds (Warning Fix)."""
+        """Calculates UTM EPSG code based on bounds."""
         bounds = self.gdf_wgs84.total_bounds
         lon = (bounds[0] + bounds[2]) / 2
         lat = (bounds[1] + bounds[3]) / 2
@@ -67,6 +75,8 @@ class DEMProcessor:
 
     def run(self) -> str:
         """Executes the DEM processing logic."""
+        self.logger.info(f"Initiating DEM processing. Target CRS: EPSG:{self.target_crs}")
+        
         # Project boundary for final clipping to the target projected CRS
         gdf_projected = self.gdf_wgs84.to_crs(epsg=self.target_crs)
 
@@ -80,7 +90,7 @@ class DEMProcessor:
         }
 
         if self.dem_file:
-            # Local DEM processing workflow
+            self.logger.info(f"Processing local DEM file: {self.dem_file}")
             dem = rioxarray.open_rasterio(self.dem_file)
             
             dem = dem.rio.reproject(
@@ -93,31 +103,26 @@ class DEMProcessor:
             save_path = self.output_dir / "processed_local_dem.tif"
             dem.rio.to_raster(save_path, **export_kwargs)
         else:
-            # Fetch 3DEP DEM data workflow
+            self.logger.info(f"Fetching 3DEP DEM data from USGS at {self.resolution}m resolution...")
             import py3dep
             try:
                 standard_res = [1, 3, 10, 30, 60]
                 
                 if self.resolution in standard_res:
-                    # Standard resolution - Fetch directly with target CRS
                     dem_data = py3dep.get_dem(
                         geometry=self.boundary_geom, 
                         resolution=self.resolution, 
-                        crs=4326 # Request in WGS84 to avoid NoData errors
+                        crs=4326 
                     )
-                    # Reproject to target UTM but keep the native standard resolution
                     dem_data = dem_data.rio.reproject(f"EPSG:{self.target_crs}")
                 else:
-                    # Non-standard resolution
-                    print(f"Non-standard resolution {self.resolution}m. Fetching at nearest 3DEP res and resampling.")
-                    
+                    self.logger.info(f"Non-standard resolution {self.resolution}m. Fetching at nearest 3DEP res and resampling.")
                     dem_data = py3dep.get_dem(
                         geometry=self.boundary_geom, 
                         resolution=self.resolution, 
                         crs=4326
                     )
                     
-                    # Force the specific non-standard resolution
                     dem_data = dem_data.rio.reproject(
                         f"EPSG:{self.target_crs}",
                         resolution=self.resolution,
@@ -128,9 +133,11 @@ class DEMProcessor:
                 dem_data = dem_data.where(dem_data > -90000, -999999)
                 dem_data.rio.write_nodata(-999999, inplace=True)
                 
-                save_path = self.output_dir / "3dep_dem.tif"
+                save_path = self.output_dir / f"3dep_dem_{self.resolution}m.tif"
                 dem_data.rio.to_raster(save_path, **export_kwargs)
+                self.logger.info(f"DEM successfully saved to {save_path}")
             except Exception as e:
+                self.logger.error(f"3DEP fetch failed: {e}")
                 raise RuntimeError(f"3DEP fetch failed. Error: {e}")
         
         return str(save_path)
