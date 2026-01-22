@@ -2,13 +2,15 @@
 from .preprocessing.huc_test.hucs import HUCChecker, HUCValidationError, HUCCheckResult
 
 #DEM processing
-from .preprocessing.nhd_data.dem_process import DEMProcessor
+from .preprocessing.download_data.dem_process import DEMProcessor
 
+#---Dataset downloading for a given boundary---
 #Get NHDPlus Dataset
-from .preprocessing.nhd_data.nhdplus import getNHDPlusData
-
+from .preprocessing.download_data.nhdplus import getNHDPlusData
 #FEMA NFHL data processing module
-from .preprocessing.nhd_data.nfhl_data import DownloadFEMANFHL
+from .preprocessing.download_data.nfhl_data import DownloadFEMANFHL
+#get NLD Dataset
+from .preprocessing.download_data.nld_data import NLDDownloader
 
 __all__ = [
     "HUCChecker", 
@@ -16,7 +18,8 @@ __all__ = [
     "HUCCheckResult",
     "DEMProcessor",
     "DownloadFEMANFHL",
-    "getNHDPlusData"
+    "getNHDPlusData",
+    "NLDDownloader"
     ]
 
 

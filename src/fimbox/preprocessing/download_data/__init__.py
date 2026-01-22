@@ -10,9 +10,13 @@ from .nhdplus import getNHDPlusData
 #FEMA National Flood Hazard Layer (NFHL) data processing module
 from .nfhl_data import DownloadFEMANFHL
 
+#Get the NLD Dataset
+from .nld_data import NLDDownloader
+
 __all__ = [
     "DEMProcessor",
     "NHDBoundaryFinder",
     "DownloadFEMANFHL",
-    "getNHDPlusData"
+    "getNHDPlusData",
+    "NLDDownloader"
     ]
