@@ -10,7 +10,7 @@ from .preprocessing.download_data.nhdplus import getNHDPlusData
 #FEMA NFHL data processing module
 from .preprocessing.download_data.nfhl_data import DownloadFEMANFHL
 #get NLD Dataset
-from .preprocessing.download_data.nld_data import NLDDownloader
+from .preprocessing.download_data.nld_data import DownloadNLD
 
 __all__ = [
     "HUCChecker", 
@@ -19,7 +19,7 @@ __all__ = [
     "DEMProcessor",
     "DownloadFEMANFHL",
     "getNHDPlusData",
-    "NLDDownloader"
+    "DownloadNLD"
     ]
 
 

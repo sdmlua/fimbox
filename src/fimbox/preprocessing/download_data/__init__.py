@@ -11,12 +11,12 @@ from .nhdplus import getNHDPlusData
 from .nfhl_data import DownloadFEMANFHL
 
 #Get the NLD Dataset
-from .nld_data import NLDDownloader
+from .nld_data import DownloadNLD
 
 __all__ = [
     "DEMProcessor",
     "NHDBoundaryFinder",
     "DownloadFEMANFHL",
     "getNHDPlusData",
-    "NLDDownloader"
+    "DownloadNLD"
     ]

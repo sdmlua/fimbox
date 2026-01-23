@@ -1,7 +1,7 @@
 # Example Usage:
 import fimbox
 NHDboundary = "/Users/Supath/Downloads/SDML/FIMBOX/data_s3/BoundaryUnit.shp" #will go to the AWS S3 later
-test_boundary = "/Users/Supath/Downloads/SDML/FIMBOX/Sample_Data/SampleBoundary.shp"
+test_boundary = "/Users/Supath/Downloads/SDML/FIMBOX/Sample_Data/Big_Boundary_MS.shp"
 
 # # Testing the entire NHDPlus data extraction process along with National Flood Hazard Layer data extraction
 # def test_getNHDdata():
@@ -27,7 +27,7 @@ test_boundary = "/Users/Supath/Downloads/SDML/FIMBOX/Sample_Data/SampleBoundary.
 
 #Testing the download of NLD dataset
 def test_download_nld():
-    fimbox.NLDDownloader(
+    fimbox.DownloadNLD(
         boundary=test_boundary,
         # layer_name=None, # Specifically for the geopackage boundary files
         # output_dir= None      #Directory to save output data, else creates 'nld_data' folder in current working directory

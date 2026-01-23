@@ -8,10 +8,11 @@ license = { text = "GPL-3.0" }
 readme = "README.md"
 requires-python = ">=3.10,<3.13"
 dependencies = [
-"pynhd",
-"pygeohydro",
-"py3dep",
-"geopandas",
+    "pynhd",
+    "pygeohydro",
+    "py3dep",
+    "geopandas",
+    "tqdm>=4.67.1",
 ]
 
 [project.optional-dependencies]
