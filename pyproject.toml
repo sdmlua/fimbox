@@ -13,6 +13,7 @@ dependencies = [
     "py3dep",
     "geopandas",
     "tqdm>=4.67.1",
+    "osmnx>=2.0.7",
 ]
 
 [project.optional-dependencies]

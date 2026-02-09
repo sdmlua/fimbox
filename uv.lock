@@ -580,6 +580,7 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "geopandas" },
+    { name = "osmnx" },
     { name = "py3dep" },
     { name = "pygeohydro" },
     { name = "pynhd" },
@@ -596,6 +597,7 @@ dev = [
 requires-dist = [
     { name = "black", marker = "extra == 'dev'" },
     { name = "geopandas" },
+    { name = "osmnx", specifier = ">=2.0.7" },
     { name = "py3dep" },
     { name = "pygeohydro" },
     { name = "pynhd" },
@@ -1121,6 +1123,26 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/0d/04/02102b8d19fdcb009d72d622bb5781e8f3fae1646bf3e18c53d1bc8115b5/orjson-3.11.5-cp312-cp312-win32.whl", hash = "sha256:9172578c4eb09dbfcf1657d43198de59b6cef4054de385365060ed50c458ac98", size = 135255, upload-time = "2025-12-06T15:54:37.209Z" },
     { url = "https://files.pythonhosted.org/packages/d4/fb/f05646c43d5450492cb387de5549f6de90a71001682c17882d9f66476af5/orjson-3.11.5-cp312-cp312-win_amd64.whl", hash = "sha256:2b91126e7b470ff2e75746f6f6ee32b9ab67b7a93c8ba1d15d3a0caaf16ec875", size = 133252, upload-time = "2025-12-06T15:54:38.401Z" },
     { url = "https://files.pythonhosted.org/packages/dc/a6/7b8c0b26ba18c793533ac1cd145e131e46fcf43952aa94c109b5b913c1f0/orjson-3.11.5-cp312-cp312-win_arm64.whl", hash = "sha256:acbc5fac7e06777555b0722b8ad5f574739e99ffe99467ed63da98f97f9ca0fe", size = 126777, upload-time = "2025-12-06T15:54:39.515Z" },
+]
+
+[[package]]
+name = "osmnx"
+version = "2.0.7"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "geopandas" },
+    { name = "networkx", version = "3.4.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
+    { name = "networkx", version = "3.6.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
+    { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
+    { name = "numpy", version = "2.4.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
+    { name = "pandas", version = "2.3.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
+    { name = "pandas", version = "3.0.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
+    { name = "requests" },
+    { name = "shapely" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/11/65/b1f83d773371669fd53bfbe82d8d67880bcf907756c56be751dfffadb806/osmnx-2.0.7.tar.gz", hash = "sha256:a880ba6fdb288a821db73b6ca2a0c677538e0af7229b11759fbfa7fbb19be478", size = 87886, upload-time = "2025-11-26T04:07:54.082Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/0e/a7/8606797abfd9a47cd11f26ca7d70b818d9e2f5346811d797efb3429b7603/osmnx-2.0.7-py3-none-any.whl", hash = "sha256:1aec19d3dc614279f36f4ead7b493adbc45f53bc99a43a76067a6f15c1fcac97", size = 101490, upload-time = "2025-11-26T04:07:52.856Z" },
 ]
 
 [[package]]
