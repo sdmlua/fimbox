@@ -1,9 +1,10 @@
 """
 Author: Supath Dhital (sdhital@crimson.ua.edu)
 Date created: Jan 2026
+Data updated: Feb 9,2025
 
 Description: Main pipeline to download, process, and prepare NHDPlus data. 
-Optimized for rocket-speed S3 retrieval and hydrological boundary alignment.
+Optimized for speed S3 retrieval and hydrological boundary alignment.
 """
 
 import os
@@ -17,8 +18,13 @@ from pynhd import WaterData
 import geopandas as gpd
 import pandas as pd
 from pathlib import Path
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Tuple, Sequence, Union
 from urllib.request import Request, urlopen
+import math
+import json
+from dataclasses import dataclass
+from shapely.geometry import Polygon, MultiPolygon, box
+from shapely.ops import unary_union
 
 # Importing Utilities
 from .utils import *
@@ -27,6 +33,7 @@ from .dem_process import DEMProcessor
 # Import NFHL downloader
 from .nfhl_data import DownloadFEMANFHL
 
+#THIS IS THE CODE WHICH DOWNLOAD AND PROCESSED DATA FROM THE Environmental Protection Agency (EPA) National Hydrography Dataset Plus (NHDPlus) Version 2.1, 
 class getNHDPlusData:
     def __init__(
         self, 
@@ -310,3 +317,198 @@ if __name__ == "__main__":
         epsg=args.epsg,
         out_dir=args.out_dir
     )
+
+#THIS IS THE CODE FROM THE ARCGIS ONLINE USING ARCGIS REST API, WHICH PROCESSES THE DATA DOWNLOAD MUCH FASTER
+#National Water Model Flowline
+"""
+- Downloads NWM Flowlines (FeatureServer/0)
+- Clips by boundary (file/gdf/shapely/bbox)
+- Pages beyond MaxRecordCount (2000) and merges
+- Saves to GeoPackage in EPSG:5070 
+- Keeps ALL attributes (outFields='*')
+"""
+@dataclass
+class ArcGISDownloader:
+    """Simple ArcGIS FeatureServer downloader with chunking"""
+    layer_url: str
+    out_sr: int = 5070
+    page_size: int = 2000
+    timeout: int = 120
+    debug: bool = True
+    
+    def log(self, msg):
+        if self.debug:
+            print(f"[DEBUG] {msg}")
+    
+    def _get_geometry(self, boundary, boundary_layer=None, boundary_crs=None):
+        """Convert boundary to EPSG:4326 polygon"""
+        # Handle file path (including geopackage with layer)
+        if isinstance(boundary, (str, Path)):
+            boundary_path = Path(boundary)
+            
+            # Check if it's a geopackage
+            if boundary_path.suffix.lower() == '.gpkg':
+                if boundary_layer:
+                    self.log(f"Reading layer '{boundary_layer}' from {boundary_path}")
+                    gdf = gpd.read_file(boundary_path, layer=boundary_layer)
+                else:
+                    # Get first layer if not specified
+                    layers = gpd.list_layers(boundary_path)
+                    if len(layers) == 0:
+                        raise ValueError(f"No layers found in {boundary_path}")
+                    layer_name = layers.iloc[0]['name']
+                    self.log(f"No layer specified, using first layer: '{layer_name}'")
+                    gdf = gpd.read_file(boundary_path, layer=layer_name)
+            else:
+                # Regular shapefile/geojson/etc
+                self.log(f"Reading boundary from {boundary_path}")
+                gdf = gpd.read_file(boundary_path)
+            
+            geom = unary_union(gdf.to_crs(4326).geometry)
+        
+        # Handle GeoDataFrame/GeoSeries
+        elif isinstance(boundary, (gpd.GeoDataFrame, gpd.GeoSeries)):
+            self.log("Converting GeoDataFrame/GeoSeries to geometry")
+            geom = unary_union(boundary.to_crs(4326).geometry)
+        
+        # Handle bounding box tuple
+        elif isinstance(boundary, (tuple, list)) and len(boundary) == 4:
+            self.log(f"Creating bbox from {boundary}")
+            geom = box(*boundary)
+            if boundary_crs:
+                geom = gpd.GeoSeries([geom], crs=boundary_crs).to_crs(4326).iloc[0]
+        
+        # Handle shapely geometry directly
+        else:
+            self.log("Using shapely geometry")
+            geom = boundary
+            if boundary_crs:
+                geom = gpd.GeoSeries([geom], crs=boundary_crs).to_crs(4326).iloc[0]
+        
+        # Simplify if too complex
+        coords_count = len(geom.exterior.coords)
+        if coords_count > 1000:
+            self.log(f"Simplifying {coords_count} vertices")
+            geom = geom.simplify(0.0001, preserve_topology=True)
+            self.log(f"Simplified to {len(geom.exterior.coords)} vertices")
+        
+        # Convert to ESRI format
+        rings = [[[float(x), float(y)] for x, y in geom.exterior.coords]]
+        return {"rings": rings}
+    
+    def _post_request(self, params):
+        """Use POST to avoid URL length limits"""
+        url = f"{self.layer_url}/query"
+        self.log(f"POST {url}")
+        
+        response = requests.post(url, data=params, timeout=self.timeout)
+        self.log(f"Response status: {response.status_code}")
+        
+        response.raise_for_status()
+        return response.json()
+    
+    def download(
+        self, 
+        boundary, 
+        boundary_layer: Optional[str] = None,
+        boundary_crs: Optional[int] = None,
+        where: str = "1=1",
+        out_dir: Optional[Union[str, Path]] = None,
+        out_name: str = "nwm_flowlines.gpkg",
+        out_layer: str = "nwm_flowlines"
+    ):
+        """
+        Download data in chunks and combine
+        
+        Args:
+            boundary: Boundary (bbox tuple, file path, GeoDataFrame, or shapely geometry)
+            boundary_layer: Layer name if boundary is a geopackage (optional)
+            boundary_crs: CRS for bbox or shapely geometry (e.g., 4326)
+            where: SQL where clause (default: "1=1")
+            out_dir: Optional output directory (if None, doesn't save)
+            out_name: Output filename (default: nwm_flowlines.gpkg)
+            out_layer: Layer name in output (default: nwm_flowlines)
+            
+        Returns:
+            GeoDataFrame with downloaded data
+        """
+        # Get geometry
+        self.log("Converting boundary...")
+        esri_geom = self._get_geometry(boundary, boundary_layer, boundary_crs)
+        
+        # Count total records
+        self.log("Counting records...")
+        count_params = {
+            "f": "json",
+            "where": where,
+            "geometry": json.dumps(esri_geom),
+            "geometryType": "esriGeometryPolygon",
+            "spatialRel": "esriSpatialRelIntersects",
+            "inSR": 4326,
+            "returnCountOnly": "true",
+        }
+        total = self._post_request(count_params).get("count", 0)
+        print(f"Total records: {total}")
+        
+        if total == 0:
+            print("No records found")
+            return gpd.GeoDataFrame()
+        
+        # Download in chunks
+        n_pages = math.ceil(total / self.page_size)
+        print(f"Downloading {n_pages} page(s)...")
+        
+        chunks = []
+        for i in range(n_pages):
+            offset = i * self.page_size
+            print(f"Page {i+1}/{n_pages} (offset {offset})...")
+            
+            data_params = {
+                "f": "geojson",
+                "where": where,
+                "outFields": "*",
+                "returnGeometry": "true",
+                "geometry": json.dumps(esri_geom),
+                "geometryType": "esriGeometryPolygon",
+                "spatialRel": "esriSpatialRelIntersects",
+                "inSR": 4326,
+                "outSR": self.out_sr,
+                "resultOffset": offset,
+                "resultRecordCount": self.page_size,
+            }
+            
+            geojson = self._post_request(data_params)
+            features = geojson.get("features", [])
+            
+            if features:
+                gdf = gpd.GeoDataFrame.from_features(features, crs=f"EPSG:{self.out_sr}")
+                chunks.append(gdf)
+                print(f"  Got {len(gdf)} records")
+        
+        # Combine all chunks
+        if not chunks:
+            print("No data downloaded")
+            return gpd.GeoDataFrame()
+        
+        result = gpd.GeoDataFrame(pd.concat(chunks, ignore_index=True), crs=chunks[0].crs)
+        print(f"Downloaded {len(result)} total records")
+        
+        # Save if out_dir provided
+        if out_dir:
+            out_dir = Path(out_dir)
+            out_dir.mkdir(parents=True, exist_ok=True)
+            out_path = out_dir / out_name
+            
+            result.to_file(out_path, layer=out_layer, driver="GPKG")
+            print(f"Saved to {out_path}")
+        
+        return result
+
+
+class NWMFlowlinesDownloader(ArcGISDownloader):
+    def __init__(self, debug=True):
+        super().__init__(
+            layer_url="https://services.arcgis.com/ts4gk3YgS68yLGFl/arcgis/rest/services/NWM_FlowLine/FeatureServer/0",
+            out_sr=5070,
+            debug=debug
+        )
