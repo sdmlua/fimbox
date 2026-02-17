@@ -49,7 +49,9 @@ def _packaged_lst_files() -> List[Path]:
         raise FileNotFoundError("fimbox/config/huc_lists not found inside package.")
     files = [Path(p) for p in base.iterdir() if p.name.lower().endswith(".lst")]
     if not files:
-        raise FileNotFoundError("No packaged *.lst files found at fimbox/config/huc_lists/.")
+        raise FileNotFoundError(
+            "No packaged *.lst files found at fimbox/config/huc_lists/."
+        )
     return files
 
 
@@ -79,7 +81,9 @@ class HUCChecker:
                         accepted.add(v)
 
         if not accepted:
-            raise ValueError("Packaged HUC list files were found but contained no usable HUCs.")
+            raise ValueError(
+                "Packaged HUC list files were found but contained no usable HUCs."
+            )
 
         self._accepted_hucs = accepted
         return accepted
@@ -129,7 +133,11 @@ class HUCChecker:
         return out
 
     def _read_file(self, path: Path) -> Set[str]:
-        return self._read_csv_first_col(path) if path.suffix.lower() == ".csv" else self._read_lines(path)
+        return (
+            self._read_csv_first_col(path)
+            if path.suffix.lower() == ".csv"
+            else self._read_lines(path)
+        )
 
     def _read_lines(self, path: Path) -> Set[str]:
         with path.open("r", encoding="utf-8") as f:
@@ -154,7 +162,9 @@ class HUCChecker:
 
 
 def hucinfo(argv: Optional[List[str]] = None) -> int:
-    parser = argparse.ArgumentParser(description="Checks input HUCs for availability within inputs")
+    parser = argparse.ArgumentParser(
+        description="Checks input HUCs for availability within inputs"
+    )
     parser.add_argument(
         "-u",
         "--hucs",

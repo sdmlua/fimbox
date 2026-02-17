@@ -2,9 +2,10 @@
 Author: Supath Dhital
 Date Created: January 2026
 
-Description: Downloads and processes USACE National Levee Database (NLD) data, 
+Description: Downloads and processes USACE National Levee Database (NLD) data,
 which includes levee lines and protected areas, filtered by a user-provided spatial boundary.
 """
+
 import os
 import re
 import logging
@@ -17,23 +18,24 @@ import pandas as pd
 from shapely.geometry import Polygon, MultiPolygon
 from tqdm import tqdm
 
+
 class ESRI_REST:
     """
-    A robust utility for querying ESRI Feature Services. 
+    A robust utility for querying ESRI Feature Services.
     Handles automatic paging (offset) when datasets exceed the server's transfer limit.
     """
 
     def __init__(self, url: str, verbose: bool = True):
         self.url = url
         self.verbose = verbose
-        self.base_url = url.split('/query')[0]
+        self.base_url = url.split("/query")[0]
 
     @classmethod
     def query(cls, url: str, save_path: str = None, **kwargs) -> gpd.GeoDataFrame:
         """Main entry point. Fetches data and optionally saves to disk."""
         instance = cls(url)
         gdf = instance._execute_query(kwargs)
-        
+
         if save_path:
             gdf.to_file(save_path, driver="GPKG", index=False)
             return None
@@ -50,7 +52,7 @@ class ESRI_REST:
         """Handles the pagination loop and GeoDataFrame concatenation."""
         total_features = self._get_metadata(params)
         params["f"] = "geojson"
-        
+
         results = []
         offset = 0
         limit_reached = True
@@ -62,24 +64,28 @@ class ESRI_REST:
         if total_features == 0:
             return gpd.GeoDataFrame()
 
-        with tqdm(total=total_features, disable=not self.verbose, desc="Downloading") as pbar:
+        with tqdm(
+            total=total_features, disable=not self.verbose, desc="Downloading"
+        ) as pbar:
             while limit_reached:
                 current_params = {**params, "resultOffset": offset}
                 resp = requests.get(self.url, params=current_params)
                 resp.raise_for_status()
-                
+
                 data = resp.json()
                 if "error" in data:
-                    raise Exception(f"ESRI Error {data['error']['code']}: {data['error']['message']}")
+                    raise Exception(
+                        f"ESRI Error {data['error']['code']}: {data['error']['message']}"
+                    )
 
                 batch_gdf = gpd.read_file(resp.text)
                 if batch_gdf.empty:
                     break
-                    
+
                 results.append(batch_gdf)
                 offset += len(batch_gdf)
                 pbar.update(len(batch_gdf))
-                
+
                 limit_reached = data.get("exceededTransferLimit", False)
                 if not limit_reached and offset < total_features:
                     limit_reached = True
@@ -91,27 +97,29 @@ class ESRI_REST:
 
         return pd.concat(results, ignore_index=True)
 
+
 class DownloadNLD:
     """
-    Downloads and processes USACE National Levee Database (NLD) data 
+    Downloads and processes USACE National Levee Database (NLD) data
     using the new geospatial.sec.usace.army.mil endpoint.
     """
-    
-    # UPDATED URLs and LAYER IDs 
+
+    # UPDATED URLs and LAYER IDs
     BASE_SERVICE_URL = "https://geospatial.sec.usace.army.mil/dls/rest/services/NLD/Public/FeatureServer"
-    LINE_URL = f"{BASE_SERVICE_URL}/15/query" 
-    POLY_URL = f"{BASE_SERVICE_URL}/16/query" 
+    LINE_URL = f"{BASE_SERVICE_URL}/15/query"
+    POLY_URL = f"{BASE_SERVICE_URL}/16/query"
+
     def __init__(
         self,
         boundary: Union[str, Path, gpd.GeoDataFrame, Polygon, MultiPolygon],
         layer_name: Optional[str] = None,
         epsg: int = 5070,
-        output_dir: Optional[str] = None
+        output_dir: Optional[str] = None,
     ):
         self.epsg = epsg
-        self.today = datetime.now().strftime('%y%m%d')
-        
-        logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
+        self.today = datetime.now().strftime("%y%m%d")
+
+        logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
         self.logger = logging.getLogger(__name__)
 
         self.output_dir = Path(output_dir) if output_dir else Path.cwd() / "nld_data"
@@ -119,7 +127,7 @@ class DownloadNLD:
 
         # Process Boundary
         self.boundary_gdf = self._prepare_boundary(boundary, layer_name)
-        
+
         # bbox uses standard floats for the API
         raw_bbox = self.boundary_gdf.total_bounds
         self.bbox = [float(x) for x in raw_bbox]
@@ -130,7 +138,7 @@ class DownloadNLD:
         if isinstance(boundary, (str, Path)):
             if not os.path.exists(boundary):
                 raise FileNotFoundError(f"Boundary path not found: {boundary}")
-            if str(boundary).endswith('.gpkg') and layer_name:
+            if str(boundary).endswith(".gpkg") and layer_name:
                 gdf = gpd.read_file(boundary, layer=layer_name)
             else:
                 gdf = gpd.read_file(boundary)
@@ -147,13 +155,15 @@ class DownloadNLD:
 
     def _query_nld(self, url: str, is_poly: bool = False) -> gpd.GeoDataFrame:
         geometry_filter = {
-            "xmin": self.bbox[0], "ymin": self.bbox[1],
-            "xmax": self.bbox[2], "ymax": self.bbox[3],
-            "spatialReference": {"wkid": self.epsg}
+            "xmin": self.bbox[0],
+            "ymin": self.bbox[1],
+            "xmax": self.bbox[2],
+            "ymax": self.bbox[3],
+            "spatialReference": {"wkid": self.epsg},
         }
 
         layer_type = "Polygons (Layer 16)" if is_poly else "Lines (Layer 15)"
-        
+
         query_args = {
             "url": url,
             "f": "json",
@@ -185,18 +195,22 @@ class DownloadNLD:
             return gpd.GeoDataFrame()
 
     def run(self):
-        print("\n" + "-"*50)
+        print("\n" + "-" * 50)
         print(f"NLD DOWNLOAD AUDIT - {datetime.now().strftime('%H:%M:%S')}")
         print("-" * 50)
-        
+
         lines = self._query_nld(self.LINE_URL, is_poly=False)
         if not lines.empty:
-            lines.to_file(self.output_dir / f"NLD_Lines_{self.today}.gpkg", driver="GPKG")
+            lines.to_file(
+                self.output_dir / f"NLD_Lines_{self.today}.gpkg", driver="GPKG"
+            )
             print(f"Saved {len(lines)} levee lines.")
-        
+
         polys = self._query_nld(self.POLY_URL, is_poly=True)
         if not polys.empty:
-            polys.to_file(self.output_dir / f"NLD_Polygons_{self.today}.gpkg", driver="GPKG")
+            polys.to_file(
+                self.output_dir / f"NLD_Polygons_{self.today}.gpkg", driver="GPKG"
+            )
             print(f"Saved {len(polys)} leveed area polygons.")
-        
+
         print("Process complete.")

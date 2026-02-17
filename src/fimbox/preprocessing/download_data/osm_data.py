@@ -43,7 +43,9 @@ from shapely.ops import unary_union
 class _OSMBoundaryIO:
     out_sr: int = 5070
 
-    def _read_boundary_file(self, path: Union[str, Path], layer: Optional[str] = None) -> gpd.GeoDataFrame:
+    def _read_boundary_file(
+        self, path: Union[str, Path], layer: Optional[str] = None
+    ) -> gpd.GeoDataFrame:
         path = Path(path)
         if not path.exists():
             raise FileNotFoundError(path)
@@ -93,19 +95,25 @@ class _OSMBoundaryIO:
             return self._ensure_poly(geom)
 
         # bbox
-        if isinstance(boundary, (tuple, list)) and len(boundary) == 4 and all(
-            isinstance(x, (int, float)) for x in boundary
+        if (
+            isinstance(boundary, (tuple, list))
+            and len(boundary) == 4
+            and all(isinstance(x, (int, float)) for x in boundary)
         ):
             geom = box(*boundary)
             if boundary_crs is not None:
-                geom = gpd.GeoSeries([geom], crs=boundary_crs).to_crs("EPSG:4326").iloc[0]
+                geom = (
+                    gpd.GeoSeries([geom], crs=boundary_crs).to_crs("EPSG:4326").iloc[0]
+                )
             return self._ensure_poly(geom)
 
         # shapely geometry
         if isinstance(boundary, (Polygon, MultiPolygon)):
             geom = boundary
             if boundary_crs is not None:
-                geom = gpd.GeoSeries([geom], crs=boundary_crs).to_crs("EPSG:4326").iloc[0]
+                geom = (
+                    gpd.GeoSeries([geom], crs=boundary_crs).to_crs("EPSG:4326").iloc[0]
+                )
             return self._ensure_poly(geom)
 
         raise TypeError(f"Unsupported boundary type: {type(boundary)}")
@@ -115,7 +123,9 @@ class _OSMBoundaryIO:
         if geom.is_empty:
             raise ValueError("Boundary geometry is empty after dissolve/reproject.")
         if geom.geom_type not in ("Polygon", "MultiPolygon"):
-            raise TypeError(f"Boundary must dissolve to Polygon/MultiPolygon, got {geom.geom_type}")
+            raise TypeError(
+                f"Boundary must dissolve to Polygon/MultiPolygon, got {geom.geom_type}"
+            )
         return geom
 
     def _write_gpkg(
@@ -172,7 +182,9 @@ class DownloadOSMRoads(_OSMBoundaryIO):
 
         for attempt in range(1, self.max_attempts + 1):
             try:
-                r = requests.post(url, data=query.encode("utf-8"), timeout=self.timeout + 30)
+                r = requests.post(
+                    url, data=query.encode("utf-8"), timeout=self.timeout + 30
+                )
                 if r.status_code in (429, 504, 502, 503):
                     raise RuntimeError(f"Overpass busy (HTTP {r.status_code})")
                 r.raise_for_status()
@@ -181,12 +193,16 @@ class DownloadOSMRoads(_OSMBoundaryIO):
                 wait = self.sleep_base * attempt + random.uniform(0, 1.5)
                 time.sleep(wait)
                 if attempt == self.max_attempts:
-                    raise RuntimeError(f"Overpass query failed after {self.max_attempts} attempts: {e}") from e
+                    raise RuntimeError(
+                        f"Overpass query failed after {self.max_attempts} attempts: {e}"
+                    ) from e
 
     @staticmethod
     def _json_to_lines_gdf(osm_json: dict) -> gpd.GeoDataFrame:
         elems = osm_json.get("elements", [])
-        nodes = {e["id"]: (e["lon"], e["lat"]) for e in elems if e.get("type") == "node"}
+        nodes = {
+            e["id"]: (e["lon"], e["lat"]) for e in elems if e.get("type") == "node"
+        }
 
         rows = []
         for e in elems:
@@ -326,7 +342,9 @@ class DownloadOSMBridges(_OSMBoundaryIO):
         return list(connected_components(graph))
 
     @staticmethod
-    def _clean_schema(gdf: gpd.GeoDataFrame, drop_list_columns: bool = True) -> gpd.GeoDataFrame:
+    def _clean_schema(
+        gdf: gpd.GeoDataFrame, drop_list_columns: bool = True
+    ) -> gpd.GeoDataFrame:
         if gdf is None or len(gdf) == 0:
             return gdf
 
@@ -425,7 +443,9 @@ class DownloadOSMBridges(_OSMBoundaryIO):
         gdf = gdf[gdf.geometry.notna()].copy()
         return gdf
 
-    def _pull_bridges_osmnx(self, geom4326: Union[Polygon, MultiPolygon]) -> gpd.GeoDataFrame:
+    def _pull_bridges_osmnx(
+        self, geom4326: Union[Polygon, MultiPolygon]
+    ) -> gpd.GeoDataFrame:
         # osmnx reads better in 4326; we output 5070 later
         ox.settings.requests_timeout = self.requests_timeout
 
@@ -436,7 +456,10 @@ class DownloadOSMBridges(_OSMBoundaryIO):
                     return gpd.GeoDataFrame(geometry=[], crs="EPSG:4326")
 
                 # OSMnx returns multiindex (element, id). Keep id as osmid and drop element.
-                if isinstance(gdf.index, pd.MultiIndex) and "element" in gdf.index.names:
+                if (
+                    isinstance(gdf.index, pd.MultiIndex)
+                    and "element" in gdf.index.names
+                ):
                     gdf = gdf.droplevel("element")
 
                 gdf = gdf.copy()
@@ -482,13 +505,17 @@ class DownloadOSMBridges(_OSMBoundaryIO):
         if not dissolved_groups:
             out = buffered.copy()
         else:
-            out = gpd.GeoDataFrame(pd.concat(dissolved_groups, ignore_index=True), crs=buffered.crs)
+            out = gpd.GeoDataFrame(
+                pd.concat(dissolved_groups, ignore_index=True), crs=buffered.crs
+            )
 
         # buffered polygons -> linestring exteriors
         out["geometry"] = out.geometry.apply(
-            lambda geom: LineString(geom.exterior.coords)
-            if geom is not None and geom.geom_type == "Polygon"
-            else geom
+            lambda geom: (
+                LineString(geom.exterior.coords)
+                if geom is not None and geom.geom_type == "Polygon"
+                else geom
+            )
         )
         out = out[out.geometry.notna()].copy()
         return out
@@ -590,10 +617,22 @@ if __name__ == "__main__":
         help="Boundary file path (shp/gpkg/geojson) OR bbox 'minx,miny,maxx,maxy' (assumed EPSG:4326 unless --boundary_crs given)",
     )
     p.add_argument("--out_dir", required=True, help="Output directory")
-    p.add_argument("--out_name", default=None, help="Output GeoPackage name (defaults depend on mode)")
-    p.add_argument("--out_layer", default=None, help="Output layer name (defaults depend on mode)")
-    p.add_argument("--boundary_layer", default=None, help="Boundary layer name if boundary is a GeoPackage")
-    p.add_argument("--boundary_crs", default=None, help="CRS for bbox/shapely boundary, e.g. 4326")
+    p.add_argument(
+        "--out_name",
+        default=None,
+        help="Output GeoPackage name (defaults depend on mode)",
+    )
+    p.add_argument(
+        "--out_layer", default=None, help="Output layer name (defaults depend on mode)"
+    )
+    p.add_argument(
+        "--boundary_layer",
+        default=None,
+        help="Boundary layer name if boundary is a GeoPackage",
+    )
+    p.add_argument(
+        "--boundary_crs", default=None, help="CRS for bbox/shapely boundary, e.g. 4326"
+    )
     args = p.parse_args()
 
     boundary_val: Any = args.boundary

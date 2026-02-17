@@ -1,15 +1,16 @@
 # Example Usage:
 import fimbox
+
 boundary = "/Users/supath/Downloads/MSResearch/FIMBOX/03020202/wbd.gpkg"
+
 
 def test_process_dem():
     output_path = fimbox.DEMProcessor(
         boundary=boundary,
-        resolution=10,                     #desired DEM resolution in meters (1, 3, or 10), for 3DEP fetch and other
-        output_dir="./dem_test"
+        resolution=10,  # desired DEM resolution in meters (1, 3, or 10), for 3DEP fetch and other
+        output_dir="./dem_test",
         # layer: Optional[str] = None,     #if boundary is geopackage with multiple layers
-        # dem_file: Optional[str] = None,  #path to local DEM file if available or outside CONUS  
+        # dem_file: Optional[str] = None,  #path to local DEM file if available or outside CONUS
         # epsg: Optional[int] = None       #desired output CRS EPSG code for projection, if None auto-detects UTM zone
-        
     )
     print(f"3DEP DEM saved at: {output_path}")

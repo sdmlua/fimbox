@@ -7,11 +7,12 @@ Downloads and processes FEMA NFHL flood hazard zones.
 Improved to handle large areas via automatic bbox tiling + optional paging, and merges tiles
 into one final output per layer.
 """
+
 import logging
 import argparse
 import math
 import time
-from datetime import datetime, timezone 
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Union, Optional, List, Tuple
 
@@ -33,10 +34,10 @@ class DownloadFEMANFHL:
         boundary: Union[str, gpd.GeoDataFrame, Polygon, MultiPolygon],
         output_path: Optional[str] = None,
         log_path: Optional[str] = None,
-        tile_size_m: float = 50_000.0,         # 50 km tiles in EPSG:5070
-        tile_count_threshold: int = 5000,      # if feature count > this, tile
-        page_size: int = 2000,                 # paging size within each tile (if supported)
-        max_pages: int = 500,                  # safety guard
+        tile_size_m: float = 50_000.0,  # 50 km tiles in EPSG:5070
+        tile_count_threshold: int = 5000,  # if feature count > this, tile
+        page_size: int = 2000,  # paging size within each tile (if supported)
+        max_pages: int = 500,  # safety guard
         request_timeout_s: int = 120,
         max_retries: int = 3,
         retry_backoff_s: float = 1.5,
@@ -53,7 +54,9 @@ class DownloadFEMANFHL:
         if output_path:
             self.output_path = Path(output_path)
         else:
-            base_name = Path(boundary).stem if isinstance(boundary, str) else "flood_zones"
+            base_name = (
+                Path(boundary).stem if isinstance(boundary, str) else "flood_zones"
+            )
             self.output_path = Path.cwd() / "nfhl_data" / f"fema_nfhl_{base_name}.gpkg"
         self.output_dir = self.output_path.parent
         self.output_dir.mkdir(parents=True, exist_ok=True)
@@ -68,8 +71,12 @@ class DownloadFEMANFHL:
                 run_tag = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
                 actual_log_file = self.output_dir / f"fema_download_{run_tag}.log"
 
-            fh = logging.FileHandler(actual_log_file, mode="w") 
-            fh.setFormatter(logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s"))
+            fh = logging.FileHandler(actual_log_file, mode="w")
+            fh.setFormatter(
+                logging.Formatter(
+                    "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+                )
+            )
             self.logger.addHandler(fh)
             self.logger.info(f"Logging to: {actual_log_file}")
 
@@ -81,14 +88,21 @@ class DownloadFEMANFHL:
 
             self.gdf = self._prepare_geometry(boundary)
             raw_bbox = self.gdf.total_bounds  # xmin, ymin, xmax, ymax in CONUS_CRS
-            self.bbox = [float(raw_bbox[0]), float(raw_bbox[1]), float(raw_bbox[2]), float(raw_bbox[3])]
+            self.bbox = [
+                float(raw_bbox[0]),
+                float(raw_bbox[1]),
+                float(raw_bbox[2]),
+                float(raw_bbox[3]),
+            ]
             self.bbox = [round(x, 2) for x in self.bbox]
 
             self.run()
             self.logger.info("--- NFHL Processing Completed Successfully ---")
 
         except Exception as e:
-            self.logger.error(f"Critical Failure in NFHL module: {str(e)}", exc_info=True)
+            self.logger.error(
+                f"Critical Failure in NFHL module: {str(e)}", exc_info=True
+            )
 
     def _prepare_geometry(self, boundary):
         if isinstance(boundary, str):
@@ -113,7 +127,9 @@ class DownloadFEMANFHL:
             except Exception as e:
                 last_exc = e
                 sleep_s = self.retry_backoff_s * attempt
-                self.logger.warning(f"Request failed (attempt {attempt}/{self.max_retries}): {e}. Sleeping {sleep_s:.1f}s")
+                self.logger.warning(
+                    f"Request failed (attempt {attempt}/{self.max_retries}): {e}. Sleeping {sleep_s:.1f}s"
+                )
                 time.sleep(sleep_s)
         raise last_exc
 
@@ -132,7 +148,9 @@ class DownloadFEMANFHL:
         r = self._post_with_retries(url, payload)
         # If server returns a JSON error (sometimes with 500), log its body
         if r.status_code != 200:
-            self.logger.error(f"Count query HTTP {r.status_code}. Body (trunc): {r.text[:2000]}")
+            self.logger.error(
+                f"Count query HTTP {r.status_code}. Body (trunc): {r.text[:2000]}"
+            )
             r.raise_for_status()
         j = r.json()
         return int(j.get("count", 0))
@@ -170,7 +188,9 @@ class DownloadFEMANFHL:
         url = f"{self.NFHL_BASE_URL}/{layer_id}/query"
         r = self._post_with_retries(url, payload)
         if r.status_code != 200:
-            self.logger.error(f"Feature query HTTP {r.status_code}. Body (trunc): {r.text[:2000]}")
+            self.logger.error(
+                f"Feature query HTTP {r.status_code}. Body (trunc): {r.text[:2000]}"
+            )
             r.raise_for_status()
 
         data = r.json()
@@ -184,7 +204,9 @@ class DownloadFEMANFHL:
         gdf = gpd.GeoDataFrame.from_features(feats, crs=f"EPSG:{self.CONUS_CRS}")
         return gdf, exceeded
 
-    def _query_features_all(self, layer_id: int, where_clause: str, bbox: List[float]) -> gpd.GeoDataFrame:
+    def _query_features_all(
+        self, layer_id: int, where_clause: str, bbox: List[float]
+    ) -> gpd.GeoDataFrame:
         """
         Attempts to page results within bbox; if paging isn't supported, you'll typically
         just get the first page. Tiling is the main robustness mechanism.
@@ -219,7 +241,9 @@ class DownloadFEMANFHL:
 
         if not all_parts:
             return gpd.GeoDataFrame(crs=f"EPSG:{self.CONUS_CRS}")
-        return gpd.GeoDataFrame(pd.concat(all_parts, ignore_index=True), crs=f"EPSG:{self.CONUS_CRS}")
+        return gpd.GeoDataFrame(
+            pd.concat(all_parts, ignore_index=True), crs=f"EPSG:{self.CONUS_CRS}"
+        )
 
     # Tiling helpers
     def _tile_bbox(self, bbox: List[float], tile_size_m: float) -> List[List[float]]:
@@ -275,10 +299,16 @@ class DownloadFEMANFHL:
         dissolved = gdf.dissolve().explode(index_parts=True).reset_index(drop=True)
 
         if fill_holes:
-            new_geoms = [Polygon(geom.exterior) for geom in dissolved.geometry if geom is not None]
+            new_geoms = [
+                Polygon(geom.exterior)
+                for geom in dissolved.geometry
+                if geom is not None
+            ]
             dissolved.geometry = new_geoms
 
-        final_gdf = dissolved[~dissolved.geometry.isna()].dissolve().reset_index(drop=True)
+        final_gdf = (
+            dissolved[~dissolved.geometry.isna()].dissolve().reset_index(drop=True)
+        )
         final_gdf = final_gdf.dropna(axis=1, how="all")
 
         if not final_gdf.empty:
@@ -289,8 +319,12 @@ class DownloadFEMANFHL:
     def run(self):
         # Availability
         self.logger.info(f"Querying Availability for BBox: {self.bbox}")
-        availability_raw = self._query_features_all(self.AVAILABILITY_LAYER, "1=1", self.bbox)
-        self._process_layer_geometries(availability_raw, "availability", fill_holes=False)
+        availability_raw = self._query_features_all(
+            self.AVAILABILITY_LAYER, "1=1", self.bbox
+        )
+        self._process_layer_geometries(
+            availability_raw, "availability", fill_holes=False
+        )
 
         # Hazard Zones
         self.logger.info("Querying Hazard Zones (100yr and 500yr)...")
@@ -301,7 +335,9 @@ class DownloadFEMANFHL:
 
         # Decide: tile or single-shot
         try:
-            hazard_count = self._query_count(self.HAZARD_ZONE_LAYER, hazard_where, self.bbox)
+            hazard_count = self._query_count(
+                self.HAZARD_ZONE_LAYER, hazard_where, self.bbox
+            )
             self.logger.info(f"Hazard feature count (bbox pre-clip): {hazard_count}")
         except Exception as e:
             # If count fails, default to tiling for safety
@@ -312,38 +348,52 @@ class DownloadFEMANFHL:
 
         if not use_tiling:
             self.logger.info("Area considered 'small' -> single bbox query.")
-            hazard_raw = self._query_features_all(self.HAZARD_ZONE_LAYER, hazard_where, self.bbox)
+            hazard_raw = self._query_features_all(
+                self.HAZARD_ZONE_LAYER, hazard_where, self.bbox
+            )
         else:
             tiles = self._tile_bbox(self.bbox, self.tile_size_m)
-            self.logger.info(f"Large area -> tiling enabled: {len(tiles)} tiles (tile_size_m={self.tile_size_m:g}).")
+            self.logger.info(
+                f"Large area -> tiling enabled: {len(tiles)} tiles (tile_size_m={self.tile_size_m:g})."
+            )
 
             parts = []
             for i, tb in enumerate(tiles, start=1):
                 try:
                     self.logger.info(f"Querying hazard tile {i}/{len(tiles)} bbox={tb}")
-                    g = self._query_features_all(self.HAZARD_ZONE_LAYER, hazard_where, tb)
+                    g = self._query_features_all(
+                        self.HAZARD_ZONE_LAYER, hazard_where, tb
+                    )
                     if not g.empty:
                         parts.append(g)
                 except Exception as e:
                     self.logger.warning(f"Tile {i}/{len(tiles)} failed: {e}")
 
             if parts:
-                hazard_raw = gpd.GeoDataFrame(pd.concat(parts, ignore_index=True), crs=f"EPSG:{self.CONUS_CRS}")
+                hazard_raw = gpd.GeoDataFrame(
+                    pd.concat(parts, ignore_index=True), crs=f"EPSG:{self.CONUS_CRS}"
+                )
                 hazard_raw = self._dedupe_features(hazard_raw)
             else:
                 hazard_raw = gpd.GeoDataFrame(crs=f"EPSG:{self.CONUS_CRS}")
 
         if hazard_raw.empty:
-            self.logger.warning("FEMA API returned zero hazard features for this area (or all tiles failed).")
+            self.logger.warning(
+                "FEMA API returned zero hazard features for this area (or all tiles failed)."
+            )
             return
 
-        # Split + process 
+        # Split + process
         if "FLD_ZONE" not in hazard_raw.columns:
-            self.logger.warning("Hazard result missing FLD_ZONE field; cannot classify 100/500-year zones.")
+            self.logger.warning(
+                "Hazard result missing FLD_ZONE field; cannot classify 100/500-year zones."
+            )
             self._process_layer_geometries(hazard_raw, "combined", fill_holes=True)
             return
 
-        nfhl_100 = hazard_raw[hazard_raw["FLD_ZONE"].astype(str).str.startswith(("A", "V"))].copy()
+        nfhl_100 = hazard_raw[
+            hazard_raw["FLD_ZONE"].astype(str).str.startswith(("A", "V"))
+        ].copy()
         self._process_layer_geometries(nfhl_100, "100_year", fill_holes=True)
 
         # 500-year X with 0.2% subtype
@@ -360,10 +410,25 @@ class DownloadFEMANFHL:
 # CLI Interface
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Query NFHL flood hazard zones.")
-    parser.add_argument("-b", "--boundary", required=True, help="Boundary file path (or supported geometry input in code).")
+    parser.add_argument(
+        "-b",
+        "--boundary",
+        required=True,
+        help="Boundary file path (or supported geometry input in code).",
+    )
     parser.add_argument("-o", "--output", help="Output GeoPackage path")
-    parser.add_argument("--tile-size-m", type=float, default=50_000.0, help="Tile size (meters) for large areas (EPSG:5070).")
-    parser.add_argument("--tile-threshold", type=int, default=5000, help="Feature count threshold to enable tiling.")
+    parser.add_argument(
+        "--tile-size-m",
+        type=float,
+        default=50_000.0,
+        help="Tile size (meters) for large areas (EPSG:5070).",
+    )
+    parser.add_argument(
+        "--tile-threshold",
+        type=int,
+        default=5000,
+        help="Feature count threshold to enable tiling.",
+    )
     args = parser.parse_args()
 
     DownloadFEMANFHL(
