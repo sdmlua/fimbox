@@ -4,7 +4,7 @@ from .preprocessing.huc_test.hucs import HUCChecker, HUCValidationError, HUCChec
 #DEM processing
 from .preprocessing.download_data.dem_process import DEMProcessor
 
-#---Dataset downloading for a given boundary---
+#Dataset downloading for a given boundary
 #Get NHDPlus Dataset
 from .preprocessing.download_data.nhdplus import getNHDPlusData #uses EPA AWS S3 bucket, takes more time
 from .preprocessing.download_data.nhdplus import NWMFlowlinesDownloader #download using ArcGIS Online, faster download
@@ -17,6 +17,15 @@ from .preprocessing.download_data.nld_data import DownloadNLD
 
 #Download the OSM dataset
 from .preprocessing.download_data.osm_data import DownloadOSMRoads, DownloadOSMBridges
+from .preprocessing.process_area import (
+    AreaProcessingConfig,
+    AreaProcessingInputs,
+    AreaProcessor,
+    AreaStaticInputs,
+    AreaStagedHydroData,
+    InundationMappingAreaRunConfig,
+    InundationMappingAreaRunner,
+)
 __all__ = [
     "HUCChecker", 
     "HUCValidationError", 
@@ -28,6 +37,12 @@ __all__ = [
     "NWMFlowlinesDownloader",
     "DownloadOSMRoads",
     "DownloadOSMBridges",
+    "AreaStagedHydroData",
+    "AreaStaticInputs",
+    "AreaProcessingConfig",
+    "AreaProcessingInputs",
+    "AreaProcessor",
+    "InundationMappingAreaRunConfig",
+    "InundationMappingAreaRunner",
     ]
-
 
