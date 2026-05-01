@@ -2,11 +2,13 @@
 from .dem_process import DEMProcessor
 
 #Utils
-from .utils import NHDBoundaryFinder
+from .utils import NHDBoundaryFinder, HUC8Finder, getHUC8Info
 
 #Get NHDPlus Dataset
-from .nhdplus import getNHDPlusData     #downlaod usign EPA AWS S3 bucket, takes more time 
-from .nhdplus import NWMFlowlinesDownloader #download using ArcGIS Online, faster download
+from .nhdplus import getNHDPlusData, NWMFlowlinesDownloader, NWMCatchmentsDownloader, NWMLakesDownloader
+
+#Get static area masks
+from .area_masks import DownloadDEMDomain, DownloadLandSea
 
 #FEMA National Flood Hazard Layer (NFHL) data processing module
 from .nfhl_data import DownloadFEMANFHL
@@ -20,10 +22,16 @@ from .osm_data import DownloadOSMRoads, DownloadOSMBridges
 __all__ = [
     "DEMProcessor",
     "NHDBoundaryFinder",
+    "HUC8Finder",
+    "getHUC8Info",
     "DownloadFEMANFHL",
     "getNHDPlusData",
     "DownloadNLD",
     "NWMFlowlinesDownloader",
+    "NWMCatchmentsDownloader",
+    "NWMLakesDownloader",
+    "DownloadDEMDomain",
+    "DownloadLandSea",
     "DownloadOSMRoads",
     "DownloadOSMBridges",
     ]

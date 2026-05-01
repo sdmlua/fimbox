@@ -1,6 +1,6 @@
 """
 Author: Supath Dhital
-Date Created: Feb 2026
+Date updated: April 2026
 
 Download major road segments from OpenStreetMap (OSM) within a user-provided boundary.
 
@@ -9,6 +9,7 @@ Download major road segments from OpenStreetMap (OSM) within a user-provided bou
 - Boundary input can be: shapefile/gpkg/geojson path, GeoDataFrame/GeoSeries, shapely geometry, or bbox
 - Output is saved to GeoPackage in EPSG:5070
 - User can pass out_dir, out_name (or ourfile), out_layer (or ourlayer); defaults used otherwise
+- Large areas are automatically split into tiles fetched in parallel via ThreadPoolExecutor
 
 AND
 
@@ -22,9 +23,11 @@ Download bridge features from OpenStreetMap (OSM) within a user-provided boundar
 - User can pass out_dir, out_name (or ourfile), out_layer (or ourlayer); defaults used otherwise
 """
 
+import math
 import random
 import time
 import warnings
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, Union, Tuple, Sequence, List, Any
@@ -36,9 +39,10 @@ import requests
 from networkx import Graph, connected_components
 from shapely.geometry import LineString, Polygon, MultiPolygon, box
 from shapely.ops import unary_union
+from tqdm import tqdm
 
 
-# shared boundary + IO helpers (used by both roads + bridges)
+# shared boundary with IO helpers (used by both roads + bridges)
 @dataclass
 class _OSMBoundaryIO:
     out_sr: int = 5070
@@ -134,97 +138,136 @@ class _OSMBoundaryIO:
 
 @dataclass
 class DownloadOSMRoads(_OSMBoundaryIO):
-    timeout: int = 180
-    max_attempts: int = 6
-    num_splits: int = 4
-    sleep_base: float = 2.0
+    timeout: int = 300       # per-tile Overpass timeout (seconds)
+    max_attempts: int = 5    # retries per tile
+    sleep_base: float = 3.0  # base backoff (seconds); actual wait = base * attempt + jitter
 
-    @staticmethod
-    def _split_bbox(minx, miny, maxx, maxy, num_splits=4):
-        x_step = (maxx - minx) / num_splits
-        y_step = (maxy - miny) / num_splits
-        boxes = []
-        for i in range(num_splits):
-            for j in range(num_splits):
-                sub_minx = minx + i * x_step
-                sub_maxx = sub_minx + x_step
-                sub_miny = miny + j * y_step
-                sub_maxy = sub_miny + y_step
-                boxes.append((sub_minx, sub_miny, sub_maxx, sub_maxy))
-        return boxes
+    # Tile area target in sq-degrees. Tiles are sized adaptively from the actual bbox:
+    _TILE_AREA_DEG_SQ: float = 0.25
+    _MAX_WORKERS: int = 8   
 
+    _OVERPASS_MIRRORS: List[str] = None 
+    def __post_init__(self):
+        self._OVERPASS_MIRRORS = [
+            "https://overpass-api.de/api/interpreter",
+            "https://lz4.overpass-api.de/api/interpreter",
+            "https://z.overpass-api.de/api/interpreter",
+        ]
+        self._session = requests.Session()
+        self._session.headers["User-Agent"] = "fimbox/0.1 (+https://github.com/sdmlua/fimbox)"
+
+    # adaptive tiling
+
+    def _make_tiles(
+        self, minx: float, miny: float, maxx: float, maxy: float
+    ) -> List[Tuple[float, float, float, float]]:
+        area = (maxx - minx) * (maxy - miny)
+        n = max(1, math.ceil(area / self._TILE_AREA_DEG_SQ))
+        # distribute tiles to respect the bbox aspect ratio
+        aspect = (maxx - minx) / max(maxy - miny, 1e-9)
+        ny = max(1, round(math.sqrt(n / aspect)))
+        nx = max(1, math.ceil(n / ny))
+        dx = (maxx - minx) / nx
+        dy = (maxy - miny) / ny
+        return [
+            (minx + i * dx, miny + j * dy, minx + (i + 1) * dx, miny + (j + 1) * dy)
+            for i in range(nx) for j in range(ny)
+        ]
+
+    def _n_workers(self, n_tiles: int) -> int:
+        return min(n_tiles, self._MAX_WORKERS)
+
+    # Overpass
     def _overpass_query(self, bbox: Tuple[float, float, float, float]) -> dict:
+        # Overpass bbox order: S,W,N,E
         minx, miny, maxx, maxy = bbox
-        bbox_query = f"({miny},{minx},{maxy},{maxx})"
-
-        # Exclude bridges: [!"bridge"]
-        query = f"""
-        [out:json][timeout:{self.timeout}];
-        (
-          way["highway"~"^motorway$|^trunk$|^primary$|^secondary$|^tertiary$"][!"bridge"]{bbox_query};
-        );
-        out body;
-        >;
-        out skel qt;
-        """
-
-        url = "https://overpass-api.de/api/interpreter"
-
+        query = (
+            f"[out:json][timeout:{self.timeout}];"
+            f"(way[\"highway\"~\"^motorway$|^trunk$|^primary$|^secondary$|^tertiary$\"]"
+            f"[!\"bridge\"]({miny},{minx},{maxy},{maxx}););"
+            f"out body;>;out skel qt;"
+        )
+        # Must use GET with params={'data': ...}; POST with raw body returns 406 on overpass-api.de
+        last_exc: Exception = RuntimeError("no attempt")
         for attempt in range(1, self.max_attempts + 1):
+            mirror = self._OVERPASS_MIRRORS[(attempt - 1) % len(self._OVERPASS_MIRRORS)]
             try:
-                r = requests.post(url, data=query.encode("utf-8"), timeout=self.timeout + 30)
-                if r.status_code in (429, 504, 502, 503):
-                    raise RuntimeError(f"Overpass busy (HTTP {r.status_code})")
+                r = self._session.get(mirror, params={"data": query}, timeout=self.timeout + 60)
+                if r.status_code in (429, 502, 503, 504):
+                    raise RuntimeError(f"HTTP {r.status_code} from {mirror}")
                 r.raise_for_status()
                 return r.json()
-            except Exception as e:
-                wait = self.sleep_base * attempt + random.uniform(0, 1.5)
-                time.sleep(wait)
-                if attempt == self.max_attempts:
-                    raise RuntimeError(f"Overpass query failed after {self.max_attempts} attempts: {e}") from e
+            except Exception as exc:
+                last_exc = exc
+                if attempt < self.max_attempts:
+                    time.sleep(self.sleep_base * attempt + random.uniform(0, 2.0))
+        raise RuntimeError(f"Overpass query failed after {self.max_attempts} attempts: {last_exc}") from last_exc
 
+    # JSON → GDF
     @staticmethod
     def _json_to_lines_gdf(osm_json: dict) -> gpd.GeoDataFrame:
         elems = osm_json.get("elements", [])
         nodes = {e["id"]: (e["lon"], e["lat"]) for e in elems if e.get("type") == "node"}
-
         rows = []
         for e in elems:
             if e.get("type") != "way":
                 continue
-            nds = e.get("nodes", [])
-            if len(nds) < 2:
-                continue
-            coords = [nodes.get(nid) for nid in nds]
-            coords = [c for c in coords if c is not None]
+            coords = [nodes[nid] for nid in e.get("nodes", []) if nid in nodes]
             if len(coords) < 2:
                 continue
-            tags = e.get("tags", {}) or {}
-            rows.append(
-                {
-                    "osmid": str(e.get("id")),
-                    "highway": tags.get("highway", "unknown"),
-                    "name": tags.get("name", "unnamed"),
-                    "geometry": LineString(coords),
-                }
-            )
+            tags = e.get("tags") or {}
+            rows.append({
+                "osmid":    str(e["id"]),
+                "highway":  tags.get("highway", "unknown"),
+                "name":     tags.get("name", ""),
+                "ref":      tags.get("ref", ""),
+                "surface":  tags.get("surface", ""),
+                "lanes":    tags.get("lanes", ""),
+                "geometry": LineString(coords),
+            })
+        if not rows:
+            return gpd.GeoDataFrame(geometry=[], crs="EPSG:4326")
+        return gpd.GeoDataFrame(rows, crs="EPSG:4326")
 
-        gdf = gpd.GeoDataFrame(rows, crs="EPSG:4326")
-        if not gdf.empty:
-            gdf["osmid"] = gdf["osmid"].astype(str)
-        return gdf
+    # parallel fetch
+    def _fetch_tile(self, tile: Tuple[float, float, float, float]) -> gpd.GeoDataFrame:
+        try:
+            return self._json_to_lines_gdf(self._overpass_query(tile))
+        except Exception as exc:
+            tqdm.write(f"  [warn] tile {tile} skipped: {exc}")
+            return gpd.GeoDataFrame(geometry=[], crs="EPSG:4326")
 
+    def _fetch_all(self, tiles: List[Tuple[float, float, float, float]]) -> gpd.GeoDataFrame:
+        workers = self._n_workers(len(tiles))
+        parts: List[gpd.GeoDataFrame] = []
+
+        if workers == 1:
+            for tile in tqdm(tiles, desc="OSM roads", unit="tile"):
+                r = self._fetch_tile(tile)
+                if not r.empty:
+                    parts.append(r)
+        else:
+            with ThreadPoolExecutor(max_workers=workers) as pool:
+                futures = {pool.submit(self._fetch_tile, t): t for t in tiles}
+                with tqdm(total=len(tiles), desc="OSM road tiles", unit="tile") as pbar:
+                    for fut in as_completed(futures):
+                        r = fut.result()
+                        if not r.empty:
+                            parts.append(r)
+                        pbar.update(1)
+
+        if not parts:
+            return gpd.GeoDataFrame(geometry=[], crs="EPSG:4326")
+        return gpd.GeoDataFrame(pd.concat(parts, ignore_index=True), crs="EPSG:4326")
+
+    # public API
     def query_to_gdf(
         self,
         boundary: Union[
-            gpd.GeoDataFrame,
-            gpd.GeoSeries,
-            Polygon,
-            MultiPolygon,
+            gpd.GeoDataFrame, gpd.GeoSeries,
+            Polygon, MultiPolygon,
             Tuple[float, float, float, float],
-            Sequence[float],
-            str,
-            Path,
+            Sequence[float], str, Path,
         ],
         boundary_layer: Optional[str] = None,
         boundary_crs: Optional[Union[str, int]] = None,
@@ -232,52 +275,30 @@ class DownloadOSMRoads(_OSMBoundaryIO):
     ) -> gpd.GeoDataFrame:
         geom4326 = self._boundary_to_geom4326(boundary, boundary_layer, boundary_crs)
         minx, miny, maxx, maxy = geom4326.bounds
+        tiles = self._make_tiles(minx, miny, maxx, maxy)
+        print(f"OSM roads: {len(tiles)} tile(s), {self._n_workers(len(tiles))} worker(s).")
 
-        # Try single bbox first; if too large / fails, fallback to tiling
-        try:
-            osm_json = self._overpass_query((minx, miny, maxx, maxy))
-            gdf = self._json_to_lines_gdf(osm_json)
-        except Exception:
-            boxes = self._split_bbox(minx, miny, maxx, maxy, self.num_splits)
-            parts = []
-            for b in boxes:
-                try:
-                    osm_json = self._overpass_query(b)
-                    gi = self._json_to_lines_gdf(osm_json)
-                    if not gi.empty:
-                        parts.append(gi)
-                except Exception:
-                    continue
-            gdf = (
-                gpd.GeoDataFrame(pd.concat(parts, ignore_index=True), crs="EPSG:4326")
-                if parts
-                else gpd.GeoDataFrame(geometry=[], crs="EPSG:4326")
-            )
-
+        gdf = self._fetch_all(tiles)
         if gdf.empty:
+            print("No road features returned.")
             return gpd.GeoDataFrame(geometry=[], crs=f"EPSG:{self.out_sr}")
 
-        # De-dup across tiles
         gdf = gdf.drop_duplicates(subset=["osmid"]).reset_index(drop=True)
+        print(f"  {len(gdf)} unique segments after dedup.")
 
         if clip_to_boundary:
-            boundary_gdf = gpd.GeoDataFrame(geometry=[geom4326], crs="EPSG:4326")
-            gdf = gpd.clip(gdf, boundary_gdf, keep_geom_type=True)
+            gdf = gpd.clip(gdf, gpd.GeoDataFrame(geometry=[geom4326], crs="EPSG:4326"), keep_geom_type=True)
+            print(f"  {len(gdf)} segments after clipping.")
 
-        # Output CRS = EPSG:5070
         return gdf.to_crs(epsg=self.out_sr)
 
     def download(
         self,
         boundary: Union[
-            gpd.GeoDataFrame,
-            gpd.GeoSeries,
-            Polygon,
-            MultiPolygon,
+            gpd.GeoDataFrame, gpd.GeoSeries,
+            Polygon, MultiPolygon,
             Tuple[float, float, float, float],
-            Sequence[float],
-            str,
-            Path,
+            Sequence[float], str, Path,
         ],
         out_dir: Union[str, Path],
         out_name: str = "osm_roads.gpkg",
@@ -291,14 +312,10 @@ class DownloadOSMRoads(_OSMBoundaryIO):
             out_name = ourfile
         if ourlayer:
             out_layer = ourlayer
-
-        gdf = self.query_to_gdf(
-            boundary=boundary,
-            boundary_layer=boundary_layer,
-            boundary_crs=boundary_crs,
-            clip_to_boundary=True,
-        )
-        self._write_gpkg(gdf, out_dir, out_name, out_layer)
+        gdf = self.query_to_gdf(boundary=boundary, boundary_layer=boundary_layer,
+                                 boundary_crs=boundary_crs, clip_to_boundary=True)
+        out_path = self._write_gpkg(gdf, out_dir, out_name, out_layer)
+        print(f"Saved: {out_path}")
         return gdf
 
 
@@ -339,7 +356,7 @@ class DownloadOSMBridges(_OSMBoundaryIO):
                 except Exception:
                     pass
             if cols_to_drop:
-                gdf = gdf.drop(columns=list(set(cols_to_drop)), axis=1)
+                gdf = gdf.drop(columns=list(set(cols_to_drop)))
 
         bad_column_names = [
             "id",
@@ -358,7 +375,7 @@ class DownloadOSMBridges(_OSMBoundaryIO):
         ]
         cols_to_drop2 = [c for c in bad_column_names if c in gdf.columns]
         if cols_to_drop2:
-            gdf = gdf.drop(columns=cols_to_drop2, axis=1)
+            gdf = gdf.drop(columns=cols_to_drop2)
 
         return gdf
 

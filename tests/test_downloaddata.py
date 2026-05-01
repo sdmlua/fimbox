@@ -1,7 +1,7 @@
 # Example Usage:
 import fimbox
-NHDboundary = "/Users/Supath/Downloads/SDML/FIMBOX/data_s3/BoundaryUnit.shp" #will go to the AWS S3 later
-test_boundary = "/Users/Supath/Downloads/SDML/FIMBOX/Sample_Data/test_smallB.shp"
+NHDboundary = "/Users/Supath/Downloads/SDML/FIMBOX/data_s3/BoundaryUnit.shp" #will go to the AWS S3 later [for new nhddownload-no need]
+test_boundary = "/Users/Supath/Downloads/SDML/FIMBOX/Sample_Data/Big_Boundary_MS.shp"
 
 # # Testing the entire NHDPlus data extraction process along with National Flood Hazard Layer data extraction
 # # This is OLDER VERSION using EPA AWS S3 Bucket which will get for whole HUC6 region--> not very effective
@@ -18,56 +18,87 @@ test_boundary = "/Users/Supath/Downloads/SDML/FIMBOX/Sample_Data/test_smallB.shp
 #     # nhd_data.process_flowlines()
 #     print(f"Process successful!")
 
-# #Testing the NFHL data extraction process
 # def test_get_nfhl():
 #     fimbox.DownloadFEMANFHL(
 #         boundary=test_boundary,
-#         # output_path = None,
-#         # log_path = None
+#         out_dir="../out",
+#         out_name="fema_nfhl.gpkg",
+#         # log_path=None,
 #     )
 
-# #Testing the download of NLD dataset
 # def test_download_nld():
 #     fimbox.DownloadNLD(
 #         boundary=test_boundary,
-#         # layer_name=None, # Specifically for the geopackage boundary files
-#         # output_dir= None      #Directory to save output data, else creates 'nld_data' folder in current working directory
+#         out_dir="../out",
+#         lines_name="NLD_Lines.gpkg",       # default; override as needed
+#         polys_name="NLD_Polygons.gpkg",    # default; override as needed
 #     )
-#     print("NLD data download and processing completed.")
 
-# #USING ARCGIS ONLINE, Setting up the data download process
 # def test_get_nhddata():
-#     dl = fimbox.NWMFlowlinesDownloader()
-#     dl.download(
-#         boundary = "/Users/Supath/Downloads/SDML/FIMBOX/Sample_Data/test_smallB.shp",         #Path to the boundary file (can be a shapefile or a geopackage, or bbox)
-#         out_dir="../out",                      #Output directory
-#         out_name = "nwm_flowlines.gpkg",          #Name of the output file, if None, default name will be used
-#         out_layer = "flowlines",                   #Name of the layer in the output gpkg to save the flowlines, if None, default name will be used
-#         boundary_layer= None,          #Name of the layer in the boundary gpkg to use as boundary, if None, first layer will be used
-#         )
-#     print("NHDPlus data download and processing completed.")
+#     fimbox.NWMFlowlinesDownloader().download(
+#         boundary=test_boundary,
+#         out_dir="../out",
+#         out_name="nwm_subset_streams.gpkg",
+#         out_layer="flowlines",
+#     )
 
-#DOWNLOAD THE OSM DATASETS; ROADS AND BRIDGES
-#ROADS
-def test_get_osmdata():
-    roads = fimbox.DownloadOSMRoads()
-    roads.download(
-        boundary = test_boundary,
-        out_dir= "../out",      #Output directory
-        out_name= "osm_roads.gpkg",     #Name of the output file, if None, default name will be used
-        out_layer = "osm_roads",        #Name of the layer in the output gpkg to save the roads data, if None, default name will be used
-        boundary_layer= None,       #Name of the layer in the boundary gpkg to use as boundary, if None, first layer will be used
-        boundary_crs = None,        #CRS of the boundary file, if None, CRS will be inferred from the boundary file
-    )
+# def test_get_catchments():
+#     fimbox.NWMCatchmentsDownloader().download(
+#         boundary=test_boundary,
+#         out_dir="../out",
+#         out_name="nwm_subset_catchments.gpkg",
+#         out_layer="catchments",
+#     )
 
-#DOWNLOAD THE OSM DATASETS; Bridge
-def test_get_osmdata():
-    roads = fimbox.DownloadOSMBridges()
-    roads.download(
-        boundary = test_boundary,
-        out_dir= "../out",      #Output directory
-        out_name= "osm_bridges.gpkg",     #Name of the output file, if None, default name will be used
-        out_layer = "osm_bridge",        #Name of the layer in the output gpkg to save the roads data, if None, default name will be used
-        boundary_layer= None,       #Name of the layer in the boundary gpkg to use as boundary, if None, first layer will be used
-        boundary_crs = None,        #CRS of the boundary file, if None, CRS will be inferred from the boundary file
+# def test_get_lakes():
+#     fimbox.NWMLakesDownloader().download(
+#         boundary=test_boundary,
+#         out_dir="../out",
+#         out_name="nwm_subset_lakes.gpkg",
+#         out_layer="lakes",
+#     )
+
+# #Get all NHD Plus Data
+# def test_get_nhd_all():
+#     fimbox.getNHDPlusData(
+#         boundary=test_boundary,
+#         out_dir="../out",
+#         download_flowlines=True,
+#         download_catchments=True,
+#         download_lakes=True,
+#     )
+
+# def test_get_dem():
+#     fimbox.DEMProcessor(
+#         boundary=test_boundary,
+#         output_dir="../out",
+#         out_name="dem.tif",             # default is 3dep_dem_10m.tif
+#         resolution=10,
+#     )
+
+# def test_get_osm_roads():
+#     fimbox.DownloadOSMRoads().download(
+#         boundary=test_boundary,
+#         out_dir="../out",
+#         out_name="osm_roads.gpkg",
+#         out_layer="osm_roads",
+#     )
+
+# def test_get_osm_bridges():
+#     fimbox.DownloadOSMBridges().download(
+#         boundary=test_boundary,
+#         out_dir="../out",
+#         out_name="osm_bridges.gpkg",
+#         out_layer="osm_bridges",
+#     )
+
+
+#Get the HUC8 information
+def test_get_huc8_info():
+    huc8_info = fimbox.getHUC8Info(
+        boundary=test_boundary,
+        calc_overlap=True,     
+        save=True,
+        out_dir="../out",
     )
+    print(huc8_info)

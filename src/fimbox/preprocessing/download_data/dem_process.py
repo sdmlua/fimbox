@@ -18,10 +18,11 @@ from rasterio.enums import Resampling
 
 class DEMProcessor:
     def __init__(
-        self, 
-        boundary: Union[str, gpd.GeoDataFrame], 
-        layer: Optional[str] = None, 
+        self,
+        boundary: Union[str, gpd.GeoDataFrame],
+        layer: Optional[str] = None,
         output_dir: str = "./dem_output",
+        out_name: Optional[str] = None,
         dem_file: Optional[str] = None,
         resolution: int = 10,
         epsg: Optional[int] = None
@@ -31,6 +32,7 @@ class DEMProcessor:
         self.dem_file = dem_file
         self.resolution = resolution
         
+        self.out_name = out_name
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
         
@@ -100,7 +102,7 @@ class DEMProcessor:
             )
             dem = dem.rio.clip(gdf_projected.geometry, gdf_projected.crs, drop=True)
             dem = dem.rio.write_nodata(-999999, encoded=True)
-            save_path = self.output_dir / "processed_local_dem.tif"
+            save_path = self.output_dir / (self.out_name or "processed_local_dem.tif")
             dem.rio.to_raster(save_path, **export_kwargs)
         else:
             self.logger.info(f"Fetching 3DEP DEM data from USGS at {self.resolution}m resolution...")
@@ -133,7 +135,7 @@ class DEMProcessor:
                 dem_data = dem_data.where(dem_data > -90000, -999999)
                 dem_data.rio.write_nodata(-999999, inplace=True)
                 
-                save_path = self.output_dir / f"3dep_dem_{self.resolution}m.tif"
+                save_path = self.output_dir / (self.out_name or f"3dep_dem_{self.resolution}m.tif")
                 dem_data.rio.to_raster(save_path, **export_kwargs)
                 self.logger.info(f"DEM successfully saved to {save_path}")
             except Exception as e:

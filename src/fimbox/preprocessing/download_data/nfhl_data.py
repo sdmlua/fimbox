@@ -31,7 +31,8 @@ class DownloadFEMANFHL:
     def __init__(
         self,
         boundary: Union[str, gpd.GeoDataFrame, Polygon, MultiPolygon],
-        output_path: Optional[str] = None,
+        out_dir: Optional[str] = None,
+        out_name: Optional[str] = None,
         log_path: Optional[str] = None,
         tile_size_m: float = 50_000.0,         # 50 km tiles in EPSG:5070
         tile_count_threshold: int = 5000,      # if feature count > this, tile
@@ -49,9 +50,13 @@ class DownloadFEMANFHL:
         self.max_retries = int(max_retries)
         self.retry_backoff_s = float(retry_backoff_s)
 
-        # Output path
-        if output_path:
-            self.output_path = Path(output_path)
+        # Output path — out_dir sets the folder, out_name sets the filename
+        if out_dir and out_name:
+            self.output_path = Path(out_dir) / out_name
+        elif out_dir:
+            # legacy: out_dir may be a full file path or just a directory
+            p = Path(out_dir)
+            self.output_path = p if p.suffix else p / (out_name or "fema_nfhl.gpkg")
         else:
             base_name = Path(boundary).stem if isinstance(boundary, str) else "flood_zones"
             self.output_path = Path.cwd() / "nfhl_data" / f"fema_nfhl_{base_name}.gpkg"
@@ -368,7 +373,7 @@ if __name__ == "__main__":
 
     DownloadFEMANFHL(
         boundary=args.boundary,
-        output_path=args.output,
+        out_dir=args.output,
         tile_size_m=args.tile_size_m,
         tile_count_threshold=args.tile_threshold,
     )
