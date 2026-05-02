@@ -13,7 +13,8 @@ from pathlib import Path
 import geopandas as gpd
 from .nhdplus import ArcGISDownloader
 
-#get the land/sea mask for the buffered area
+
+# get the land/sea mask for the buffered area
 class DownloadLandSea(ArcGISDownloader):
     """Land, sea, and Great Lakes mask polygons."""
 
@@ -47,7 +48,8 @@ class DownloadLandSea(ArcGISDownloader):
             out_layer=out_layer,
         )
 
-#get the DEM Domain 
+
+# get the DEM Domain
 class DownloadDEMDomain(ArcGISDownloader):
     """USGS 3DEP DEM coverage domain polygons."""
 
@@ -60,6 +62,7 @@ class DownloadDEMDomain(ArcGISDownloader):
             out_sr=out_sr,
             n_workers=n_workers,
         )
+
     def download(
         self,
         boundary,

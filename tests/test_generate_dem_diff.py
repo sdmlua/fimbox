@@ -5,11 +5,23 @@ Step 2 (BridgeDEMDiff):        computes lidar_elev - dem_elev and saves bridge_e
 
 Requires: pdal, laspy
 """
+
 import fimbox
 
-bridge_gpkg  = "/Users/Supath/Downloads/SDML/FIMBOX/out/test_smallB/osm_bridges_subset.gpkg"
-dem_path     = "/Users/Supath/Downloads/SDML/FIMBOX/out/test_smallB/dem.tif"
-out_dir      = "/Users/Supath/Downloads/SDML/FIMBOX/out/test_smallB/bridge_dem"
+bridge_gpkg = (
+    "/Users/supath/Downloads/MSResearch/FIMBOX/out/HUC03020202/osm_bridges_subset.gpkg"
+)
+dem_path = "/Users/supath/Downloads/MSResearch/FIMBOX/out/HUC03020202/dem.tif"
+out_dir = "/Users/supath/Downloads/MSResearch/FIMBOX/out/HUC03020202"
+
+
+# check which bridges already have rasters vs still pending (safe to run anytime)
+def test_bridge_raster_status():
+    info = fimbox.generateBridgeRaster(
+        bridge_gpkg=bridge_gpkg,
+        out_dir=out_dir,
+    ).status()
+    assert "total" in info
 
 
 # download LiDAR and build per-bridge elevation tifs
@@ -26,17 +38,16 @@ def test_generate_bridge_raster():
 
 
 # compute difference raster
-# def test_bridge_dem_diff():
-#     out_path = fimbox.BridgeDEMDiff(
-#         dem_path=dem_path,
-#         lidar_tif_dir=f"{out_dir}/lidar_osm_rasters",
-#         bridge_gpkg=bridge_gpkg,
-#         out_dir=out_dir,
-#         out_name="bridge_elev_diff.tif",
-#         bridge_buffer_m=2.0,
-#         n_workers=4,
-#     ).run()
-#     print(f"Bridge diff raster saved to: {out_path}")
+def test_bridge_dem_diff():
+    out_path = fimbox.BridgeDEMDiff(
+        dem_path=dem_path,
+        lidar_tif_dir=f"{out_dir}/bridge_dem/lidar_osm_rasters",
+        bridge_gpkg=bridge_gpkg,
+        out_dir=out_dir,
+        out_name="bridge_elev_diff.tif",
+        n_workers=4,
+    ).run()
+    print(f"Bridge diff raster saved to: {out_path}")
 
 
 # Run both steps end-to-end (needs pdal + laspy)

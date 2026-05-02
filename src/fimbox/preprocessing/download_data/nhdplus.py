@@ -78,7 +78,7 @@ class ArcGISDownloader:
             if n > 1000:
                 geom = geom.simplify(0.0001, preserve_topology=True)
         except AttributeError:
-            pass  
+            pass
 
         return geom
 
@@ -106,13 +106,21 @@ class ArcGISDownloader:
         resp.raise_for_status()
         data = resp.json()
         if "error" in data:
-            raise RuntimeError(f"ArcGIS error {data['error']['code']}: {data['error']['message']}")
+            raise RuntimeError(
+                f"ArcGIS error {data['error']['code']}: {data['error']['message']}"
+            )
         return data
 
     # page fetching
-    def _fetch_page(self, base_params: dict, offset: int, page: int, total_pages: int) -> gpd.GeoDataFrame:
+    def _fetch_page(
+        self, base_params: dict, offset: int, page: int, total_pages: int
+    ) -> gpd.GeoDataFrame:
         """Fetch a single page (called in parallel via dask)."""
-        params = {**base_params, "resultOffset": offset, "resultRecordCount": self.page_size}
+        params = {
+            **base_params,
+            "resultOffset": offset,
+            "resultRecordCount": self.page_size,
+        }
         data = self._post(params)
         features = data.get("features", [])
         if not features:
@@ -166,21 +174,31 @@ class ArcGISDownloader:
             return gpd.GeoDataFrame()
 
         n_pages = math.ceil(total / self.page_size)
-        print(f"Total records: {total}  |  Pages: {n_pages}  |  Workers: {min(n_pages, self.n_workers)}")
+        print(
+            f"Total records: {total}  |  Pages: {n_pages}  |  Workers: {min(n_pages, self.n_workers)}"
+        )
 
         # Parallel page fetch with dask
         delayed_pages = [
-            dask.delayed(self._fetch_page)(base_params, i * self.page_size, i + 1, n_pages)
+            dask.delayed(self._fetch_page)(
+                base_params, i * self.page_size, i + 1, n_pages
+            )
             for i in range(n_pages)
         ]
-        pages = dask.compute(*delayed_pages, scheduler="threads", num_workers=min(n_pages, self.n_workers))
+        pages = dask.compute(
+            *delayed_pages,
+            scheduler="threads",
+            num_workers=min(n_pages, self.n_workers),
+        )
 
         chunks = [p for p in pages if not p.empty]
         if not chunks:
             print("No data downloaded.")
             return gpd.GeoDataFrame()
 
-        result = gpd.GeoDataFrame(pd.concat(chunks, ignore_index=True), crs=f"EPSG:{self.out_sr}")
+        result = gpd.GeoDataFrame(
+            pd.concat(chunks, ignore_index=True), crs=f"EPSG:{self.out_sr}"
+        )
         print(f"Downloaded {len(result)} total records.")
 
         if out_dir:
@@ -207,13 +225,24 @@ class NWMFlowlinesDownloader(ArcGISDownloader):
             n_workers=n_workers,
         )
 
-    def download(self, boundary, boundary_layer=None, boundary_crs=None,
-                 where="1=1", out_dir=None,
-                 out_name="nwm_subset_streams.gpkg", out_layer="flowlines"):
+    def download(
+        self,
+        boundary,
+        boundary_layer=None,
+        boundary_crs=None,
+        where="1=1",
+        out_dir=None,
+        out_name="nwm_subset_streams.gpkg",
+        out_layer="flowlines",
+    ):
         return super().download(
-            boundary=boundary, boundary_layer=boundary_layer,
-            boundary_crs=boundary_crs, where=where,
-            out_dir=out_dir, out_name=out_name, out_layer=out_layer,
+            boundary=boundary,
+            boundary_layer=boundary_layer,
+            boundary_crs=boundary_crs,
+            where=where,
+            out_dir=out_dir,
+            out_name=out_name,
+            out_layer=out_layer,
         )
 
 
@@ -234,13 +263,24 @@ class NWMCatchmentsDownloader(ArcGISDownloader):
             n_workers=n_workers,
         )
 
-    def download(self, boundary, boundary_layer=None, boundary_crs=None,
-                 where="1=1", out_dir=None,
-                 out_name="nwm_catchments_proj_subset.gpkg", out_layer="catchments"):
+    def download(
+        self,
+        boundary,
+        boundary_layer=None,
+        boundary_crs=None,
+        where="1=1",
+        out_dir=None,
+        out_name="nwm_catchments_proj_subset.gpkg",
+        out_layer="catchments",
+    ):
         return super().download(
-            boundary=boundary, boundary_layer=boundary_layer,
-            boundary_crs=boundary_crs, where=where,
-            out_dir=out_dir, out_name=out_name, out_layer=out_layer,
+            boundary=boundary,
+            boundary_layer=boundary_layer,
+            boundary_crs=boundary_crs,
+            where=where,
+            out_dir=out_dir,
+            out_name=out_name,
+            out_layer=out_layer,
         )
 
 
@@ -261,14 +301,26 @@ class NWMLakesDownloader(ArcGISDownloader):
             n_workers=n_workers,
         )
 
-    def download(self, boundary, boundary_layer=None, boundary_crs=None,
-                 where="1=1", out_dir=None,
-                 out_name="nwm_lakes_proj_subset.gpkg", out_layer="lakes"):
+    def download(
+        self,
+        boundary,
+        boundary_layer=None,
+        boundary_crs=None,
+        where="1=1",
+        out_dir=None,
+        out_name="nwm_lakes_proj_subset.gpkg",
+        out_layer="lakes",
+    ):
         return super().download(
-            boundary=boundary, boundary_layer=boundary_layer,
-            boundary_crs=boundary_crs, where=where,
-            out_dir=out_dir, out_name=out_name, out_layer=out_layer,
+            boundary=boundary,
+            boundary_layer=boundary_layer,
+            boundary_crs=boundary_crs,
+            where=where,
+            out_dir=out_dir,
+            out_name=out_name,
+            out_layer=out_layer,
         )
+
 
 # Unified entry point
 def getNHDPlusData(
@@ -313,21 +365,27 @@ def getNHDPlusData(
     if download_flowlines:
         print("\n=== NWM Flowlines ===")
         try:
-            results["flowlines"] = NWMFlowlinesDownloader(out_sr=epsg, n_workers=n_workers).download(**common)
+            results["flowlines"] = NWMFlowlinesDownloader(
+                out_sr=epsg, n_workers=n_workers
+            ).download(**common)
         except Exception as exc:
             logger.error(f"Flowlines download failed: {exc}", exc_info=True)
 
     if download_catchments:
         print("\n=== NWM Catchments ===")
         try:
-            results["catchments"] = NWMCatchmentsDownloader(out_sr=epsg, n_workers=n_workers).download(**common)
+            results["catchments"] = NWMCatchmentsDownloader(
+                out_sr=epsg, n_workers=n_workers
+            ).download(**common)
         except Exception as exc:
             logger.error(f"Catchments download failed: {exc}", exc_info=True)
 
     if download_lakes:
         print("\n=== NWM Lakes ===")
         try:
-            results["lakes"] = NWMLakesDownloader(out_sr=epsg, n_workers=n_workers).download(**common)
+            results["lakes"] = NWMLakesDownloader(
+                out_sr=epsg, n_workers=n_workers
+            ).download(**common)
         except Exception as exc:
             logger.error(f"Lakes download failed: {exc}", exc_info=True)
 

@@ -16,6 +16,7 @@ from shapely.geometry import Point, box
 from shapely.ops import unary_union
 import argparse
 
+
 class NHDBoundaryFinder:
     def __init__(self, user_boundary_path, global_boundary_path):
         """
@@ -23,7 +24,7 @@ class NHDBoundaryFinder:
         """
         # Load datasets
         nhd_gdf = gpd.read_file(global_boundary_path)
-        
+
         if isinstance(user_boundary_path, gpd.GeoDataFrame):
             user_gdf = user_boundary_path
         else:
@@ -35,7 +36,7 @@ class NHDBoundaryFinder:
 
         # Spatial intersection
         intersected = gpd.sjoin(nhd_gdf, user_gdf, how="inner", predicate="intersects")
-        
+
         # Case-insensitive column helper
         def _get_col(df, candidates):
             for c in df.columns:
@@ -43,10 +44,10 @@ class NHDBoundaryFinder:
                     return c
             return None
 
-        unit_id_col = _get_col(intersected, ['UnitID'])
-        unit_type_col = _get_col(intersected, ['UnitType'])
-        drainage_col = _get_col(intersected, ['DrainageID', 'DrainageAreaID'])
-        unit_name_col = _get_col(intersected, ['UnitName'])
+        unit_id_col = _get_col(intersected, ["UnitID"])
+        unit_type_col = _get_col(intersected, ["UnitType"])
+        drainage_col = _get_col(intersected, ["DrainageID", "DrainageAreaID"])
+        unit_name_col = _get_col(intersected, ["UnitName"])
 
         if not unit_id_col:
             raise KeyError(f"Could not find 'UnitID' in {global_boundary_path}")
@@ -60,68 +61,68 @@ class NHDBoundaryFinder:
             u_type = str(row[unit_type_col]).upper() if unit_type_col else ""
             d_id = row[drainage_col] if drainage_col else "Unknown"
             u_id = row[unit_id_col]
-            
-            if u_type == 'VPU':
-                u_name = str(row[unit_name_col]).replace(" ", "") if unit_name_col else "None"
-                self.vpus.append({
-                    "DrainageAreaID": d_id,
-                    "UnitID": u_id,
-                    "UnitName": u_name
-                })
-            elif u_type == 'RPU':
-                self.rpus.append({
-                    "DrainageAreaID": d_id,
-                    "UnitID": u_id
-                })
 
-#Derive the headwater from the flowline data
+            if u_type == "VPU":
+                u_name = (
+                    str(row[unit_name_col]).replace(" ", "")
+                    if unit_name_col
+                    else "None"
+                )
+                self.vpus.append(
+                    {"DrainageAreaID": d_id, "UnitID": u_id, "UnitName": u_name}
+                )
+            elif u_type == "RPU":
+                self.rpus.append({"DrainageAreaID": d_id, "UnitID": u_id})
+
+
+# Derive the headwater from the flowline data
 """
 Description: Extracts headwater source points from NHDPlus flowlines.
 """
+
+
 def find_headwater_points(flowlines_gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
     """
     Derives headwater points from a GeoDataFrame of flowlines.
     1. Explode MultiLineStrings into individual LineStrings.
     2. Collect all start points (upstream) and end points (downstream).
     3. Identify start points that never appear as an end point in the network.
-    
+
     Parameters:
         flowlines_gdf (gpd.GeoDataFrame): The NHDPlus flowlines (must flow downstream).
-        
+
     Returns:
         gpd.GeoDataFrame: A Point GeoDataFrame representing headwater locations.
     """
     # Ensure we are working with singlepart geometries
     flows = flowlines_gdf.explode(index_parts=True)
-    
+
     starting_points = set()
     end_points = set()
-    
+
     for geom in flows.geometry:
         if geom is None or geom.is_empty:
             continue
-            
+
         coords = list(geom.coords)
         if len(coords) < 2:
             continue
-            
+
         # NHDPlus lines are digitized in the direction of flow
         start_node = coords[0]  # Upstream
-        end_node = coords[-1]   # Downstream
-        
+        end_node = coords[-1]  # Downstream
+
         starting_points.add(start_node)
         end_points.add(end_node)
 
     # A headwater is a starting point that is not an endpoint of any other line
     headwater_coords = [Point(sp) for sp in starting_points if sp not in end_points]
-    
+
     # Create the output GeoDataFrame
-    hw_gdf = gpd.GeoDataFrame(
-        {'geometry': headwater_coords}, 
-        crs=flowlines_gdf.crs
-    )
-    
+    hw_gdf = gpd.GeoDataFrame({"geometry": headwater_coords}, crs=flowlines_gdf.crs)
+
     return hw_gdf
+
 
 # HUC8 boundary lookup utility
 class HUC8Finder:
@@ -165,6 +166,7 @@ class HUC8Finder:
         path = Path(boundary)
         if path.suffix.lower() in (".tif", ".tiff", ".img", ".vrt"):
             import rasterio
+
             with rasterio.open(path) as src:
                 b = src.bounds
                 return gpd.GeoDataFrame(
@@ -208,7 +210,9 @@ class HUC8Finder:
         params = {
             "f": "geojson",
             "where": "1=1",
-            "geometry": json.dumps({"rings": rings, "spatialReference": {"wkid": 4326}}),
+            "geometry": json.dumps(
+                {"rings": rings, "spatialReference": {"wkid": 4326}}
+            ),
             "geometryType": "esriGeometryPolygon",
             "spatialRel": "esriSpatialRelIntersects",
             "inSR": 4326,
@@ -290,17 +294,23 @@ def getHUC8Info(
     return finder.from_boundary(boundary, layer=layer, calc_overlap=calc_overlap)
 
 
-#CLI support for standalone testing
-if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description='Derive headwater points from flowlines.')
-    parser.add_argument('-i', '--input', required=True, help='Path to input flowlines (shp/gpkg)')
-    parser.add_argument('-o', '--output', required=True, help='Path to save headwater points')
-    parser.add_argument('-l', '--layer', help='Layer name if using GPKG', default=None)
-    
+# CLI support for standalone testing
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(
+        description="Derive headwater points from flowlines."
+    )
+    parser.add_argument(
+        "-i", "--input", required=True, help="Path to input flowlines (shp/gpkg)"
+    )
+    parser.add_argument(
+        "-o", "--output", required=True, help="Path to save headwater points"
+    )
+    parser.add_argument("-l", "--layer", help="Layer name if using GPKG", default=None)
+
     args = parser.parse_args()
-    
+
     input_gdf = gpd.read_file(args.input, layer=args.layer)
     result = find_headwater_points(input_gdf)
-    
+
     result.to_file(args.output)
     print(f"Successfully derived {len(result)} headwater points to {args.output}")

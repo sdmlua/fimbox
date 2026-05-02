@@ -47,7 +47,9 @@ from tqdm import tqdm
 class _OSMBoundaryIO:
     out_sr: int = 5070
 
-    def _read_boundary_file(self, path: Union[str, Path], layer: Optional[str] = None) -> gpd.GeoDataFrame:
+    def _read_boundary_file(
+        self, path: Union[str, Path], layer: Optional[str] = None
+    ) -> gpd.GeoDataFrame:
         path = Path(path)
         if not path.exists():
             raise FileNotFoundError(path)
@@ -97,19 +99,25 @@ class _OSMBoundaryIO:
             return self._ensure_poly(geom)
 
         # bbox
-        if isinstance(boundary, (tuple, list)) and len(boundary) == 4 and all(
-            isinstance(x, (int, float)) for x in boundary
+        if (
+            isinstance(boundary, (tuple, list))
+            and len(boundary) == 4
+            and all(isinstance(x, (int, float)) for x in boundary)
         ):
             geom = box(*boundary)
             if boundary_crs is not None:
-                geom = gpd.GeoSeries([geom], crs=boundary_crs).to_crs("EPSG:4326").iloc[0]
+                geom = (
+                    gpd.GeoSeries([geom], crs=boundary_crs).to_crs("EPSG:4326").iloc[0]
+                )
             return self._ensure_poly(geom)
 
         # shapely geometry
         if isinstance(boundary, (Polygon, MultiPolygon)):
             geom = boundary
             if boundary_crs is not None:
-                geom = gpd.GeoSeries([geom], crs=boundary_crs).to_crs("EPSG:4326").iloc[0]
+                geom = (
+                    gpd.GeoSeries([geom], crs=boundary_crs).to_crs("EPSG:4326").iloc[0]
+                )
             return self._ensure_poly(geom)
 
         raise TypeError(f"Unsupported boundary type: {type(boundary)}")
@@ -119,7 +127,9 @@ class _OSMBoundaryIO:
         if geom.is_empty:
             raise ValueError("Boundary geometry is empty after dissolve/reproject.")
         if geom.geom_type not in ("Polygon", "MultiPolygon"):
-            raise TypeError(f"Boundary must dissolve to Polygon/MultiPolygon, got {geom.geom_type}")
+            raise TypeError(
+                f"Boundary must dissolve to Polygon/MultiPolygon, got {geom.geom_type}"
+            )
         return geom
 
     def _write_gpkg(
@@ -138,15 +148,18 @@ class _OSMBoundaryIO:
 
 @dataclass
 class DownloadOSMRoads(_OSMBoundaryIO):
-    timeout: int = 300       # per-tile Overpass timeout (seconds)
-    max_attempts: int = 5    # retries per tile
-    sleep_base: float = 3.0  # base backoff (seconds); actual wait = base * attempt + jitter
+    timeout: int = 300  # per-tile Overpass timeout (seconds)
+    max_attempts: int = 5  # retries per tile
+    sleep_base: float = (
+        3.0  # base backoff (seconds); actual wait = base * attempt + jitter
+    )
 
     # Tile area target in sq-degrees. Tiles are sized adaptively from the actual bbox:
     _TILE_AREA_DEG_SQ: float = 0.25
-    _MAX_WORKERS: int = 8   
+    _MAX_WORKERS: int = 8
 
-    _OVERPASS_MIRRORS: List[str] = None 
+    _OVERPASS_MIRRORS: List[str] = None
+
     def __post_init__(self):
         self._OVERPASS_MIRRORS = [
             "https://overpass-api.de/api/interpreter",
@@ -154,7 +167,9 @@ class DownloadOSMRoads(_OSMBoundaryIO):
             "https://z.overpass-api.de/api/interpreter",
         ]
         self._session = requests.Session()
-        self._session.headers["User-Agent"] = "fimbox/0.1 (+https://github.com/sdmlua/fimbox)"
+        self._session.headers["User-Agent"] = (
+            "fimbox/0.1 (+https://github.com/sdmlua/fimbox)"
+        )
 
     # adaptive tiling
 
@@ -171,7 +186,8 @@ class DownloadOSMRoads(_OSMBoundaryIO):
         dy = (maxy - miny) / ny
         return [
             (minx + i * dx, miny + j * dy, minx + (i + 1) * dx, miny + (j + 1) * dy)
-            for i in range(nx) for j in range(ny)
+            for i in range(nx)
+            for j in range(ny)
         ]
 
     def _n_workers(self, n_tiles: int) -> int:
@@ -183,8 +199,8 @@ class DownloadOSMRoads(_OSMBoundaryIO):
         minx, miny, maxx, maxy = bbox
         query = (
             f"[out:json][timeout:{self.timeout}];"
-            f"(way[\"highway\"~\"^motorway$|^trunk$|^primary$|^secondary$|^tertiary$\"]"
-            f"[!\"bridge\"]({miny},{minx},{maxy},{maxx}););"
+            f'(way["highway"~"^motorway$|^trunk$|^primary$|^secondary$|^tertiary$"]'
+            f'[!"bridge"]({miny},{minx},{maxy},{maxx}););'
             f"out body;>;out skel qt;"
         )
         # Must use GET with params={'data': ...}; POST with raw body returns 406 on overpass-api.de
@@ -192,7 +208,9 @@ class DownloadOSMRoads(_OSMBoundaryIO):
         for attempt in range(1, self.max_attempts + 1):
             mirror = self._OVERPASS_MIRRORS[(attempt - 1) % len(self._OVERPASS_MIRRORS)]
             try:
-                r = self._session.get(mirror, params={"data": query}, timeout=self.timeout + 60)
+                r = self._session.get(
+                    mirror, params={"data": query}, timeout=self.timeout + 60
+                )
                 if r.status_code in (429, 502, 503, 504):
                     raise RuntimeError(f"HTTP {r.status_code} from {mirror}")
                 r.raise_for_status()
@@ -201,13 +219,17 @@ class DownloadOSMRoads(_OSMBoundaryIO):
                 last_exc = exc
                 if attempt < self.max_attempts:
                     time.sleep(self.sleep_base * attempt + random.uniform(0, 2.0))
-        raise RuntimeError(f"Overpass query failed after {self.max_attempts} attempts: {last_exc}") from last_exc
+        raise RuntimeError(
+            f"Overpass query failed after {self.max_attempts} attempts: {last_exc}"
+        ) from last_exc
 
     # JSON → GDF
     @staticmethod
     def _json_to_lines_gdf(osm_json: dict) -> gpd.GeoDataFrame:
         elems = osm_json.get("elements", [])
-        nodes = {e["id"]: (e["lon"], e["lat"]) for e in elems if e.get("type") == "node"}
+        nodes = {
+            e["id"]: (e["lon"], e["lat"]) for e in elems if e.get("type") == "node"
+        }
         rows = []
         for e in elems:
             if e.get("type") != "way":
@@ -216,15 +238,17 @@ class DownloadOSMRoads(_OSMBoundaryIO):
             if len(coords) < 2:
                 continue
             tags = e.get("tags") or {}
-            rows.append({
-                "osmid":    str(e["id"]),
-                "highway":  tags.get("highway", "unknown"),
-                "name":     tags.get("name", ""),
-                "ref":      tags.get("ref", ""),
-                "surface":  tags.get("surface", ""),
-                "lanes":    tags.get("lanes", ""),
-                "geometry": LineString(coords),
-            })
+            rows.append(
+                {
+                    "osmid": str(e["id"]),
+                    "highway": tags.get("highway", "unknown"),
+                    "name": tags.get("name", ""),
+                    "ref": tags.get("ref", ""),
+                    "surface": tags.get("surface", ""),
+                    "lanes": tags.get("lanes", ""),
+                    "geometry": LineString(coords),
+                }
+            )
         if not rows:
             return gpd.GeoDataFrame(geometry=[], crs="EPSG:4326")
         return gpd.GeoDataFrame(rows, crs="EPSG:4326")
@@ -237,7 +261,9 @@ class DownloadOSMRoads(_OSMBoundaryIO):
             tqdm.write(f"  [warn] tile {tile} skipped: {exc}")
             return gpd.GeoDataFrame(geometry=[], crs="EPSG:4326")
 
-    def _fetch_all(self, tiles: List[Tuple[float, float, float, float]]) -> gpd.GeoDataFrame:
+    def _fetch_all(
+        self, tiles: List[Tuple[float, float, float, float]]
+    ) -> gpd.GeoDataFrame:
         workers = self._n_workers(len(tiles))
         parts: List[gpd.GeoDataFrame] = []
 
@@ -264,10 +290,14 @@ class DownloadOSMRoads(_OSMBoundaryIO):
     def query_to_gdf(
         self,
         boundary: Union[
-            gpd.GeoDataFrame, gpd.GeoSeries,
-            Polygon, MultiPolygon,
+            gpd.GeoDataFrame,
+            gpd.GeoSeries,
+            Polygon,
+            MultiPolygon,
             Tuple[float, float, float, float],
-            Sequence[float], str, Path,
+            Sequence[float],
+            str,
+            Path,
         ],
         boundary_layer: Optional[str] = None,
         boundary_crs: Optional[Union[str, int]] = None,
@@ -276,7 +306,9 @@ class DownloadOSMRoads(_OSMBoundaryIO):
         geom4326 = self._boundary_to_geom4326(boundary, boundary_layer, boundary_crs)
         minx, miny, maxx, maxy = geom4326.bounds
         tiles = self._make_tiles(minx, miny, maxx, maxy)
-        print(f"OSM roads: {len(tiles)} tile(s), {self._n_workers(len(tiles))} worker(s).")
+        print(
+            f"OSM roads: {len(tiles)} tile(s), {self._n_workers(len(tiles))} worker(s)."
+        )
 
         gdf = self._fetch_all(tiles)
         if gdf.empty:
@@ -287,7 +319,11 @@ class DownloadOSMRoads(_OSMBoundaryIO):
         print(f"  {len(gdf)} unique segments after dedup.")
 
         if clip_to_boundary:
-            gdf = gpd.clip(gdf, gpd.GeoDataFrame(geometry=[geom4326], crs="EPSG:4326"), keep_geom_type=True)
+            gdf = gpd.clip(
+                gdf,
+                gpd.GeoDataFrame(geometry=[geom4326], crs="EPSG:4326"),
+                keep_geom_type=True,
+            )
             print(f"  {len(gdf)} segments after clipping.")
 
         return gdf.to_crs(epsg=self.out_sr)
@@ -295,10 +331,14 @@ class DownloadOSMRoads(_OSMBoundaryIO):
     def download(
         self,
         boundary: Union[
-            gpd.GeoDataFrame, gpd.GeoSeries,
-            Polygon, MultiPolygon,
+            gpd.GeoDataFrame,
+            gpd.GeoSeries,
+            Polygon,
+            MultiPolygon,
             Tuple[float, float, float, float],
-            Sequence[float], str, Path,
+            Sequence[float],
+            str,
+            Path,
         ],
         out_dir: Union[str, Path],
         out_name: str = "osm_roads.gpkg",
@@ -312,8 +352,12 @@ class DownloadOSMRoads(_OSMBoundaryIO):
             out_name = ourfile
         if ourlayer:
             out_layer = ourlayer
-        gdf = self.query_to_gdf(boundary=boundary, boundary_layer=boundary_layer,
-                                 boundary_crs=boundary_crs, clip_to_boundary=True)
+        gdf = self.query_to_gdf(
+            boundary=boundary,
+            boundary_layer=boundary_layer,
+            boundary_crs=boundary_crs,
+            clip_to_boundary=True,
+        )
         out_path = self._write_gpkg(gdf, out_dir, out_name, out_layer)
         print(f"Saved: {out_path}")
         return gdf
@@ -343,7 +387,9 @@ class DownloadOSMBridges(_OSMBoundaryIO):
         return list(connected_components(graph))
 
     @staticmethod
-    def _clean_schema(gdf: gpd.GeoDataFrame, drop_list_columns: bool = True) -> gpd.GeoDataFrame:
+    def _clean_schema(
+        gdf: gpd.GeoDataFrame, drop_list_columns: bool = True
+    ) -> gpd.GeoDataFrame:
         if gdf is None or len(gdf) == 0:
             return gdf
 
@@ -442,7 +488,9 @@ class DownloadOSMBridges(_OSMBoundaryIO):
         gdf = gdf[gdf.geometry.notna()].copy()
         return gdf
 
-    def _pull_bridges_osmnx(self, geom4326: Union[Polygon, MultiPolygon]) -> gpd.GeoDataFrame:
+    def _pull_bridges_osmnx(
+        self, geom4326: Union[Polygon, MultiPolygon]
+    ) -> gpd.GeoDataFrame:
         # osmnx reads better in 4326; we output 5070 later
         ox.settings.requests_timeout = self.requests_timeout
 
@@ -453,7 +501,10 @@ class DownloadOSMBridges(_OSMBoundaryIO):
                     return gpd.GeoDataFrame(geometry=[], crs="EPSG:4326")
 
                 # OSMnx returns multiindex (element, id). Keep id as osmid and drop element.
-                if isinstance(gdf.index, pd.MultiIndex) and "element" in gdf.index.names:
+                if (
+                    isinstance(gdf.index, pd.MultiIndex)
+                    and "element" in gdf.index.names
+                ):
                     gdf = gdf.droplevel("element")
 
                 gdf = gdf.copy()
@@ -499,13 +550,17 @@ class DownloadOSMBridges(_OSMBoundaryIO):
         if not dissolved_groups:
             out = buffered.copy()
         else:
-            out = gpd.GeoDataFrame(pd.concat(dissolved_groups, ignore_index=True), crs=buffered.crs)
+            out = gpd.GeoDataFrame(
+                pd.concat(dissolved_groups, ignore_index=True), crs=buffered.crs
+            )
 
         # buffered polygons -> linestring exteriors
         out["geometry"] = out.geometry.apply(
-            lambda geom: LineString(geom.exterior.coords)
-            if geom is not None and geom.geom_type == "Polygon"
-            else geom
+            lambda geom: (
+                LineString(geom.exterior.coords)
+                if geom is not None and geom.geom_type == "Polygon"
+                else geom
+            )
         )
         out = out[out.geometry.notna()].copy()
         return out
@@ -607,10 +662,22 @@ if __name__ == "__main__":
         help="Boundary file path (shp/gpkg/geojson) OR bbox 'minx,miny,maxx,maxy' (assumed EPSG:4326 unless --boundary_crs given)",
     )
     p.add_argument("--out_dir", required=True, help="Output directory")
-    p.add_argument("--out_name", default=None, help="Output GeoPackage name (defaults depend on mode)")
-    p.add_argument("--out_layer", default=None, help="Output layer name (defaults depend on mode)")
-    p.add_argument("--boundary_layer", default=None, help="Boundary layer name if boundary is a GeoPackage")
-    p.add_argument("--boundary_crs", default=None, help="CRS for bbox/shapely boundary, e.g. 4326")
+    p.add_argument(
+        "--out_name",
+        default=None,
+        help="Output GeoPackage name (defaults depend on mode)",
+    )
+    p.add_argument(
+        "--out_layer", default=None, help="Output layer name (defaults depend on mode)"
+    )
+    p.add_argument(
+        "--boundary_layer",
+        default=None,
+        help="Boundary layer name if boundary is a GeoPackage",
+    )
+    p.add_argument(
+        "--boundary_crs", default=None, help="CRS for bbox/shapely boundary, e.g. 4326"
+    )
     args = p.parse_args()
 
     boundary_val: Any = args.boundary

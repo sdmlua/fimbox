@@ -1,6 +1,7 @@
 # Example Usage:
 import fimbox
-NHDboundary = "/Users/Supath/Downloads/SDML/FIMBOX/data_s3/BoundaryUnit.shp" #will go to the AWS S3 later [for new nhddownload-no need]
+
+NHDboundary = "/Users/Supath/Downloads/SDML/FIMBOX/data_s3/BoundaryUnit.shp"  # will go to the AWS S3 later [for new nhddownload-no need]
 test_boundary = "/Users/Supath/Downloads/SDML/FIMBOX/Sample_Data/Big_Boundary_MS.shp"
 
 # # Testing the entire NHDPlus data extraction process along with National Flood Hazard Layer data extraction
@@ -93,11 +94,11 @@ test_boundary = "/Users/Supath/Downloads/SDML/FIMBOX/Sample_Data/Big_Boundary_MS
 #     )
 
 
-#Get the HUC8 information
+# Get the HUC8 information
 def test_get_huc8_info():
     huc8_info = fimbox.getHUC8Info(
         boundary=test_boundary,
-        calc_overlap=True,     
+        calc_overlap=True,
         save=True,
         out_dir="../out",
     )

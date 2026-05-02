@@ -44,31 +44,56 @@ from .download_data.osm_data import DownloadOSMBridges, DownloadOSMRoads
 from .download_data.utils import HUC8Finder, find_headwater_points
 
 _FILENAMES = {
-    "wbd":                    "wbd.gpkg",
-    "wbd_buffer":             "wbd_buffered.gpkg",
-    "dem_domain":             "DEM_Domain.gpkg",
-    "landsea":                "LandSea_subset.gpkg",
-    "dem":                    "dem.tif",
-    "nfhl":                   "fema_nfhl_subset.gpkg",
-    "nwm_streams":            "nwm_subset_streams.gpkg",
-    "nwm_catchments":         "nwm_catchments_proj_subset.gpkg",
-    "nwm_lakes":              "nwm_lakes_proj_subset.gpkg",
-    "nwm_headwaters":         "nwm_headwater_points_subset.gpkg",
-    "levee_lines":            "nld_subset_levees.gpkg",
-    "levee_lines_burned":     "3d_nld_subset_levees_burned.gpkg",
-    "levee_protected_areas":  "LeveeProtectedAreas_subset.gpkg",
-    "osm_roads":              "osm_roads_subset.gpkg",
-    "osm_bridges":            "osm_bridges_subset.gpkg",
+    "wbd": "wbd.gpkg",
+    "wbd_buffer": "wbd_buffered.gpkg",
+    "dem_domain": "DEM_Domain.gpkg",
+    "landsea": "LandSea_subset.gpkg",
+    "dem": "dem.tif",
+    "nfhl": "fema_nfhl_subset.gpkg",
+    "nwm_streams": "nwm_subset_streams.gpkg",
+    "nwm_catchments": "nwm_catchments_proj_subset.gpkg",
+    "nwm_lakes": "nwm_lakes_proj_subset.gpkg",
+    "nwm_headwaters": "nwm_headwater_points_subset.gpkg",
+    "levee_lines": "nld_subset_levees.gpkg",
+    "levee_lines_burned": "3d_nld_subset_levees_burned.gpkg",
+    "levee_protected_areas": "LeveeProtectedAreas_subset.gpkg",
+    "osm_roads": "osm_roads_subset.gpkg",
+    "osm_bridges": "osm_bridges_subset.gpkg",
 }
 
 
 # HUC2 bounding boxes for NLD min-Z threshold selection.
 _HUC2_BBOX = {
-    "01": (-73.737982, 40.939103, -66.018747, 48.099706),  # New England     — coastal, min_z=0.01
-    "02": (-80.540991, 36.669417, -71.789711, 44.153046),  # Mid Atlantic     — coastal, min_z=0.01
-    "03": (-90.623497, 24.395330, -75.398098, 37.521035),  # South Atl-Gulf   — coastal, min_z=0.01
-    "08": (-94.338914, 28.854302, -88.289407, 37.861335),  # Lower Mississippi — below-sea, min_z=-10
-    "12": (-103.870535, 25.854437, -93.145981, 34.688972), # Texas-Gulf       — coastal, min_z=0.01
+    "01": (
+        -73.737982,
+        40.939103,
+        -66.018747,
+        48.099706,
+    ),  # New England     — coastal, min_z=0.01
+    "02": (
+        -80.540991,
+        36.669417,
+        -71.789711,
+        44.153046,
+    ),  # Mid Atlantic     — coastal, min_z=0.01
+    "03": (
+        -90.623497,
+        24.395330,
+        -75.398098,
+        37.521035,
+    ),  # South Atl-Gulf   — coastal, min_z=0.01
+    "08": (
+        -94.338914,
+        28.854302,
+        -88.289407,
+        37.861335,
+    ),  # Lower Mississippi — below-sea, min_z=-10
+    "12": (
+        -103.870535,
+        25.854437,
+        -93.145981,
+        34.688972,
+    ),  # Texas-Gulf       — coastal, min_z=0.01
 }
 
 
@@ -102,9 +127,9 @@ def _remove_null_z_vertices(geom: LineString, huc2: str):
     """
     if huc2 in ("01", "02", "03", "12"):  # coastal — near-zero elevations valid
         min_z = 0.01
-    elif huc2 == "08":                    # Louisiana — below-sea-level levees
+    elif huc2 == "08":  # Louisiana — below-sea-level levees
         min_z = -10.0
-    else:                                 # default including "00" (no special region)
+    else:  # default including "00" (no special region)
         min_z = 1.0
 
     out_segments, current_part = [], []
@@ -185,7 +210,11 @@ def preprocess_nld_lines(
     for i, row in enumerate(gdf.itertuples(), 1):
         results.append(_remove_null_z_vertices(row.geometry, huc2))
         if i % 10 == 0 or i == total:
-            print(f"\r  Filtering levee vertices [{huc2=}]: {i}/{total}", end="", flush=True)
+            print(
+                f"\r  Filtering levee vertices [{huc2=}]: {i}/{total}",
+                end="",
+                flush=True,
+            )
     print()
     gdf["geometry"] = results
     gdf = gdf[gdf["geometry"].notna() & ~gdf.is_empty].copy()
@@ -278,7 +307,9 @@ class getAllInputData:
         if self.logger.handlers:
             return
         self.logger.setLevel(logging.INFO)
-        fmt = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s", datefmt="%H:%M:%S")
+        fmt = logging.Formatter(
+            "%(asctime)s [%(levelname)s] %(message)s", datefmt="%H:%M:%S"
+        )
         ch = logging.StreamHandler()
         ch.setFormatter(fmt)
         self.logger.addHandler(ch)
@@ -294,7 +325,9 @@ class getAllInputData:
 
     def _load_boundary(self) -> gpd.GeoDataFrame:
         if self.huc8:
-            self.logger.info(f"Fetching HUC8 boundary for {self.huc8} from hosted service...")
+            self.logger.info(
+                f"Fetching HUC8 boundary for {self.huc8} from hosted service..."
+            )
             gdf = HUC8Finder().from_huc8(self.huc8)
             if gdf.empty:
                 raise ValueError(f"HUC8 {self.huc8!r} not found.")
@@ -321,46 +354,74 @@ class getAllInputData:
         buffered = self.buffer_gdf.to_crs(epsg=self.epsg)
 
         try:
-            dem_domain = DownloadDEMDomain(out_sr=self.epsg).download(boundary=self.buffer_gdf)
+            dem_domain = DownloadDEMDomain(out_sr=self.epsg).download(
+                boundary=self.buffer_gdf
+            )
             if dem_domain is not None and not dem_domain.empty:
                 dem_domain = gpd.clip(dem_domain.to_crs(epsg=self.epsg), buffered)
                 if not dem_domain.empty:
-                    dem_domain.to_file(self._out("dem_domain"), driver="GPKG", index=False)
+                    dem_domain.to_file(
+                        self._out("dem_domain"), driver="GPKG", index=False
+                    )
                     boundary = gpd.clip(boundary, dem_domain)
                     buffered = gpd.clip(buffered, dem_domain)
-                    self.logger.info(f"DEM domain applied --> {_FILENAMES['dem_domain']}")
+                    self.logger.info(
+                        f"DEM domain applied --> {_FILENAMES['dem_domain']}"
+                    )
                 else:
-                    self.logger.warning("DEM domain service returned no overlap after clipping.")
+                    self.logger.warning(
+                        "DEM domain service returned no overlap after clipping."
+                    )
             else:
-                self.logger.warning("DEM domain service returned no intersecting features.")
+                self.logger.warning(
+                    "DEM domain service returned no intersecting features."
+                )
         except Exception as exc:
-            self.logger.error(f"DEM domain mask failed; continuing with original boundary: {exc}", exc_info=True)
+            self.logger.error(
+                f"DEM domain mask failed; continuing with original boundary: {exc}",
+                exc_info=True,
+            )
 
         try:
-            landsea = DownloadLandSea(out_sr=self.epsg).download(boundary=buffered.to_crs("EPSG:4326"))
+            landsea = DownloadLandSea(out_sr=self.epsg).download(
+                boundary=buffered.to_crs("EPSG:4326")
+            )
             if landsea is not None and not landsea.empty:
                 landsea = gpd.clip(landsea.to_crs(epsg=self.epsg), buffered)
                 if not landsea.empty:
                     landsea.to_file(self._out("landsea"), driver="GPKG", index=False)
                     boundary = boundary.overlay(landsea[["geometry"]], how="difference")
                     buffered = buffered.overlay(landsea[["geometry"]], how="difference")
-                    self.logger.info(f"Land/sea mask applied --> {_FILENAMES['landsea']}")
+                    self.logger.info(
+                        f"Land/sea mask applied --> {_FILENAMES['landsea']}"
+                    )
                 else:
-                    self.logger.info("Land/sea service returned no overlap after clipping.")
+                    self.logger.info(
+                        "Land/sea service returned no overlap after clipping."
+                    )
             else:
                 self.logger.info("Land/sea service returned no intersecting features.")
         except Exception as exc:
-            self.logger.error(f"Land/sea mask failed; continuing without land/sea subtraction: {exc}", exc_info=True)
+            self.logger.error(
+                f"Land/sea mask failed; continuing without land/sea subtraction: {exc}",
+                exc_info=True,
+            )
 
-        self.boundary_gdf = self._drop_fid(boundary[~boundary.is_empty].to_crs("EPSG:4326"))
-        self.buffer_gdf = self._drop_fid(buffered[~buffered.is_empty].to_crs("EPSG:4326"))
+        self.boundary_gdf = self._drop_fid(
+            boundary[~boundary.is_empty].to_crs("EPSG:4326")
+        )
+        self.buffer_gdf = self._drop_fid(
+            buffered[~buffered.is_empty].to_crs("EPSG:4326")
+        )
 
     def _save_boundaries(self):
         self.boundary_gdf.to_file(self._out("wbd"), driver="GPKG", index=False)
         self.logger.info(f"Study boundary --> {_FILENAMES['wbd']}")
 
         self.buffer_gdf.to_file(self._out("wbd_buffer"), driver="GPKG", index=False)
-        self.logger.info(f"Buffered boundary ({self.buffer_m} m) --> {_FILENAMES['wbd_buffer']}")
+        self.logger.info(
+            f"Buffered boundary ({self.buffer_m} m) --> {_FILENAMES['wbd_buffer']}"
+        )
 
     def _skip(self, key: str) -> bool:
         p = self._out(key)
@@ -387,7 +448,10 @@ class getAllInputData:
             self.logger.error(f"DEM failed: {exc}", exc_info=True)
 
     def run_nhd(self):
-        all_exist = all(self._out(k).exists() for k in ("nwm_streams", "nwm_catchments", "nwm_lakes"))
+        all_exist = all(
+            self._out(k).exists()
+            for k in ("nwm_streams", "nwm_catchments", "nwm_lakes")
+        )
         if all_exist:
             self.logger.info(f"SKIP (exists): nwm_subset_streams/catchments/lakes")
             return
@@ -404,7 +468,10 @@ class getAllInputData:
             if results.get("flowlines") is not None and not results["flowlines"].empty:
                 self.logger.info(f"NWM streams --> {_FILENAMES['nwm_streams']}")
                 self._run_headwaters(results["flowlines"])
-            if results.get("catchments") is not None and not results["catchments"].empty:
+            if (
+                results.get("catchments") is not None
+                and not results["catchments"].empty
+            ):
                 self.logger.info(f"NWM catchments --> {_FILENAMES['nwm_catchments']}")
             if results.get("lakes") is not None and not results["lakes"].empty:
                 self.logger.info(f"NWM lakes --> {_FILENAMES['nwm_lakes']}")
@@ -428,7 +495,9 @@ class getAllInputData:
             hw = find_headwater_points(fl)
             if not hw.empty:
                 hw.to_file(self._out("nwm_headwaters"), driver="GPKG", index=False)
-                self.logger.info(f"Headwaters ({len(hw)} points) --> {_FILENAMES['nwm_headwaters']}")
+                self.logger.info(
+                    f"Headwaters ({len(hw)} points) --> {_FILENAMES['nwm_headwaters']}"
+                )
             else:
                 self.logger.warning("Headwaters: no points found.")
         except Exception as exc:
@@ -483,23 +552,33 @@ class getAllInputData:
                         huc2=self.huc2,
                     )
                     if burned.empty:
-                        self.logger.warning("Levee burn lines: no features survived null-Z filter.")
+                        self.logger.warning(
+                            "Levee burn lines: no features survived null-Z filter."
+                        )
                     else:
                         self.logger.info(
                             f"Levee burn lines ({len(burned)} features) --> "
                             f"{_FILENAMES['levee_lines_burned']}"
                         )
                 else:
-                    self.logger.warning("NLD: no levee lines found within this boundary.")
+                    self.logger.warning(
+                        "NLD: no levee lines found within this boundary."
+                    )
             except Exception as exc:
-                self.logger.error(f"NLD line preprocessing failed: {exc}", exc_info=True)
+                self.logger.error(
+                    f"NLD line preprocessing failed: {exc}", exc_info=True
+                )
 
         if not polys_exist:
             polys_path = self._out("levee_protected_areas")
             if polys_path.exists():
-                self.logger.info(f"Levee protected areas --> {_FILENAMES['levee_protected_areas']}")
+                self.logger.info(
+                    f"Levee protected areas --> {_FILENAMES['levee_protected_areas']}"
+                )
             else:
-                self.logger.warning("NLD: no levee protected-area polygons found within this boundary.")
+                self.logger.warning(
+                    "NLD: no levee protected-area polygons found within this boundary."
+                )
 
     def run_osm(self):
         if not self._skip("osm_roads"):
@@ -548,7 +627,8 @@ class getAllInputData:
         print(f"  {self.case_name}  -->  {self.case_dir}")
         print(f"{'='*60}")
         files = sorted(
-            f for f in self.case_dir.iterdir()
+            f
+            for f in self.case_dir.iterdir()
             if f.suffix in (".gpkg", ".tif", ".log") and f.is_file()
         )
         for f in files:
