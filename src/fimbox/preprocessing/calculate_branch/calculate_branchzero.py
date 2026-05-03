@@ -3,9 +3,9 @@ Author: Supath Dhital
 Branch Zero preprocessing
 
 Steps performed:
-  1. Clip 3DEP DEM to HUC boundary  → dem_meters.tif
-  2. Clip bridge_elev_diff raster   → bridge_elev_diff_meters.tif  (optional)
-  3. Burn levees into DEM           → overwrites dem_meters_{id}.tif  (optional)
+  1. Clip 3DEP DEM to HUC boundary  → dem.tif
+  2. Clip bridge_elev_diff raster   → bridge_elev_diff.tif  (optional)
+  3. Burn levees into DEM           → overwrites dem_{id}.tif  (optional)
   4. Rasterize NWM streams          → flows_grid_boolean_{id}.tif
   5. AGREE DEM conditioning         → dem_burned_{id}.tif
   6. Fill depressions (pit removal) → dem_burned_filled_{id}.tif
@@ -15,15 +15,26 @@ Steps performed:
 from __future__ import annotations
 
 import logging
-import os
+import math
 import shutil
-import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, Union
 
 import numpy as np
 import rasterio
+from rasterio.crs import CRS
+from rasterio.features import geometry_mask
+from rasterio.warp import Resampling, reproject as warp_reproject
+
+from .flowdir_dem import FlowdirDEM
+from .hydroenforce_dem import HydroenforceDEM
+from .levee_rasterize import burn_levee_elevations, rasterize_3d_levee_lines
+from .reach_rasterize import (
+    HeadwaterRasterizer,
+    LevelPathBooleanRasterizer,
+    StreamBooleanRasterizer,
+)
 
 log = logging.getLogger(__name__)
 
@@ -40,12 +51,20 @@ class BranchZero:
     boundary_gpkg         : WBD buffered boundary used for clipping
     out_dir               : directory to write all outputs
     bridge_elev_diff_path : bridge_elev_diff.tif from BridgeDEMDiff (optional)
-    levee_raster_path     : 3D NLD levee raster with elevations (optional)
+    levee_gpkg_path       : 3D NLD levee GeoPackage with Z-elevation vertices (optional)
+    levee_raster_path     : pre-rasterized NLD levee elevation raster (optional, used when
+                            levee_gpkg_path is not provided)
+    headwaters_gpkg       : NWM headwater points GeoPackage (optional)
+    levelpaths_extended_gpkg : extended level path streams GeoPackage (optional)
     target_crs            : EPSG string e.g. "EPSG:5070"; defaults to DEM CRS
     resolution            : output pixel size in metres; defaults to DEM resolution
     agree_buffer_m        : AGREE stream buffer distance in metres (default 15)
     agree_smooth_drop     : AGREE smooth drop in metres (default 10)
     agree_sharp_drop      : AGREE sharp drop in metres (default 1000)
+    stream_value          : pixel value in flows_grid_boolean identifying stream cells (default 1);
+                            set this if your flowline raster uses a different burn value
+    wbt_path              : WhiteboxTools executable directory; falls back to WBT_PATH env var
+    keep_agree_intermediates : keep AGREE workspace files after run (useful for debugging)
     branch_zero_id        : suffix used in output filenames (default "0")
     """
 
@@ -54,12 +73,18 @@ class BranchZero:
     boundary_gpkg: Union[str, Path]
     out_dir: Union[str, Path]
     bridge_elev_diff_path: Optional[Union[str, Path]] = None
+    levee_gpkg_path: Optional[Union[str, Path]] = None
     levee_raster_path: Optional[Union[str, Path]] = None
+    headwaters_gpkg: Optional[Union[str, Path]] = None
+    levelpaths_extended_gpkg: Optional[Union[str, Path]] = None
     target_crs: Optional[str] = None
     resolution: Optional[float] = None
     agree_buffer_m: float = 15.0
     agree_smooth_drop: float = 10.0
     agree_sharp_drop: float = 1000.0
+    stream_value: int = 1
+    wbt_path: Optional[str] = None
+    keep_agree_intermediates: bool = False
     branch_zero_id: str = "0"
 
     def __post_init__(self):
@@ -70,21 +95,31 @@ class BranchZero:
         self.out_dir.mkdir(parents=True, exist_ok=True)
         if self.bridge_elev_diff_path:
             self.bridge_elev_diff_path = Path(self.bridge_elev_diff_path)
+        if self.levee_gpkg_path:
+            self.levee_gpkg_path = Path(self.levee_gpkg_path)
         if self.levee_raster_path:
             self.levee_raster_path = Path(self.levee_raster_path)
+        if self.headwaters_gpkg:
+            self.headwaters_gpkg = Path(self.headwaters_gpkg)
+        if self.levelpaths_extended_gpkg:
+            self.levelpaths_extended_gpkg = Path(self.levelpaths_extended_gpkg)
 
     def run(self) -> dict:
         """Run all Phase-2 steps. Returns dict of output Path objects."""
         log_path = self.out_dir / "preprocess.log"
+        log_path.parent.mkdir(parents=True, exist_ok=True)
         fh = logging.FileHandler(log_path, mode="a", encoding="utf-8")
         fh.setLevel(logging.DEBUG)
         fh.setFormatter(
             logging.Formatter(
-                "%(asctime)s  %(levelname)-8s  %(message)s", datefmt="%Y-%m-%d %H:%M:%S"
+                "%(asctime)s  %(levelname)-8s  %(name)s  %(message)s",
+                datefmt="%Y-%m-%d %H:%M:%S",
             )
         )
-        log.setLevel(logging.DEBUG)
-        log.addHandler(fh)
+        # attach to the fimbox root logger so all child modules write here too
+        fimbox_log = logging.getLogger("fimbox")
+        fimbox_log.setLevel(logging.DEBUG)
+        fimbox_log.addHandler(fh)
         try:
             log.info("=" * 60)
             log.info(
@@ -107,8 +142,11 @@ class BranchZero:
             log.info("BranchZero DONE — %d output files written", len(result))
             log.info("=" * 60)
             return result
+        except Exception:
+            log.exception("BranchZero FAILED")
+            raise
         finally:
-            log.removeHandler(fh)
+            fimbox_log.removeHandler(fh)
             fh.close()
 
     def _run(self) -> dict:
@@ -119,19 +157,19 @@ class BranchZero:
         crs, res = self._resolve_crs_and_res()
 
         # clip DEM to HUC boundary once, then copy into branch subdirectory
-        dem_clipped = self.out_dir / "dem_meters.tif"
-        _gdalwarp_clip(self.dem_path, self.boundary_gpkg, dem_clipped, crs=crs, res=res)
+        dem_clipped = self.out_dir / "dem.tif"
+        _rasterio_clip_reproject(self.dem_path, self.boundary_gpkg, dem_clipped, crs=crs, res=res)
         log.info("DEM clipped → %s", dem_clipped.name)
 
-        dem_branch = branch_dir / f"dem_meters_{bid}.tif"
+        dem_branch = branch_dir / f"dem_{bid}.tif"
         shutil.copy2(dem_clipped, dem_branch)
 
         # clip bridge elev diff once, then copy into branch subdirectory
         bridge_clipped: Optional[Path] = None
         bridge_branch: Optional[Path] = None
         if self.bridge_elev_diff_path and self.bridge_elev_diff_path.exists():
-            bridge_clipped = self.out_dir / "bridge_elev_diff_meters.tif"
-            _gdalwarp_clip(
+            bridge_clipped = self.out_dir / "bridge_elev_diff.tif"
+            _rasterio_clip_reproject(
                 self.bridge_elev_diff_path,
                 self.boundary_gpkg,
                 bridge_clipped,
@@ -139,37 +177,44 @@ class BranchZero:
                 res=res,
             )
             log.info("Bridge elev diff clipped → %s", bridge_clipped.name)
-            bridge_branch = branch_dir / f"bridge_elev_diff_meters_{bid}.tif"
+            bridge_branch = branch_dir / f"bridge_elev_diff_{bid}.tif"
             shutil.copy2(bridge_clipped, bridge_branch)
 
-        # burn levees into DEM if provided
-        if self.levee_raster_path and self.levee_raster_path.exists():
-            _burn_levees(dem_branch, self.levee_raster_path, dem_branch)
+        # rasterize 3D levee lines if GeoPackage provided, then burn into DEM
+        if self.levee_gpkg_path and self.levee_gpkg_path.exists():
+            levee_elev_raster = branch_dir / f"nld_rasterized_elev_{bid}.tif"
+            rasterize_3d_levee_lines(self.levee_gpkg_path, dem_branch, levee_elev_raster)
+            log.info("Levee lines rasterized → %s", levee_elev_raster.name)
+            burn_levee_elevations(dem_branch, levee_elev_raster, dem_branch)
+            log.info("Levees burned into DEM")
+        elif self.levee_raster_path and self.levee_raster_path.exists():
+            burn_levee_elevations(dem_branch, self.levee_raster_path, dem_branch)
             log.info("Levees burned into DEM")
 
-        # read DEM extent for rasterization
-        with rasterio.open(dem_branch) as src:
-            ncols, nrows = src.width, src.height
-            left, bottom, right, top = src.bounds
-
-        # rasterize streams to boolean grid
+        # rasterize streams to boolean grid (branch 0 — all NWM streams)
         flows_bool = branch_dir / f"flows_grid_boolean_{bid}.tif"
-        _rasterize_streams(
-            self.streams_gpkg,
-            flows_bool,
-            crs=crs,
-            xmin=left,
-            ymin=bottom,
-            xmax=right,
-            ymax=top,
-            ncols=ncols,
-            nrows=nrows,
-        )
+        StreamBooleanRasterizer(self.streams_gpkg, dem_branch, flows_bool).run()
         log.info("Stream boolean grid → %s", flows_bool.name)
+
+        # rasterize headwater points if provided
+        headwaters_bool = None
+        if self.headwaters_gpkg and self.headwaters_gpkg.exists():
+            headwaters_bool = branch_dir / f"headwaters_{bid}.tif"
+            HeadwaterRasterizer(self.headwaters_gpkg, dem_branch, headwaters_bool).run()
+            log.info("Headwaters boolean grid → %s", headwaters_bool.name)
+
+        # rasterize extended level path streams if provided (used by non-zero branches)
+        levelpaths_bool = None
+        if self.levelpaths_extended_gpkg and self.levelpaths_extended_gpkg.exists():
+            levelpaths_bool = self.out_dir / "flows_grid_boolean.tif"
+            LevelPathBooleanRasterizer(
+                self.levelpaths_extended_gpkg, dem_branch, levelpaths_bool
+            ).run()
+            log.info("Level path boolean grid → %s", levelpaths_bool.name)
 
         # AGREE DEM conditioning
         dem_burned = branch_dir / f"dem_burned_{bid}.tif"
-        _agreedem(
+        HydroenforceDEM(
             rivers_raster=flows_bool,
             dem=dem_branch,
             output_raster=dem_burned,
@@ -177,7 +222,10 @@ class BranchZero:
             buffer_dist=self.agree_buffer_m,
             smooth_drop=self.agree_smooth_drop,
             sharp_drop=self.agree_sharp_drop,
-        )
+            stream_value=self.stream_value,
+            wbt_path=self.wbt_path,
+            keep_intermediates=self.keep_agree_intermediates,
+        ).run()
         log.info("AGREE DEM → %s", dem_burned.name)
 
         # fill depressions
@@ -187,11 +235,11 @@ class BranchZero:
 
         # D8 flow directions
         flowdir = branch_dir / f"flowdir_d8_burned_filled_{bid}.tif"
-        _d8_flow_dir(dem_filled, flowdir)
+        FlowdirDEM(dem_filled, flowdir, wbt_path=self.wbt_path).run()
         log.info("D8 flow directions → %s", flowdir.name)
 
         outputs = {
-            "dem_meters": dem_clipped,
+            "dem": dem_clipped,
             "dem_branch": dem_branch,
             "flows_grid_boolean": flows_bool,
             "dem_burned": dem_burned,
@@ -199,9 +247,13 @@ class BranchZero:
             "flowdir_d8": flowdir,
         }
         if bridge_clipped:
-            outputs["bridge_elev_diff_meters"] = bridge_clipped
+            outputs["bridge_elev_diff"] = bridge_clipped
         if bridge_branch:
             outputs["bridge_elev_diff_branch"] = bridge_branch
+        if headwaters_bool:
+            outputs["headwaters"] = headwaters_bool
+        if levelpaths_bool:
+            outputs["flows_grid_boolean_levelpaths"] = levelpaths_bool
 
         log.info("=== BRANCH ZERO COMPLETE ===")
         return outputs
@@ -214,263 +266,89 @@ class BranchZero:
         return str(crs), float(res)
 
 
-def _gdalwarp_clip(
+def _rasterio_clip_reproject(
     src: Path, boundary: Path, dst: Path, *, crs: str, res: float
 ) -> None:
-    """Clip and reproject a raster to a polygon boundary."""
-    subprocess.run(
-        [
-            "gdalwarp",
-            "-cutline",
-            str(boundary),
-            "-crop_to_cutline",
-            "-ot",
-            "Float32",
-            "-r",
-            "near",
-            "-of",
-            "GTiff",
-            "-overwrite",
-            "-co",
-            "BLOCKXSIZE=512",
-            "-co",
-            "BLOCKYSIZE=512",
-            "-co",
-            "TILED=YES",
-            "-co",
-            "COMPRESS=LZW",
-            "-co",
-            "BIGTIFF=YES",
-            "-t_srs",
-            crs,
-            "-tr",
-            str(res),
-            str(res),
-            "-tap",
-            str(src),
-            str(dst),
-        ],
-        check=True,
-        capture_output=True,
+    """Clip and reproject a raster to a polygon boundary using rasterio (no GDAL CLI)."""
+    import geopandas as gpd
+
+    src, dst = Path(src), Path(dst)
+
+    # same source and destination — file is already at the right location, nothing to do
+    if src.resolve() == dst.resolve():
+        log.info("Clip skipped — already at destination: %s", dst.name)
+        return
+
+    target_crs = CRS.from_string(crs)
+
+    # load boundary, reproject to target CRS, dissolve to single geometry
+    gdf = gpd.read_file(str(boundary))
+    if gdf.crs is not None and gdf.crs != target_crs:
+        gdf = gdf.to_crs(target_crs)
+    boundary_geom = gdf.geometry.unary_union
+
+    # target-aligned pixel grid (matches gdalwarp -tap -tr)
+    minx, miny, maxx, maxy = boundary_geom.bounds
+    minx_tap = math.floor(minx / res) * res
+    miny_tap = math.floor(miny / res) * res
+    maxx_tap = math.ceil(maxx / res) * res
+    maxy_tap = math.ceil(maxy / res) * res
+    ncols = max(1, int(round((maxx_tap - minx_tap) / res)))
+    nrows = max(1, int(round((maxy_tap - miny_tap) / res)))
+    dst_transform = rasterio.transform.from_bounds(
+        minx_tap, miny_tap, maxx_tap, maxy_tap, ncols, nrows
     )
 
+    with rasterio.open(str(src)) as src_ds:
+        nodata_val = float(src_ds.nodata) if src_ds.nodata is not None else -9999.0
+        dst_arr = np.full((nrows, ncols), nodata_val, dtype=np.float32)
+        warp_reproject(
+            source=rasterio.band(src_ds, 1),
+            destination=dst_arr,
+            src_transform=src_ds.transform,
+            src_crs=src_ds.crs,
+            dst_transform=dst_transform,
+            dst_crs=target_crs,
+            resampling=Resampling.nearest,
+            src_nodata=nodata_val,
+            dst_nodata=nodata_val,
+        )
 
-def _burn_levees(dem_path: Path, levee_path: Path, out_path: Path) -> None:
-    """Raise DEM pixels to levee elevation where levee is present."""
-    with rasterio.open(dem_path) as dem, rasterio.open(levee_path) as nld:
-        dem_data = dem.read(1)
-        nld_data = nld.read(1).astype(np.float32)
-        nodata = nld.nodata
-        nld_masked = np.where(nld_data == nodata, nodata, nld_data)
-        burned = np.maximum(dem_data, nld_masked)
-        profile = dem.profile.copy()
-    with rasterio.open(out_path, "w", **profile) as dst:
-        dst.write(burned, 1)
-
-
-def _rasterize_streams(
-    gpkg: Path,
-    out: Path,
-    *,
-    crs: str,
-    xmin: float,
-    ymin: float,
-    xmax: float,
-    ymax: float,
-    ncols: int,
-    nrows: int,
-) -> None:
-    """Rasterize stream lines to a binary 0/1 Int32 grid."""
-    subprocess.run(
-        [
-            "gdal_rasterize",
-            "-q",
-            "-ot",
-            "Int32",
-            "-burn",
-            "1",
-            "-init",
-            "0",
-            "-co",
-            "COMPRESS=LZW",
-            "-co",
-            "BIGTIFF=YES",
-            "-co",
-            "TILED=YES",
-            "-a_srs",
-            crs,
-            "-te",
-            str(xmin),
-            str(ymin),
-            str(xmax),
-            str(ymax),
-            "-ts",
-            str(ncols),
-            str(nrows),
-            str(gpkg),
-            str(out),
-        ],
-        check=True,
-        capture_output=True,
+    # mask pixels outside boundary polygon to nodata
+    outside = geometry_mask(
+        [boundary_geom],
+        out_shape=(nrows, ncols),
+        transform=dst_transform,
+        invert=False,
     )
+    dst_arr[outside] = nodata_val
+
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    with rasterio.open(
+        str(dst), "w",
+        driver="GTiff", dtype="float32",
+        width=ncols, height=nrows,
+        count=1, crs=target_crs, transform=dst_transform,
+        nodata=nodata_val,
+        compress="lzw", tiled=True,
+        blockxsize=512, blockysize=512,
+        BIGTIFF="YES",
+    ) as dst_ds:
+        dst_ds.write(dst_arr, 1)
+
+    log.debug("Clip written → %s  (%dx%d  res=%.2fm)", dst.name, ncols, nrows, res)
 
 
-def _agreedem(
-    rivers_raster: Path,
-    dem: Path,
-    output_raster: Path,
-    workspace: Path,
-    buffer_dist: float,
-    smooth_drop: float,
-    sharp_drop: float,
-) -> None:
-    """
-    AGREE DEM hydrological conditioning (Hellweger 1997).
-    Matches inundation-mapping agreedem.py logic exactly using windowed I/O.
-    """
-    import whitebox
 
-    wbt = whitebox.WhiteboxTools()
-    wbt.verbose = False
 
-    ws = str(workspace)
-    smo_out = os.path.join(ws, "agree_smogrid.tif")
-    smo_zerod = os.path.join(ws, "agree_smogrid_zerod.tif")
-    vectdist = os.path.join(ws, "agree_smogrid_dist.tif")
-    vectallo = os.path.join(ws, "agree_smogrid_allo.tif")
-    buf_out = os.path.join(ws, "agree_bufgrid.tif")
-    buf_zerod = os.path.join(ws, "agree_bufgrid_zerod.tif")
-    bin_buf = os.path.join(ws, "agree_binary_bufgrid.tif")
-    bufdist = os.path.join(ws, "agree_bufgrid_dist.tif")
-    bufallo = os.path.join(ws, "agree_bufgrid_allo.tif")
-
-    with rasterio.open(str(dem)) as elev, rasterio.open(str(rivers_raster)) as rivers:
-        dem_profile = elev.profile
-        half_res = elev.res[0] / 2
-        final_buffer = buffer_dist - half_res
-
-        # smogrid: stream cells lowered by smooth_drop, non-stream cells = 0 (nodata)
-        smo_profile = dem_profile.copy()
-        smo_profile.update(nodata=0, dtype="float32")
-        smooth_dist = -1 * smooth_drop
-
-        smogrid_valid = False
-        with rasterio.open(smo_out, "w", **smo_profile) as raster:
-            for ji, window in elev.block_windows(1):
-                elev_data = elev.read(1, window=window)
-                elev_mask = elev.read_masks(1, window=window).astype(bool)
-                river_raw = rivers.read(1, window=window)
-                river_data = np.where(elev_mask, river_raw, 0)
-                smogrid_window = river_data * (elev_data + smooth_dist)
-                raster.write(smogrid_window.astype("float32"), indexes=1, window=window)
-                if len(smogrid_window[smogrid_window != 0]) > 0:
-                    smogrid_valid = True
-
-        if not smogrid_valid:
-            raise RuntimeError(
-                "No stream cells found overlapping the DEM extent. "
-                "Check that streams CRS matches the DEM CRS. "
-                f"dem={dem}, rivers={rivers_raster}"
-            )
-
-        # euclidean distance and allocation from stream pixels
-        wbt.euclidean_distance(str(rivers_raster), vectdist)
-        wbt.convert_nodata_to_zero(smo_out, smo_zerod)
-        wbt.euclidean_allocation(smo_zerod, vectallo)
-
-        # bufgrid: DEM elevation outside buffer zone, nodata inside
-        buf_profile = dem_profile.copy()
-        buf_profile.update(dtype="float32")
-
-        with rasterio.open(vectdist) as vd:
-            with rasterio.open(buf_out, "w", **buf_profile) as raster:
-                for ji, window in elev.block_windows(1):
-                    vd_data = vd.read(1, window=window)
-                    elev_data = elev.read(1, window=window)
-                    bufgrid = np.where(
-                        vd_data > final_buffer, elev_data, dem_profile["nodata"]
-                    )
-                    raster.write(bufgrid.astype("float32"), indexes=1, window=window)
-
-        # binary buffer grid: 1 where bufgrid has valid data, 0 elsewhere
-        with rasterio.open(buf_out) as agree_bufgrid:
-            bin_profile = agree_bufgrid.profile.copy()
-            bin_profile.update(dtype="float32")
-            with rasterio.open(bin_buf, "w", **bin_profile) as raster:
-                for ji, window in agree_bufgrid.block_windows(1):
-                    data = agree_bufgrid.read(1, window=window)
-                    data = np.where(data > -10000, 1.0, 0.0)
-                    raster.write(data.astype("float32"), indexes=1, window=window)
-
-        # euclidean distance and allocation from buffer edge
-        wbt.euclidean_distance(bin_buf, bufdist)
-        wbt.convert_nodata_to_zero(buf_out, buf_zerod)
-        wbt.euclidean_allocation(buf_zerod, bufallo)
-
-        # compute final AGREE DEM using windowed I/O
-        agree_profile = dem_profile.copy()
-        agree_profile.update(dtype="float32")
-
-        with (
-            rasterio.open(vectdist) as vd,
-            rasterio.open(vectallo) as va,
-            rasterio.open(bufdist) as bd,
-            rasterio.open(bufallo) as ba,
-        ):
-            with rasterio.open(str(output_raster), "w", **agree_profile) as raster:
-                for ji, window in elev.block_windows(1):
-                    elev_data = elev.read(1, window=window)
-                    elev_mask = elev.read_masks(1, window=window).astype(bool)
-                    vd_data = vd.read(1, window=window)
-                    va_data = va.read(1, window=window)
-                    bd_data = bd.read(1, window=window)
-                    ba_data = ba.read(1, window=window)
-                    river_raw = rivers.read(1, window=window).astype(np.float32)
-
-                    ba_data = np.where(ba_data == -32768.0, elev_data, ba_data)
-                    va_data = np.where(va_data == -32768.0, elev_data - 10, va_data)
-                    river_data = np.where(elev_mask, river_raw, -20.0)
-
-                    smoelev = (
-                        va_data + ((ba_data - va_data) / (bd_data + vd_data)) * vd_data
-                    )
-                    shagrid = (smoelev + (-1 * sharp_drop)) * river_data
-                    elevgrid = np.where(river_data == 0, smoelev, shagrid)
-                    agree_dem = np.where(elev_mask, elevgrid, dem_profile["nodata"])
-
-                    raster.write(agree_dem.astype("float32"), indexes=1, window=window)
-
-    # clean up intermediates
-    for f in [
-        smo_out,
-        smo_zerod,
-        vectdist,
-        vectallo,
-        buf_out,
-        buf_zerod,
-        bin_buf,
-        bufdist,
-        bufallo,
-    ]:
-        try:
-            os.remove(f)
-        except FileNotFoundError:
-            pass
 
 
 # fill depressions in the burned DEM
 def _fill_depressions(dem: Path, out: Path) -> None:
-    import whitebox
+    import richdem as rd
 
-    wbt = whitebox.WhiteboxTools()
-    wbt.verbose = False
-    wbt.fill_depressions(str(dem), str(out), fix_flats=True)
+    rda = rd.LoadGDAL(str(dem))
+    rd.FillDepressions(rda, epsilon=True, in_place=True)
+    rd.SaveGDAL(str(out), rda)
 
 
-# D8 flow directions
-def _d8_flow_dir(dem: Path, out: Path) -> None:
-    import whitebox
-
-    wbt = whitebox.WhiteboxTools()
-    wbt.verbose = False
-    wbt.d8_pointer(str(dem), str(out))

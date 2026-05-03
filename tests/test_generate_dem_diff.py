@@ -2,8 +2,6 @@
 Tests for bridge DEM processing pipeline.
 Step 1 (generateBridgeRaster): streams USGS LiDAR and writes per-bridge .tif
 Step 2 (BridgeDEMDiff):        computes lidar_elev - dem_elev and saves bridge_elev_diff.tif
-
-Requires: pdal, laspy
 """
 
 import fimbox

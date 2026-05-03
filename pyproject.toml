@@ -21,6 +21,7 @@ dependencies = [
     "laspy>=2.0",
     "lazrs>=0.6",
     "whitebox>=2.3",
+    "richdem2>=2.2.0",
 ]
 
 [project.optional-dependencies]

@@ -11,18 +11,19 @@ branch-derivation helpers for area inputs.
 from __future__ import annotations
 
 from collections import defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import logging
+import warnings
 from pathlib import Path
 from typing import Iterable, Optional
 
 import geopandas as gpd
+import numpy as np
 import pandas as pd
 from shapely.geometry import Point
 
 
 gpd.options.io_engine = "pyogrio"
-
 
 @dataclass(slots=True)
 class BranchDerivationResult:
@@ -38,6 +39,7 @@ class BranchDerivationResult:
     branch_polygons: Path
     branch_list: Path
     branch_dataframe: pd.DataFrame
+    levee_levelpaths: Optional[Path] = field(default=None)
 
 
 @dataclass(slots=True)
@@ -54,6 +56,8 @@ class AreaInputPaths:
     lakes: Optional[Path]
     headwaters: Optional[Path]
     dem: Optional[Path]
+    levees: Optional[Path]
+    leveed_areas: Optional[Path]
 
 
 def discover_area_inputs(
@@ -96,6 +100,8 @@ def discover_area_inputs(
         lakes=may_find("nwm_lakes_proj_subset.gpkg"),
         headwaters=may_find("nwm_headwater_points_subset.gpkg", "nwm_headwaters.gpkg"),
         dem=may_find("dem.tif"),
+        levees=may_find("nld_subset_levees.gpkg"),
+        leveed_areas=may_find("LeveeProtectedAreas_subset.gpkg"),
     )
 
 
@@ -129,6 +135,10 @@ class BranchDerivation:
         buffered_boundary: Optional[str | Path] = None,
         buffered_stream_boundary: Optional[str | Path] = None,
         headwaters: Optional[str | Path] = None,
+        levees: Optional[str | Path] = None,
+        leveed_areas: Optional[str | Path] = None,
+        levee_id_attribute: str = "levee_id",
+        levee_buffer: float = 150.0,
     ) -> None:
         self.out_dir = Path(out_dir).expanduser().resolve()
         self.area_id = area_id
@@ -154,6 +164,10 @@ class BranchDerivation:
         self.buffered_boundary_override = buffered_boundary
         self.buffered_stream_boundary_override = buffered_stream_boundary
         self.headwaters_override = headwaters
+        self.levees_override = levees
+        self.leveed_areas_override = leveed_areas
+        self.levee_id_attribute = levee_id_attribute
+        self.levee_buffer = levee_buffer
         self.logger = self._setup_logger()
 
     @staticmethod
@@ -263,6 +277,17 @@ class BranchDerivation:
                 self.headwaters_override is not None,
                 self.headwaters_layer,
             )
+
+        levees_path: Optional[Path] = (
+            Path(self.levees_override).resolve()
+            if self.levees_override
+            else (discovered.levees if discovered is not None else None)
+        )
+        leveed_areas_path: Optional[Path] = (
+            Path(self.leveed_areas_override).resolve()
+            if self.leveed_areas_override
+            else (discovered.leveed_areas if discovered is not None else None)
+        )
 
         self.out_dir.mkdir(parents=True, exist_ok=True)
         self.logger.info("--- Required Inputs ---")
@@ -416,6 +441,33 @@ class BranchDerivation:
         self.logger.info("Branch polygons --> %s", result.branch_polygons.name)
         branch_df.to_csv(result.branch_list, sep=" ", index=False, header=False)
         self.logger.info("Branch list --> %s", result.branch_list.name)
+
+        # associate level paths with levees if levee data is present
+        if levees_path is not None and levees_path.exists():
+            if leveed_areas_path is not None and leveed_areas_path.exists():
+                self._announce("Associating level paths with levees")
+                levee_levelpaths_path = self.out_dir / "levee_levelpaths.csv"
+                written = _associate_levelpaths_with_levees(
+                    levees_path=levees_path,
+                    leveed_areas_path=leveed_areas_path,
+                    dissolved_levelpaths=dissolved_levelpaths,
+                    branch_id_attribute=self.branch_id_attribute,
+                    levee_id_attribute=self.levee_id_attribute,
+                    levee_buffer=self.levee_buffer,
+                    out_path=levee_levelpaths_path,
+                )
+                if written:
+                    result.levee_levelpaths = levee_levelpaths_path
+                    self.logger.info("Levee levelpaths --> %s", levee_levelpaths_path.name)
+                else:
+                    self.logger.info("Levee levelpaths --> no associations found, skipped")
+            else:
+                self.logger.warning(
+                    "Levees provided but leveed-areas file not found; skipping levee association"
+                )
+        else:
+            self.logger.info("Levees --> not provided; skipping levee association")
+
         self.logger.info("=== BRANCH DERIVATION COMPLETE ===")
         self._announce("Branch derivation complete")
 
@@ -476,6 +528,10 @@ def derive_area_branches(
     buffered_boundary: Optional[str | Path] = None,
     buffered_stream_boundary: Optional[str | Path] = None,
     headwaters: Optional[str | Path] = None,
+    levees: Optional[str | Path] = None,
+    leveed_areas: Optional[str | Path] = None,
+    levee_id_attribute: str = "levee_id",
+    levee_buffer: float = 150.0,
     branch_id_attribute: str = "levpa_id",
     reach_id_attribute: str = "ID",
     catchment_reach_id_attribute: str = "ID",
@@ -519,6 +575,10 @@ def derive_area_branches(
         buffered_boundary=buffered_boundary,
         buffered_stream_boundary=buffered_stream_boundary,
         headwaters=headwaters,
+        levees=levees,
+        leveed_areas=leveed_areas,
+        levee_id_attribute=levee_id_attribute,
+        levee_buffer=levee_buffer,
     ).run()
 
 
@@ -795,6 +855,154 @@ def _build_headwaters(
             }
         )
     return gpd.GeoDataFrame(headwater_points, crs=streams.crs, geometry="geometry")
+
+
+def _associate_levelpaths_with_levees(
+    levees_path: Path,
+    leveed_areas_path: Path,
+    dissolved_levelpaths: gpd.GeoDataFrame,
+    branch_id_attribute: str,
+    levee_id_attribute: str,
+    levee_buffer: float,
+    out_path: Path,
+) -> bool:
+    """
+    Port of inundation-mapping associate_levelpaths_with_levees.py.
+    Returns True if the CSV was written, False if no associations were found.
+    """
+    levees = gpd.read_file(levees_path, engine="pyogrio")
+    leveed_areas = gpd.read_file(leveed_areas_path, engine="pyogrio")
+    levelpaths = dissolved_levelpaths[[branch_id_attribute, "geometry"]].copy()
+
+    levees = _align_crs(levees, levelpaths.crs)
+    leveed_areas = _align_crs(leveed_areas, levelpaths.crs)
+
+    # buffer each side of levee line
+    levees_buffered_left = levees.copy()
+    levees_buffered_right = levees.copy()
+    levees_buffered_left.geometry = levees.buffer(levee_buffer, single_sided=True)
+    levees_buffered_right.geometry = levees.buffer(-levee_buffer, single_sided=True)
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        leveed_left = gpd.overlay(levees_buffered_left, leveed_areas, how="intersection")
+        leveed_right = gpd.overlay(levees_buffered_right, leveed_areas, how="intersection")
+
+    leveed_intersected: list = []
+
+    if not leveed_left.empty:
+        leveed_intersected.extend(leveed_left[f"{levee_id_attribute}_1"].values)
+        matches = np.where(
+            leveed_left[f"{levee_id_attribute}_1"] == leveed_left[f"{levee_id_attribute}_2"]
+        )[0]
+        leveed_left = leveed_left.loc[matches].copy()
+        leveed_left["leveed_area"] = leveed_left.area
+        leveed_left = leveed_left[[f"{levee_id_attribute}_1", "leveed_area", "geometry"]]
+
+    if not leveed_right.empty:
+        leveed_intersected.extend(leveed_right[f"{levee_id_attribute}_1"].values)
+        matches = np.where(
+            leveed_right[f"{levee_id_attribute}_1"] == leveed_right[f"{levee_id_attribute}_2"]
+        )[0]
+        leveed_right = leveed_right.loc[matches].copy()
+        leveed_right["leveed_area"] = leveed_right.area
+        leveed_right = leveed_right[[f"{levee_id_attribute}_1", "leveed_area", "geometry"]]
+
+    levees_not_found = gpd.GeoDataFrame()
+    if leveed_intersected:
+        levees_not_found = leveed_areas[
+            ~leveed_areas[levee_id_attribute].isin(leveed_intersected)
+        ].copy()
+
+    if leveed_left.empty and leveed_right.empty:
+        return False
+
+    if not leveed_left.empty and not leveed_right.empty:
+        leveed = leveed_left.merge(
+            leveed_right,
+            on=f"{levee_id_attribute}_1",
+            how="outer",
+            suffixes=["_left", "_right"],
+        )
+        leveed.loc[np.isnan(leveed["leveed_area_left"]), "leveed_area_left"] = 0.0
+        leveed.loc[np.isnan(leveed["leveed_area_right"]), "leveed_area_right"] = 0.0
+    elif leveed_left.empty:
+        leveed = leveed_right.rename(columns={"leveed_area": "leveed_area_right"})
+        leveed["leveed_area_left"] = 0.0
+    else:
+        leveed = leveed_left.rename(columns={"leveed_area": "leveed_area_left"})
+        leveed["leveed_area_right"] = 0.0
+
+    leveed["levee_side"] = np.where(
+        leveed["leveed_area_left"] < leveed["leveed_area_right"], "left", "right"
+    )
+    left_ids = leveed.loc[leveed["levee_side"] == "left", f"{levee_id_attribute}_1"]
+    right_ids = leveed.loc[leveed["levee_side"] == "right", f"{levee_id_attribute}_1"]
+
+    levee_levelpaths_left = gpd.sjoin(levees_buffered_left, levelpaths)
+    levee_levelpaths_right = gpd.sjoin(levees_buffered_right, levelpaths)
+    levee_levelpaths_left = levee_levelpaths_left[[levee_id_attribute, branch_id_attribute]]
+    levee_levelpaths_right = levee_levelpaths_right[[levee_id_attribute, branch_id_attribute]]
+    levee_levelpaths_left = levee_levelpaths_left[
+        levee_levelpaths_left[levee_id_attribute].isin(left_ids)
+    ]
+    levee_levelpaths_right = levee_levelpaths_right[
+        levee_levelpaths_right[levee_id_attribute].isin(right_ids)
+    ]
+
+    out_df = (
+        pd.concat(
+            [
+                levee_levelpaths_right[[levee_id_attribute, branch_id_attribute]],
+                levee_levelpaths_left[[levee_id_attribute, branch_id_attribute]],
+            ]
+        )
+        .drop_duplicates()
+        .reset_index(drop=True)
+    )
+
+    if not levees_not_found.empty:
+        levees_not_found = levees_not_found.copy()
+        levees_not_found.geometry = levees_not_found.buffer(2 * levee_buffer)
+        levees_not_found = gpd.sjoin(levees_not_found, levelpaths)
+        out_df = (
+            pd.concat(
+                [
+                    out_df[[levee_id_attribute, branch_id_attribute]],
+                    levees_not_found[[levee_id_attribute, branch_id_attribute]],
+                ]
+            )
+            .drop_duplicates()
+            .reset_index(drop=True)
+        )
+
+    # remove levelpaths that cross a levee exactly once (they aren't truly blocked)
+    drop_indices = []
+    for j, row in out_df.iterrows():
+        levee_geom = levees[levees[levee_id_attribute] == row[levee_id_attribute]]
+        lp_geom = levelpaths[levelpaths[branch_id_attribute] == row[branch_id_attribute]]
+        intersections = gpd.overlay(
+            levee_geom, lp_geom, how="intersection", keep_geom_type=False
+        ).explode(index_parts=True)
+        intersections = intersections[intersections.geom_type == "Point"]
+        if len(intersections) == 1:
+            drop_indices.append(j)
+        elif intersections.empty:
+            leveed_area_check = gpd.overlay(
+                lp_geom,
+                leveed_areas[leveed_areas[levee_id_attribute] == row[levee_id_attribute]],
+                how="intersection",
+                keep_geom_type=False,
+            )
+            if not leveed_area_check.empty:
+                drop_indices.append(j)
+
+    out_df = out_df.drop(index=drop_indices)
+    if out_df.empty:
+        return False
+
+    out_df.to_csv(out_path, columns=[levee_id_attribute, branch_id_attribute], index=False)
+    return True
 
 
 def _build_branch_polygons(
