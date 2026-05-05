@@ -230,7 +230,7 @@ class BranchZero:
 
         # fill depressions
         dem_filled = branch_dir / f"dem_burned_filled_{bid}.tif"
-        _fill_depressions(dem_burned, dem_filled)
+        _fill_depressions(dem_burned, dem_filled, wbt_path=self.wbt_path)
         log.info("Pit-filled DEM → %s", dem_filled.name)
 
         # D8 flow directions
@@ -343,12 +343,58 @@ def _rasterio_clip_reproject(
 
 
 
-# fill depressions in the burned DEM
-def _fill_depressions(dem: Path, out: Path) -> None:
-    import richdem as rd
+def _fill_depressions(dem: Path, out: Path, wbt_path: Optional[str] = None) -> None:
+    """Fill depressions and remove flat areas using WhiteboxTools.
 
-    rda = rd.LoadGDAL(str(dem))
-    rd.FillDepressions(rda, epsilon=True, in_place=True)
-    rd.SaveGDAL(str(out), rda)
+    AGREE burns all stream cells by a constant 1000 m, creating a flat channel
+    bed at ~-1010 m depth.  WBT fix_flats adds tiny per-cell gradients to resolve
+    those flats, but the increments (~1/N_cells ≈ 1e-8 m) are far below float32
+    precision at that depth (~1.2e-4 m ULP).  Converting to float64 before WBT
+    processes the DEM preserves the gradients so d8_pointer assigns valid D8 codes
+    to every stream cell.
+    """
+    import whitebox
+    import os
+    import shutil
+    import rasterio
+    import numpy as np
+
+    wbt = whitebox.WhiteboxTools()
+    wbt.set_verbose_mode(False)
+    wbt_dir = wbt_path or os.environ.get("WBT_PATH")
+    if wbt_dir:
+        wbt.set_whitebox_dir(wbt_dir)
+
+    # Write a float64 copy so WBT's flat-routing increments are representable
+    dem_f64 = dem.with_suffix(".f64_tmp.tif")
+    try:
+        with rasterio.open(str(dem)) as src:
+            prof64 = src.profile.copy()
+            data = src.read(1)
+        prof64.update(dtype="float64")
+        with rasterio.open(str(dem_f64), "w", **prof64) as dst:
+            dst.write(data.astype(np.float64), 1)
+
+        wbt.fill_depressions(str(dem_f64), str(out), fix_flats=True)
+    finally:
+        if dem_f64.exists():
+            dem_f64.unlink()
+
+    # Recompress output with LZW; keep float64 so D8 sees the gradients
+    tmp = out.with_suffix(".tmp.tif")
+    try:
+        with rasterio.open(str(out)) as src:
+            profile = src.profile.copy()
+            data = src.read(1)
+        profile.update(
+            compress="lzw",
+            tiled=True, blockxsize=512, blockysize=512, BIGTIFF="YES",
+        )
+        with rasterio.open(str(tmp), "w", **profile) as dst:
+            dst.write(data, 1)
+        shutil.move(str(tmp), str(out))
+    except Exception:
+        if tmp.exists():
+            tmp.unlink()
 
 

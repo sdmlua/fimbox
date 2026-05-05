@@ -20,7 +20,13 @@ from .preprocessing import (
     LevelPathBooleanRasterizer,
     HeadwaterRasterizer,
 )
-from .preprocessing import burn_levee_elevations, rasterize_3d_levee_lines
+from .preprocessing import burn_levee_elevations, mask_levee_dem, rasterize_3d_levee_lines
+from .preprocessing import D8SlopeDEM
+from .preprocessing import FlowAccDEM
+from .preprocessing import ThalwegAdjustment
+from .preprocessing import StreamNetReaches
+from .preprocessing import split_derived_reaches
+from .preprocessing import CreateHAND
 
 __all__ = [
     "BranchDerivation",
@@ -30,11 +36,18 @@ __all__ = [
     "BranchZero",
     "HydroenforceDEM",
     "FlowdirDEM",
+    "D8SlopeDEM",
     "StreamBooleanRasterizer",
     "LevelPathBooleanRasterizer",
     "HeadwaterRasterizer",
     "rasterize_3d_levee_lines",
     "burn_levee_elevations",
+    "mask_levee_dem",
+    "FlowAccDEM",
+    "ThalwegAdjustment",
+    "StreamNetReaches",
+    "split_derived_reaches",
+    "CreateHAND",
 ]
 
 try:

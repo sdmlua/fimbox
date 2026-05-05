@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
+from typing import Optional
 
 import geopandas as gpd
 import numpy as np
@@ -105,3 +106,122 @@ def burn_levee_elevations(
     with rasterio.open(str(out_path), "w", **profile) as dst:
         dst.write(burned, 1)
     log.info("  DEM burned → %s  (%d cells raised)", Path(out_path).name, changed)
+
+
+def mask_levee_dem(
+    dem_path: Path,
+    nld_path: Path,
+    catchments_path: Path,
+    out_path: Path,
+    branch_id: int = 0,
+    branch_zero_id: int = 0,
+    levee_levelpaths_csv: "Optional[Path]" = None,
+    levee_id_attribute: str = "levpa_id",
+    branch_id_attribute: str = "levpa_id",
+) -> None:
+    """
+    Port of inundation-mapping/src/mask_dem.py.
+
+    Masks levee-protected areas from the DEM.  For branch-zero, masks all
+    levee polygons.  For other branches, only masks areas associated with the
+    level path (requires levee_levelpaths.csv) and areas from levee polygons
+    whose catchments do not belong to the branch.
+
+    Overwrites out_path in-place (caller should set out_path == dem_path to
+    replicate the reference behaviour).
+    """
+    import pandas as pd
+    from rasterio.mask import mask as rio_mask
+    from shapely.geometry import box
+
+    dem_path = Path(dem_path)
+    nld_path = Path(nld_path)
+    out_path = Path(out_path)
+
+    if not dem_path.exists():
+        log.warning("mask_levee_dem: DEM not found %s — skipping", dem_path)
+        return
+    if not nld_path.exists():
+        log.warning("mask_levee_dem: NLD not found %s — skipping", nld_path)
+        return
+
+    log.info("Masking levee-protected areas: branch=%s", branch_id)
+
+    with rasterio.open(str(dem_path)) as dem:
+        dem_profile = dem.profile.copy()
+        nodata = dem.nodata
+        dem_crs = dem.crs
+        dem_bounds = dem.bounds
+
+    raster_box = box(dem_bounds.left, dem_bounds.bottom, dem_bounds.right, dem_bounds.top)
+
+    def _clip_geoms(geoms):
+        clipped = []
+        for g in geoms:
+            if g and g.is_valid and g.intersects(raster_box):
+                c = g.intersection(raster_box)
+                if not c.is_empty:
+                    clipped.append(c)
+        return clipped
+
+    dem_masked = None
+    levee_catchments_masked = None
+
+    leveed = gpd.read_file(str(nld_path), engine="fiona")
+    if leveed.crs != dem_crs:
+        leveed = leveed.to_crs(dem_crs)
+
+    with rasterio.open(str(dem_path)) as dem:
+        if branch_id == branch_zero_id:
+            geoms = _clip_geoms(list(leveed.geometry))
+            if geoms:
+                dem_masked, _ = rio_mask(dem, geoms, invert=True)
+
+        elif levee_levelpaths_csv and Path(levee_levelpaths_csv).exists():
+            catchments_path = Path(catchments_path)
+            if catchments_path.exists():
+                catchments = gpd.read_file(str(catchments_path), engine="fiona")
+                if catchments.crs != dem_crs:
+                    catchments = catchments.to_crs(dem_crs)
+            else:
+                catchments = gpd.GeoDataFrame()
+
+            lp_df = pd.read_csv(str(levee_levelpaths_csv))
+            lp_df = lp_df[lp_df[branch_id_attribute] == branch_id]
+            levelpath_levees = list(lp_df[levee_id_attribute])
+
+            if levelpath_levees:
+                sel = leveed[leveed[levee_id_attribute].isin(levelpath_levees)]
+                geoms = _clip_geoms(list(sel.geometry))
+                if geoms:
+                    dem_masked, _ = rio_mask(dem, geoms, invert=True)
+
+            if not catchments.empty:
+                leveed_area = gpd.overlay(catchments, leveed, how="union")
+                to_mask = leveed_area.loc[
+                    ~leveed_area[levee_id_attribute].isna()
+                    & leveed_area.get("ID", pd.Series(dtype=object)).isna()
+                ]
+                geoms = _clip_geoms(list(to_mask.geometry))
+                if geoms:
+                    levee_catchments_masked, _ = rio_mask(dem, geoms, invert=True)
+
+    out_masked = None
+    if dem_masked is None:
+        if levee_catchments_masked is not None:
+            out_masked = levee_catchments_masked
+    else:
+        if levee_catchments_masked is None:
+            out_masked = dem_masked
+        else:
+            out_masked = np.where(levee_catchments_masked == nodata, nodata, dem_masked)
+
+    if out_masked is not None:
+        dem_profile.update(BIGTIFF="YES", compress="lzw", tiled=True,
+                           blockxsize=512, blockysize=512)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        with rasterio.open(str(out_path), "w", **dem_profile) as dst:
+            dst.write(out_masked[0, :, :], indexes=1)
+        log.info("  levee mask written → %s", out_path.name)
+    else:
+        log.info("  no levee masking applied for branch %s", branch_id)

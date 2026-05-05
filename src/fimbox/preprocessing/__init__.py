@@ -27,8 +27,16 @@ from .calculate_branch import (
     StreamBooleanRasterizer,
 )
 
-# 3D NLD levee rasterization and DEM burning
-from .calculate_branch import burn_levee_elevations, rasterize_3d_levee_lines
+# 3D NLD levee rasterization, DEM burning, and levee-area masking
+from .calculate_branch import burn_levee_elevations, mask_levee_dem, rasterize_3d_levee_lines
+
+# HAND Phase-3 components
+from .calculate_branch import CreateHAND
+from .calculate_branch import D8SlopeDEM
+from .calculate_branch import FlowAccDEM
+from .calculate_branch import StreamNetReaches
+from .calculate_branch import ThalwegAdjustment
+from .calculate_branch import split_derived_reaches
 
 __all__ = [
     "BranchDerivation",
@@ -37,12 +45,19 @@ __all__ = [
     "discover_area_inputs",
     "BranchZero",
     "FlowdirDEM",
+    "D8SlopeDEM",
     "HydroenforceDEM",
     "StreamBooleanRasterizer",
     "LevelPathBooleanRasterizer",
     "HeadwaterRasterizer",
     "rasterize_3d_levee_lines",
     "burn_levee_elevations",
+    "mask_levee_dem",
+    "FlowAccDEM",
+    "ThalwegAdjustment",
+    "StreamNetReaches",
+    "split_derived_reaches",
+    "CreateHAND",
 ]
 
 # preprocess_area

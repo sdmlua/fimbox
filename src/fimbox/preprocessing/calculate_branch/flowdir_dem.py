@@ -6,7 +6,22 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
+import numpy as np
+
 log = logging.getLogger(__name__)
+
+# WBT d8_pointer direction → (row_offset, col_offset)
+# Diagonal directions have distance factor sqrt(2); cardinal = 1.
+_D8_OFFSETS = {
+    1:   (0,  1,  1.0),    # E
+    2:   (1,  1,  1.41421356),  # SE
+    4:   (1,  0,  1.0),    # S
+    8:   (1, -1,  1.41421356),  # SW
+    16:  (0, -1,  1.0),    # W
+    32:  (-1, -1, 1.41421356),  # NW
+    64:  (-1,  0,  1.0),   # N
+    128: (-1,  1,  1.41421356),  # NE
+}
 
 
 @dataclass
@@ -45,3 +60,112 @@ class FlowdirDEM:
         except Exception:
             log.exception("D8 flow direction FAILED: dem=%s", self.dem)
             raise
+
+
+@dataclass
+class D8SlopeDEM:
+    """
+    Compute D8 slope raster from a DEM and its D8 flow direction pointer.
+
+    For each cell, slope = (z_current − z_downstream) / distance_to_downstream,
+    clamped to [slope_min, ∞).  Diagonal directions use distance = res × √2.
+
+    Reference: TauDEM d8flowdir −sd8 flag (used on dem_lateral_thalweg_adj).
+
+    Parameters
+    ----------
+    dem       : dem_lateral_thalweg_adj_{id}.tif
+    flowdir   : flowdir_d8_burned_filled_{id}.tif  (WBT d8_pointer)
+    out_path  : slopes_d8_dem_meters_{id}.tif
+    slope_min : minimum slope floor (default 0.0001)
+    """
+
+    dem: Path
+    flowdir: Path
+    out_path: Path
+    slope_min: float = 0.0001
+
+    def __post_init__(self):
+        self.dem = Path(self.dem)
+        self.flowdir = Path(self.flowdir)
+        self.out_path = Path(self.out_path)
+
+    def run(self) -> Path:
+        import rasterio
+
+        log.info("D8 slopes start: %s", self.dem.name)
+
+        with rasterio.open(str(self.dem)) as dem_ds:
+            elev = dem_ds.read(1).astype(np.float64)
+            nodata = dem_ds.nodata
+            res = dem_ds.res[0]
+            profile = dem_ds.profile.copy()
+
+        with rasterio.open(str(self.flowdir)) as fd_ds:
+            d8 = fd_ds.read(1)
+
+        slope = _compute_d8_slope(elev, d8, res, nodata, self.slope_min)
+
+        profile.update(
+            dtype="float32", nodata=nodata,
+            compress="lzw", tiled=True, blockxsize=512, blockysize=512, BIGTIFF="YES",
+        )
+        self.out_path.parent.mkdir(parents=True, exist_ok=True)
+        with rasterio.open(str(self.out_path), "w", **profile) as dst:
+            dst.write(slope.astype(np.float32), 1)
+
+        log.info("D8 slopes written → %s", self.out_path.name)
+        return self.out_path
+
+
+def _compute_d8_slope(
+    elev: np.ndarray,
+    d8: np.ndarray,
+    res: float,
+    nodata: Optional[float],
+    slope_min: float,
+) -> np.ndarray:
+    """Vectorised D8 slope computation (one pass per direction)."""
+    rows, cols = elev.shape
+    n = rows * cols
+    slope = np.full(n, slope_min, dtype=np.float64)
+
+    flat_elev = elev.ravel()
+    flat_d8 = d8.ravel()
+    r_all = np.arange(n) // cols
+    c_all = np.arange(n) % cols
+
+    nodata_mask = (
+        flat_elev == nodata if nodata is not None else np.zeros(n, dtype=bool)
+    )
+
+    for d8_val, (dr, dc, dist_factor) in _D8_OFFSETS.items():
+        sel = flat_d8 == d8_val
+        if not sel.any():
+            continue
+
+        r_ds = r_all + dr
+        c_ds = c_all + dc
+        in_bounds = sel & (r_ds >= 0) & (r_ds < rows) & (c_ds >= 0) & (c_ds < cols)
+        valid = in_bounds & ~nodata_mask
+
+        z_cur = flat_elev[valid]
+        ds_idx = r_ds[valid] * cols + c_ds[valid]
+        z_ds = flat_elev[ds_idx]
+
+        # exclude cells whose downstream neighbour is nodata
+        if nodata is not None:
+            valid_ds = z_ds != nodata
+            z_cur = z_cur[valid_ds]
+            z_ds = z_ds[valid_ds]
+            valid_idxs = np.where(valid)[0][valid_ds]
+        else:
+            valid_idxs = np.where(valid)[0]
+
+        s = (z_cur - z_ds) / (dist_factor * res)
+        slope[valid_idxs] = np.maximum(s, slope_min)
+
+    if nodata is not None:
+        slope[nodata_mask] = nodata
+
+    return slope.reshape(rows, cols)
