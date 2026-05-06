@@ -163,8 +163,9 @@ class ThalwegAdjustment:
 
         # WBT euclidean_distance on stream_pixels
         wbt.euclidean_distance(str(self.stream_pixels), str(dist_grid))
+        _recompress_lzw(dist_grid)
 
-        # WBT euclidean_allocation on unique values 
+        # WBT euclidean_allocation on unique values
         wbt.euclidean_allocation(str(pixel_ids), str(allo_grid))
 
         # Post-process allocation: fill stream cells with their own ID
@@ -173,6 +174,9 @@ class ThalwegAdjustment:
             allo_profile = src.profile.copy()
 
         allo = np.where(allo > 0, allo, pixel_values)
+        allo_profile.update(
+            compress="lzw", tiled=True, blockxsize=512, blockysize=512, BIGTIFF="YES"
+        )
         with rasterio.open(str(allo_grid), "w", **allo_profile) as dst:
             dst.write(allo, 1)
 
@@ -202,7 +206,7 @@ class ThalwegAdjustment:
                 allo_w = allo_ds.read(1, window=window).ravel()
                 dist_w = dist_ds.read(1, window=window).ravel()
 
-                valid = (dist_w <= tol) & (elev_w > 0)
+                valid = (dist_w <= tol) & (elev_w > 0) & np.isfinite(allo_w)
                 if nodata is not None:
                     valid &= elev_w != nodata
 
@@ -287,6 +291,29 @@ class ThalwegAdjustment:
         )
         with rasterio.open(str(self.out_thalweg_cond), "w", **profile) as dst:
             dst.write(elev_cond.astype(np.float32), 1)
+
+
+def _recompress_lzw(path: Path) -> None:
+    """Rewrite a raster in-place with LZW compression."""
+    import shutil
+
+    if not path.exists():
+        return
+    tmp = path.with_suffix(".tmp.tif")
+    try:
+        with rasterio.open(str(path)) as src:
+            profile = src.profile.copy()
+            profile.update(
+                compress="lzw", tiled=True,
+                blockxsize=512, blockysize=512, BIGTIFF="YES",
+            )
+            data = src.read(1)
+        with rasterio.open(str(tmp), "w", **profile) as dst:
+            dst.write(data, 1)
+        shutil.move(str(tmp), str(path))
+    except Exception:
+        if tmp.exists():
+            tmp.unlink()
 
 
 def _flow_condition(

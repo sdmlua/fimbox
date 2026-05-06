@@ -57,12 +57,15 @@ STREAM_PIX    = BRANCH_DIR / f"demDerived_streamPixels_{BRANCH_ID}.tif"
 THALWEG_ADJ   = BRANCH_DIR / f"dem_lateral_thalweg_adj_{BRANCH_ID}.tif"
 FLOWDIR_STR   = BRANCH_DIR / f"flowdir_d8_burned_filled_flows_{BRANCH_ID}.tif"
 THALWEG_COND  = BRANCH_DIR / f"dem_thalwegCond_{BRANCH_ID}.tif"
-SLOPES_D8     = BRANCH_DIR / f"slopes_d8_dem_meters_{BRANCH_ID}.tif"
+SLOPES_D8     = BRANCH_DIR / f"slopes_d8_dem_{BRANCH_ID}.tif"
 STREAM_ORDER  = BRANCH_DIR / f"streamOrder_{BRANCH_ID}.tif"
 SN_CATCH      = BRANCH_DIR / f"sn_catchments_reaches_{BRANCH_ID}.tif"
 DEM_REACHES   = BRANCH_DIR / f"demDerived_reaches_{BRANCH_ID}.gpkg"
 SPLIT_REACHES = BRANCH_DIR / f"demDerived_reaches_split_{BRANCH_ID}.gpkg"
 SPLIT_PTS     = BRANCH_DIR / f"demDerived_reaches_split_points_{BRANCH_ID}.gpkg"
+GW_REACHES    = BRANCH_DIR / f"gw_catchments_reaches_{BRANCH_ID}.tif"
+PIXEL_PTS     = BRANCH_DIR / f"flows_points_pixels_{BRANCH_ID}.gpkg"
+GW_PIXELS     = BRANCH_DIR / f"gw_catchments_pixels_{BRANCH_ID}.tif"
 
 
 def test_branch_derivation():
@@ -141,6 +144,9 @@ def test_create_hand():
     assert DEM_REACHES.exists(),   "demDerived_reaches not produced"
     assert SPLIT_REACHES.exists(), "demDerived_reaches_split not produced"
     assert SPLIT_PTS.exists(),     "demDerived_reaches_split_points not produced"
+    assert GW_REACHES.exists(),    "gw_catchments_reaches not produced"
+    assert PIXEL_PTS.exists(),     "flows_points_pixels not produced"
+    assert GW_PIXELS.exists(),     "gw_catchments_pixels not produced"
 
 
 # individual component tests — uncomment to run a single step in isolation

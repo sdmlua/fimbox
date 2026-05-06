@@ -151,6 +151,7 @@ class CreateHAND:
     def _run(self) -> dict[str, Path]:
         from .flowacc_dem import FlowAccDEM
         from .flowdir_dem import D8SlopeDEM
+        from .gage_catchments import GageCatchments, OutletBackpoolMitigate, stream_pixel_points
         from .levee_rasterize import mask_levee_dem
         from .split_reaches import split_derived_reaches
         from .streamnet_reaches import StreamNetReaches
@@ -159,7 +160,7 @@ class CreateHAND:
         bid = self.branch_id
         bd  = self.branch_dir
         outputs: dict[str, Path] = {}
-        _TOTAL = 6
+        _TOTAL = 10
 
         def _progress(n: int, label: str, skipped: bool = False) -> None:
             tag = "skip" if skipped else "run "
@@ -315,6 +316,74 @@ class CreateHAND:
             outputs["split_points"]  = out_pts
         else:
             log.warning("Skipping split_reaches -- missing demDerived_reaches or thalweg_cond")
+
+        # 7. Gage watershed for reaches
+        gw_reaches = bd / f"gw_catchments_reaches_{bid}.tif"
+        split_pts_gpkg = bd / f"demDerived_reaches_split_points_{bid}.gpkg"
+        if gw_reaches.exists():
+            _progress(7, "gage watershed (reaches)", skipped=True)
+            log.info("Gage watershed reaches: output exists, skipping")
+            outputs["gw_catchments_reaches"] = gw_reaches
+        elif split_pts_gpkg.exists():
+            _progress(7, "gage watershed (reaches)")
+            log.info("Gage watershed for reaches")
+            GageCatchments(
+                flowdir=self.flowdir_path,
+                outlet_points=split_pts_gpkg,
+                out_path=gw_reaches,
+            ).run()
+            outputs["gw_catchments_reaches"] = gw_reaches
+        else:
+            log.warning("Skipping gage watershed reaches -- missing split points")
+
+        # 8. Vectorize stream pixel centroids
+        pixel_pts_gpkg = bd / f"flows_points_pixels_{bid}.gpkg"
+        if pixel_pts_gpkg.exists():
+            _progress(8, "stream pixel points", skipped=True)
+            log.info("Stream pixel points: output exists, skipping")
+            outputs["flows_points_pixels"] = pixel_pts_gpkg
+        elif stream_pixels.exists():
+            _progress(8, "stream pixel points")
+            log.info("Vectorize stream pixel centroids")
+            stream_pixel_points(stream_pixels=stream_pixels, out_gpkg=pixel_pts_gpkg)
+            outputs["flows_points_pixels"] = pixel_pts_gpkg
+        else:
+            log.warning("Skipping stream pixel points -- missing stream_pixels")
+
+        # 9. Gage watershed for pixels
+        gw_pixels = bd / f"gw_catchments_pixels_{bid}.tif"
+        if gw_pixels.exists():
+            _progress(9, "gage watershed (pixels)", skipped=True)
+            log.info("Gage watershed pixels: output exists, skipping")
+            outputs["gw_catchments_pixels"] = gw_pixels
+        elif pixel_pts_gpkg.exists():
+            _progress(9, "gage watershed (pixels)")
+            log.info("Gage watershed for pixels")
+            GageCatchments(
+                flowdir=self.flowdir_path,
+                outlet_points=pixel_pts_gpkg,
+                out_path=gw_pixels,
+            ).run()
+            outputs["gw_catchments_pixels"] = gw_pixels
+        else:
+            log.warning("Skipping gage watershed pixels -- missing pixel points")
+
+        # 10. Outlet backpool mitigation
+        _progress(10, "outlet backpool mitigation")
+        if out_split.exists() and gw_pixels.exists() and gw_reaches.exists():
+            log.info("Outlet backpool mitigation")
+            OutletBackpoolMitigate(
+                branch_dir=bd,
+                catchment_pixels_path=gw_pixels,
+                catchment_reaches_path=gw_reaches,
+                split_flows_gpkg=out_split,
+                split_points_gpkg=split_pts_gpkg,
+                nwm_streams_gpkg=self.streams_gpkg,
+                dem_path=thalweg_cond,
+                slope_min=self.slope_min,
+            ).run()
+        else:
+            log.warning("Skipping backpool mitigation -- missing required inputs")
 
         log.info("CreateHAND outputs: %s", list(outputs.keys()))
         return outputs

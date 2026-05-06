@@ -214,9 +214,10 @@ def _split_one_line(
 
     for pt in zip(*line.coords.xy):
         cumulative.append(pt)
-        if last_point:
+        if last_point and len(cumulative) == 1:
+            # prepend connection point once at the start of each new segment
             cumulative = [last_point] + cumulative
-        elif len(cumulative) == 1:
+        elif not last_point and len(cumulative) == 1:
             continue
 
         seg_line = LineString(cumulative)
@@ -252,6 +253,9 @@ def _snap_and_trim(flows: gpd.GeoDataFrame, nwm_streams_gpkg: Path) -> gpd.GeoDa
     """Trim DEM-derived flows to NWM branch terminus (matching split_flows.py logic)."""
     try:
         nwm = gpd.read_file(str(nwm_streams_gpkg), engine="fiona").explode(index_parts=True)
+        if flows.crs is None:
+            log.warning("snap-and-trim skipped: reaches have no CRS")
+            return flows
         nwm = nwm.to_crs(flows.crs)
 
         if "levpa_id" in nwm.columns:

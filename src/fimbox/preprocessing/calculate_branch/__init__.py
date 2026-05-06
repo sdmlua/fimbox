@@ -31,6 +31,9 @@ from .reach_rasterize import (
     StreamBooleanRasterizer,
 )
 
+# gage watershed delineation and outlet backpool mitigation
+from .gage_catchments import GageCatchments, OutletBackpoolMitigate, stream_pixel_points
+
 # split DEM-derived reaches and build network topology
 from .split_reaches import split_derived_reaches
 
@@ -69,4 +72,8 @@ __all__ = [
     "ThalwegAdjustment",
     "StreamNetReaches",
     "split_derived_reaches",
+    # gage watershed + backpool
+    "GageCatchments",
+    "OutletBackpoolMitigate",
+    "stream_pixel_points",
 ]

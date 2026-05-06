@@ -34,6 +34,7 @@ from .calculate_branch import burn_levee_elevations, mask_levee_dem, rasterize_3
 from .calculate_branch import CreateHAND
 from .calculate_branch import D8SlopeDEM
 from .calculate_branch import FlowAccDEM
+from .calculate_branch import GageCatchments, OutletBackpoolMitigate, stream_pixel_points
 from .calculate_branch import StreamNetReaches
 from .calculate_branch import ThalwegAdjustment
 from .calculate_branch import split_derived_reaches
@@ -57,6 +58,9 @@ __all__ = [
     "ThalwegAdjustment",
     "StreamNetReaches",
     "split_derived_reaches",
+    "GageCatchments",
+    "OutletBackpoolMitigate",
+    "stream_pixel_points",
     "CreateHAND",
 ]
 

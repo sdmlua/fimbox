@@ -95,15 +95,19 @@ class StreamNetReaches:
         reaches_shp = self.out_dir / f"demDerived_reaches_{bid}.shp"
         log.info("StreamNet: vectorise streams --> %s (via shp)", reaches_gpkg.name)
         wbt.raster_streams_to_vector(
-            str(self.stream_pixels),
+            str(sn_catchments),   # unique reach IDs → one polyline per reach
             str(self.flowdir),
             str(reaches_shp),
         )
 
-        # convert shapefile → GeoPackage
+        # convert shapefile → GeoPackage (set CRS from flowdir if WBT omitted .prj)
         import geopandas as gpd
+        import rasterio as _rio
         if reaches_shp.exists():
             gdf = gpd.read_file(str(reaches_shp))
+            if gdf.crs is None:
+                with _rio.open(str(self.flowdir)) as _src:
+                    gdf = gdf.set_crs(_src.crs)
             gdf.to_file(str(reaches_gpkg), driver="GPKG", engine="fiona")
             for ext in (".shp", ".shx", ".dbf", ".prj", ".cpg", ".sbn", ".sbx"):
                 p = reaches_shp.with_suffix(ext)
