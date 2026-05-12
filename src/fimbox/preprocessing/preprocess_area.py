@@ -418,6 +418,11 @@ class getAllInputData:
         self.boundary_gdf.to_file(self._out("wbd"), driver="GPKG", index=False)
         self.logger.info(f"Study boundary --> {_FILENAMES['wbd']}")
 
+        # wbd8_clp.gpkg is the canonical name expected by split_reaches and filter_catchments
+        wbd8_clp_path = self.out_dir / "wbd8_clp.gpkg"
+        self.boundary_gdf.to_file(str(wbd8_clp_path), driver="GPKG", index=False)
+        self.logger.info(f"Study boundary (clipped) --> wbd8_clp.gpkg")
+
         self.buffer_gdf.to_file(self._out("wbd_buffer"), driver="GPKG", index=False)
         self.logger.info(
             f"Buffered boundary ({self.buffer_m} m) --> {_FILENAMES['wbd_buffer']}"

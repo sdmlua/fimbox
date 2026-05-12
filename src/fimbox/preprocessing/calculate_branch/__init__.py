@@ -31,6 +31,12 @@ from .reach_rasterize import (
     StreamBooleanRasterizer,
 )
 
+# REM / HAND computation
+from .make_rem import MakeREM
+
+# catchment filtering + flow attribute join
+from .filter_catchments import FilterCatchments, NoFlowlinesError
+
 # gage watershed delineation and outlet backpool mitigation
 from .gage_catchments import GageCatchments, OutletBackpoolMitigate, stream_pixel_points
 
@@ -76,4 +82,9 @@ __all__ = [
     "GageCatchments",
     "OutletBackpoolMitigate",
     "stream_pixel_points",
+    # REM / HAND
+    "MakeREM",
+    # catchment filtering
+    "FilterCatchments",
+    "NoFlowlinesError",
 ]

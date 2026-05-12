@@ -18,7 +18,7 @@ Inputs / outputs follow the inundation-mapping convention:
 from __future__ import annotations
 
 import logging
-from collections import Counter
+from collections import defaultdict, deque
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
@@ -70,7 +70,7 @@ def stream_pixel_points(
     xs = transform[2] + (col_idxs + 0.5) * transform[0]
     ys = transform[5] + (row_idxs + 0.5) * transform[4]
 
-    ids = np.arange(1, len(row_idxs) + 1, dtype=np.int64)
+    ids = np.arange(1, len(row_idxs) + 1, dtype=np.int32)
     points = [Point(x, y) for x, y in zip(xs, ys)]
 
     gdf = gpd.GeoDataFrame({"id": ids, "geometry": points}, crs=crs)
@@ -134,13 +134,15 @@ class GageCatchments:
 
         result = _gage_watershed(d8, outlet_rc_ids, nodata_d8=nodata_d8, max_iter=self.max_iter)
 
+        # int32 matches FIM output and is supported by all GIS tools.
+        # HydroIDs using fimid prefix (4 digits + 4 seq = 8 digits) fit in int32.
         profile.update(
-            dtype="int64", nodata=0,
+            dtype="int32", nodata=0,
             compress="lzw", tiled=True, blockxsize=512, blockysize=512, BIGTIFF="YES",
         )
         self.out_path.parent.mkdir(parents=True, exist_ok=True)
         with rasterio.open(str(self.out_path), "w", **profile) as dst:
-            dst.write(result.astype(np.int64), 1)
+            dst.write(result.astype(np.int32), 1)
 
         log.info("GageCatchments: written → %s", self.out_path.name)
         return self.out_path
@@ -150,14 +152,19 @@ def _gage_watershed(
     d8: np.ndarray,
     outlet_rc_ids: list[tuple[int, int, int]],
     nodata_d8: Optional[float] = None,
-    max_iter: int = 5000,
+    max_iter: int = 5000,  # kept for API compatibility, unused
 ) -> np.ndarray:
     """
-    Assign each cell to its nearest downstream outlet using iterative
-    vectorised propagation along WBT D8 flow directions.
+    Assign each cell to its nearest downstream outlet — equivalent to
+    TauDEM gagewatershed.
 
-    Each iteration: result[i] ← result[downstream(i)] when result[i] == 0.
-    Converges in at most (longest flow path) iterations.
+    Algorithm: label propagation in topological downstream→upstream order.
+    Each cell inherits the label of its downstream neighbor.  We process
+    cells in the order they are visited during a BFS seeded from the outlet
+    points — a cell is only enqueued once its downstream neighbor is already
+    labeled, guaranteeing the label is ready when we process it.
+
+    Runtime O(n): every cell is visited exactly once.
     """
     rows, cols = d8.shape
     n = rows * cols
@@ -166,7 +173,7 @@ def _gage_watershed(
     if nodata_d8 is not None:
         flat_d8[flat_d8 == int(nodata_d8)] = 0
 
-    # Build downstream flat-index lookup (self = outlet / no-flow)
+    # Build downstream flat-index (self-loop = no valid downstream)
     ds = np.arange(n, dtype=np.int64)
     r_all = np.arange(n, dtype=np.int64) // cols
     c_all = np.arange(n, dtype=np.int64) % cols
@@ -180,28 +187,59 @@ def _gage_watershed(
         in_bounds = sel & (r_ds >= 0) & (r_ds < rows) & (c_ds >= 0) & (c_ds < cols)
         ds[in_bounds] = (r_ds * cols + c_ds)[in_bounds]
 
-    # Seed outlet IDs
-    result = np.zeros(n, dtype=np.int64)
+    # Build upstream adjacency: us[j] = list of cells that drain into j
+    idx_all = np.arange(n, dtype=np.int64)
+    non_self = ds != idx_all
+    src_cells = idx_all[non_self]
+    dst_cells  = ds[non_self]
+    sort_order  = np.argsort(dst_cells, kind="stable")
+    dst_sorted  = dst_cells[sort_order]
+    src_sorted  = src_cells[sort_order]
+    split_pts   = np.flatnonzero(np.diff(dst_sorted)) + 1
+    boundaries  = np.concatenate([[0], split_pts, [len(dst_sorted)]])
+    groups      = np.split(src_sorted, split_pts)
+    us: dict[int, np.ndarray] = {
+        int(dst_sorted[boundaries[k]]): groups[k]
+        for k in range(len(groups))
+    }
+
+    result  = np.zeros(n, dtype=np.int32)
+    visited = np.zeros(n, dtype=bool)
+
+    # Seed: label each outlet cell and enqueue its upstream neighbors
+    queue: deque[int] = deque()
     for r, c, hid in outlet_rc_ids:
-        result[r * cols + c] = hid
+        idx = int(r) * cols + int(c)
+        result[idx]  = hid
+        visited[idx] = True
+        for upstream_cell in us.get(idx, []):
+            if not visited[int(upstream_cell)]:
+                queue.append(int(upstream_cell))
 
-    # Iterative propagation: each step spreads labels one hop upstream
-    prev_assigned = (result > 0).sum()
-    for iteration in range(max_iter):
-        ds_result = result[ds]
-        new_mask = (result == 0) & (ds_result > 0)
-        if not new_mask.any():
-            break
-        result[new_mask] = ds_result[new_mask]
-        curr_assigned = (result > 0).sum()
-        if curr_assigned == prev_assigned:
-            break
-        prev_assigned = curr_assigned
-        if (iteration + 1) % 100 == 0:
-            log.debug("  gage_watershed iter %d: %d cells assigned", iteration + 1, curr_assigned)
+    # Process upstream: cell i inherits label from its downstream neighbor ds[i],
+    # which is already labeled because it was processed before i was enqueued.
+    while queue:
+        i = int(queue.popleft())
+        if visited[i]:
+            continue
+        visited[i] = True
+        j = int(ds[i])
+        lbl = result[j]
+        if lbl == 0:
+            # downstream not labeled yet — re-enqueue at the back and retry later
+            # (can happen at confluences where two branches meet)
+            queue.append(i)
+            visited[i] = False
+            continue
+        result[i] = lbl
+        for upstream_cell in us.get(i, []):
+            if not visited[int(upstream_cell)]:
+                queue.append(int(upstream_cell))
 
-    log.debug("gage_watershed converged in %d iterations, %d/%d cells labeled",
-              iteration + 1, (result > 0).sum(), n)
+    log.debug(
+        "gage_watershed: %d/%d cells labeled",
+        int((result > 0).sum()), n,
+    )
     return result.reshape(rows, cols)
 
 # Outlet backpool mitigation

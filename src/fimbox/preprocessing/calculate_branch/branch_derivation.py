@@ -137,7 +137,7 @@ class BranchDerivation:
         headwaters: Optional[str | Path] = None,
         levees: Optional[str | Path] = None,
         leveed_areas: Optional[str | Path] = None,
-        levee_id_attribute: str = "levee_id",
+        levee_id_attribute: str = "SYSTEM_ID",
         levee_buffer: float = 150.0,
     ) -> None:
         self.out_dir = Path(out_dir).expanduser().resolve()
@@ -530,7 +530,7 @@ def derive_area_branches(
     headwaters: Optional[str | Path] = None,
     levees: Optional[str | Path] = None,
     leveed_areas: Optional[str | Path] = None,
-    levee_id_attribute: str = "levee_id",
+    levee_id_attribute: str = "SYSTEM_ID",
     levee_buffer: float = 150.0,
     branch_id_attribute: str = "levpa_id",
     reach_id_attribute: str = "ID",
@@ -591,6 +591,16 @@ def _read_vector(path: Path, layer: Optional[str]) -> gpd.GeoDataFrame:
 
 def _write_gpkg(gdf: gpd.GeoDataFrame, path: Path) -> None:
     gdf.to_file(path, driver="GPKG", engine="pyogrio")
+
+
+def _normalise_sjoin_col(gdf: gpd.GeoDataFrame, col: str) -> gpd.GeoDataFrame:
+    """Rename col_left or col_1 back to col when geopandas sjoin adds a suffix."""
+    if col not in gdf.columns:
+        for suffix in ("_left", "_1"):
+            candidate = f"{col}{suffix}"
+            if candidate in gdf.columns:
+                return gdf.rename(columns={candidate: col})
+    return gdf
 
 
 def _align_crs(gdf: gpd.GeoDataFrame, target_crs) -> gpd.GeoDataFrame:
@@ -877,6 +887,29 @@ def _associate_levelpaths_with_levees(
     levees = _align_crs(levees, levelpaths.crs)
     leveed_areas = _align_crs(leveed_areas, levelpaths.crs)
 
+    # Ensure leveed_areas has the same ID column as levees (levee_id_attribute).
+    # NLD raw data uses SYSTEM_ID in levees and LEVEED_ID in leveed_areas; the
+    # overlay logic below requires both to share the same column name so that
+    # geopandas suffixes it _1 (from left/levees) and _2 (from right/leveed_areas).
+    if levee_id_attribute not in leveed_areas.columns:
+        # look for a plausible candidate: LEVEED_ID, then any *_ID column
+        candidates = [c for c in leveed_areas.columns if c.upper() in ("LEVEED_ID", "SYSTEM_ID")]
+        if not candidates:
+            candidates = [c for c in leveed_areas.columns if c.upper().endswith("_ID")]
+        if candidates:
+            leveed_areas = leveed_areas.rename(columns={candidates[0]: levee_id_attribute})
+            log.debug(
+                "_associate_levelpaths_with_levees: renamed leveed_areas column %s → %s",
+                candidates[0], levee_id_attribute,
+            )
+        else:
+            log.warning(
+                "_associate_levelpaths_with_levees: leveed_areas has no column matching "
+                "levee_id_attribute=%r and no fallback — skipping levee association",
+                levee_id_attribute,
+            )
+            return False
+
     # buffer each side of levee line
     levees_buffered_left = levees.copy()
     levees_buffered_right = levees.copy()
@@ -941,6 +974,9 @@ def _associate_levelpaths_with_levees(
 
     levee_levelpaths_left = gpd.sjoin(levees_buffered_left, levelpaths)
     levee_levelpaths_right = gpd.sjoin(levees_buffered_right, levelpaths)
+    # geopandas appends _left/_1 suffix when both frames share a column name; normalise back
+    levee_levelpaths_left = _normalise_sjoin_col(levee_levelpaths_left, levee_id_attribute)
+    levee_levelpaths_right = _normalise_sjoin_col(levee_levelpaths_right, levee_id_attribute)
     levee_levelpaths_left = levee_levelpaths_left[[levee_id_attribute, branch_id_attribute]]
     levee_levelpaths_right = levee_levelpaths_right[[levee_id_attribute, branch_id_attribute]]
     levee_levelpaths_left = levee_levelpaths_left[
@@ -964,7 +1000,9 @@ def _associate_levelpaths_with_levees(
     if not levees_not_found.empty:
         levees_not_found = levees_not_found.copy()
         levees_not_found.geometry = levees_not_found.buffer(2 * levee_buffer)
-        levees_not_found = gpd.sjoin(levees_not_found, levelpaths)
+        levees_not_found = _normalise_sjoin_col(
+            gpd.sjoin(levees_not_found, levelpaths), levee_id_attribute
+        )
         out_df = (
             pd.concat(
                 [

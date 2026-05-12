@@ -7,10 +7,10 @@ Step 2 (BridgeDEMDiff):        computes lidar_elev - dem_elev and saves bridge_e
 import fimbox
 
 bridge_gpkg = (
-    "/Users/supath/Downloads/MSResearch/FIMBOX/out/HUC03020202/osm_bridges_subset.gpkg"
+    "/Users/Supath/Downloads/SDML/FIMBOX/out/HUC08060202/osm_bridges_subset.gpkg"
 )
-dem_path = "/Users/supath/Downloads/MSResearch/FIMBOX/out/HUC03020202/dem.tif"
-out_dir = "/Users/supath/Downloads/MSResearch/FIMBOX/out/HUC03020202"
+dem_path = "/Users/Supath/Downloads/SDML/FIMBOX/out/HUC08060202/dem.tif"
+out_dir = "/Users/Supath/Downloads/SDML/FIMBOX/out/HUC08060202"
 
 
 # check which bridges already have rasters vs still pending (safe to run anytime)

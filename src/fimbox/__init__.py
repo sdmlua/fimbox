@@ -27,6 +27,8 @@ from .preprocessing import ThalwegAdjustment
 from .preprocessing import StreamNetReaches
 from .preprocessing import split_derived_reaches
 from .preprocessing import GageCatchments, OutletBackpoolMitigate, stream_pixel_points
+from .preprocessing import MakeREM
+from .preprocessing import FilterCatchments, NoFlowlinesError
 from .preprocessing import CreateHAND
 
 __all__ = [
@@ -51,6 +53,9 @@ __all__ = [
     "GageCatchments",
     "OutletBackpoolMitigate",
     "stream_pixel_points",
+    "MakeREM",
+    "FilterCatchments",
+    "NoFlowlinesError",
     "CreateHAND",
 ]
 

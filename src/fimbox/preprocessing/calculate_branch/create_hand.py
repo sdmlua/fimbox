@@ -2,7 +2,6 @@
 Author: Supath Dhital
 Date updated : May 2026
 
---------
 HAND (Height Above Nearest Drainage) production pipeline.
 
 Geoprocessing steps for one branch:
@@ -19,16 +18,13 @@ Required inputs
 aoi_dir   : area output directory
 branch_dir: branch output sub-dir
 branch_id : "0" for branch-zero, otherwise level-path ID string
-
-Auto-resolved from aoi_dir / branch_dir when not passed
---------------------------------------------------------
 dem_path        : branch_dir/dem_{id}.tif
 flowdir_path    : branch_dir/flowdir_d8_burned_filled_{id}.tif
 headwaters_path : branch_dir/headwaters_{id}.tif
 streams_gpkg    : aoi_dir/nwm_subset_streams.gpkg
 catchments_gpkg : aoi_dir/nwm_catchments_proj_subset.gpkg
 
-Optional inputs (skipped when absent)
+Optional inputs (skipped- when-absent)
 --------------------------------------
 levee_protected_areas_gpkg : LeveeProtectedAreas_subset.gpkg
 levee_levelpaths_csv       : levee_levelpaths.csv
@@ -53,30 +49,20 @@ from typing import Optional
 
 log = logging.getLogger(__name__)
 
-
 @dataclass
 class CreateHAND:
-    """
-    Orchestrate Phase-3 HAND preprocessing for one branch.
-
-    Call .run() to execute all steps in sequence.  Returns a dict of output
-    Path objects keyed by descriptive names.  Steps whose outputs already
-    exist on disk are automatically skipped.
-    """
-
-    # required: directory + identity
     aoi_dir: Path
     branch_dir: Path
     branch_id: str
 
-    # paths default to standard names derived from aoi_dir / branch_dir / branch_id
+    # paths
     dem_path: Optional[Path] = None            # dem_{id}.tif
     flowdir_path: Optional[Path] = None        # flowdir_d8_burned_filled_{id}.tif
     headwaters_path: Optional[Path] = None     # headwaters_{id}.tif
     streams_gpkg: Optional[Path] = None        # nwm_subset_streams.gpkg
     catchments_gpkg: Optional[Path] = None     # nwm_catchments_proj_subset.gpkg
 
-    # optional files (skipped when absent)
+    # optional files
     levee_protected_areas_gpkg: Optional[Path] = None
     levee_levelpaths_csv: Optional[Path] = None
     lakes_gpkg: Optional[Path] = None
@@ -149,10 +135,12 @@ class CreateHAND:
             fh.close()
 
     def _run(self) -> dict[str, Path]:
+        from .filter_catchments import FilterCatchments, NoFlowlinesError
         from .flowacc_dem import FlowAccDEM
         from .flowdir_dem import D8SlopeDEM
         from .gage_catchments import GageCatchments, OutletBackpoolMitigate, stream_pixel_points
         from .levee_rasterize import mask_levee_dem
+        from .make_rem import MakeREM
         from .split_reaches import split_derived_reaches
         from .streamnet_reaches import StreamNetReaches
         from .thalweg_adjustment import ThalwegAdjustment
@@ -160,13 +148,13 @@ class CreateHAND:
         bid = self.branch_id
         bd  = self.branch_dir
         outputs: dict[str, Path] = {}
-        _TOTAL = 10
+        _TOTAL = 15
 
         def _progress(n: int, label: str, skipped: bool = False) -> None:
             tag = "skip" if skipped else "run "
             print(f"  [{n}/{_TOTAL}] {tag}  {label}", flush=True)
 
-        # 1. Levee mask
+        # Levee mask
         _progress(1, "levee mask")
         dem_working = bd / f"dem_{bid}.tif"
         _exists_warn(self.dem_path, "dem_path")
@@ -186,7 +174,7 @@ class CreateHAND:
             )
         outputs["dem"] = dem_working
 
-        # 2. Flow accumulation
+        # Flow accumulation
         flowaccum     = bd / f"flowaccum_d8_burned_filled_{bid}.tif"
         stream_pixels = bd / f"demDerived_streamPixels_{bid}.tif"
         if flowaccum.exists() and stream_pixels.exists():
@@ -208,7 +196,7 @@ class CreateHAND:
         else:
             log.warning("headwaters raster not found -- skipping flow accumulation")
 
-        # 3. Thalweg adjustment
+        # Thalweg adjustment
         thalweg_adj    = bd / f"dem_lateral_thalweg_adj_{bid}.tif"
         flowdir_streams = bd / f"flowdir_d8_burned_filled_flows_{bid}.tif"
         thalweg_cond   = bd / f"dem_thalwegCond_{bid}.tif"
@@ -238,7 +226,7 @@ class CreateHAND:
         else:
             log.warning("stream_pixels not found -- skipping thalweg adjustment")
 
-        # 4. D8 slopes
+        # D8 slopes
         slopes_d8 = bd / f"slopes_d8_dem_{bid}.tif"
         if slopes_d8.exists():
             _progress(4, "D8 slopes", skipped=True)
@@ -257,7 +245,7 @@ class CreateHAND:
         else:
             log.warning("thalweg_adj not found -- skipping D8 slopes")
 
-        # 5. Stream network
+        # Stream network
         reaches_gpkg  = bd / f"demDerived_reaches_{bid}.gpkg"
         stream_order  = bd / f"streamOrder_{bid}.tif"
         sn_catchments = bd / f"sn_catchments_reaches_{bid}.tif"
@@ -285,7 +273,7 @@ class CreateHAND:
         else:
             log.warning("Skipping streamnet -- missing stream_pixels / thalweg_cond / flowaccum")
 
-        # 6. Split reaches
+        # Split reaches
         out_split = bd / f"demDerived_reaches_split_{bid}.gpkg"
         out_pts   = bd / f"demDerived_reaches_split_points_{bid}.gpkg"
         if out_split.exists() and out_pts.exists():
@@ -317,7 +305,7 @@ class CreateHAND:
         else:
             log.warning("Skipping split_reaches -- missing demDerived_reaches or thalweg_cond")
 
-        # 7. Gage watershed for reaches
+        # Gage watershed for reaches
         gw_reaches = bd / f"gw_catchments_reaches_{bid}.tif"
         split_pts_gpkg = bd / f"demDerived_reaches_split_points_{bid}.gpkg"
         if gw_reaches.exists():
@@ -336,7 +324,7 @@ class CreateHAND:
         else:
             log.warning("Skipping gage watershed reaches -- missing split points")
 
-        # 8. Vectorize stream pixel centroids
+        # Vectorize stream pixel centroids
         pixel_pts_gpkg = bd / f"flows_points_pixels_{bid}.gpkg"
         if pixel_pts_gpkg.exists():
             _progress(8, "stream pixel points", skipped=True)
@@ -350,7 +338,7 @@ class CreateHAND:
         else:
             log.warning("Skipping stream pixel points -- missing stream_pixels")
 
-        # 9. Gage watershed for pixels
+        # Gage watershed for pixels
         gw_pixels = bd / f"gw_catchments_pixels_{bid}.tif"
         if gw_pixels.exists():
             _progress(9, "gage watershed (pixels)", skipped=True)
@@ -368,7 +356,7 @@ class CreateHAND:
         else:
             log.warning("Skipping gage watershed pixels -- missing pixel points")
 
-        # 10. Outlet backpool mitigation
+        # Outlet backpool mitigation
         _progress(10, "outlet backpool mitigation")
         if out_split.exists() and gw_pixels.exists() and gw_reaches.exists():
             log.info("Outlet backpool mitigation")
@@ -385,10 +373,248 @@ class CreateHAND:
         else:
             log.warning("Skipping backpool mitigation -- missing required inputs")
 
+        # REM (Height Above Nearest Drainage)
+        rem_path = bd / f"rem_{bid}.tif"
+        if rem_path.exists() and rem_path.stat().st_size > 0:
+            _progress(11, "REM", skipped=True)
+            log.info("REM: output exists, skipping")
+            outputs["rem"] = rem_path
+        elif thalweg_cond.exists() and gw_pixels.exists() and stream_pixels.exists():
+            _progress(11, "REM")
+            log.info("REM computation")
+            MakeREM(
+                dem_thalweg_cond=thalweg_cond,
+                gw_catchments_pixels=gw_pixels,
+                stream_pixels=stream_pixels,
+                out_rem=rem_path,
+            ).run()
+            outputs["rem"] = rem_path
+        else:
+            log.warning("Skipping REM -- missing thalweg_cond / gw_catchments_pixels / stream_pixels")
+
+        # Zero/mask REM  (REM * (REM>=0) * (gw_catchments_reaches>0))
+        rem_zeroed = bd / f"rem_zeroed_masked_{bid}.tif"
+        if rem_zeroed.exists() and rem_zeroed.stat().st_size > 0:
+            _progress(12, "REM zeroed+masked", skipped=True)
+            log.info("REM zeroed+masked: output exists, skipping")
+            outputs["rem_zeroed_masked"] = rem_zeroed
+        elif rem_path.exists() and gw_reaches.exists():
+            _progress(12, "REM zeroed+masked")
+            log.info("REM zero/mask")
+            _rem_zeroed_masked(rem_path, gw_reaches, rem_zeroed)
+            outputs["rem_zeroed_masked"] = rem_zeroed
+        else:
+            log.warning("Skipping REM zeroed+masked -- missing rem / gw_catchments_reaches")
+
+        # Polygonize gw_catchments_reaches raster --> GeoPackage
+        catch_poly_gpkg = bd / f"gw_catchments_reaches_{bid}.gpkg"
+        if catch_poly_gpkg.exists() and catch_poly_gpkg.stat().st_size > 0:
+            _progress(13, "polygonize catchments", skipped=True)
+            log.info("Polygonize catchments: output exists, skipping")
+            outputs["gw_catchments_reaches_gpkg"] = catch_poly_gpkg
+        elif gw_reaches.exists():
+            _progress(13, "polygonize catchments")
+            log.info("Polygonize gw_catchments_reaches")
+            _polygonize_catchments(gw_reaches, catch_poly_gpkg)
+            outputs["gw_catchments_reaches_gpkg"] = catch_poly_gpkg
+        else:
+            log.warning("Skipping polygonize -- missing gw_catchments_reaches")
+
+        # Filter catchments + add flow attributes
+        filtered_catchments = bd / f"gw_catchments_reaches_filtered_addedAttributes_{bid}.gpkg"
+        filtered_flows      = bd / f"demDerived_reaches_split_filtered_{bid}.gpkg"
+        if (
+            filtered_catchments.exists() and filtered_catchments.stat().st_size > 0
+            and filtered_flows.exists()  and filtered_flows.stat().st_size > 0
+        ):
+            _progress(14, "filter catchments", skipped=True)
+            log.info("Filter catchments: outputs exist, skipping")
+            outputs["filtered_catchments"] = filtered_catchments
+            outputs["filtered_flows"]      = filtered_flows
+        elif catch_poly_gpkg.exists() and out_split.exists():
+            _progress(14, "filter catchments")
+            log.info("Filter catchments and add attributes")
+            huc_code = self._resolve_huc_code()
+            try:
+                FilterCatchments(
+                    catchments_gpkg=catch_poly_gpkg,
+                    flows_gpkg=out_split,
+                    out_catchments=filtered_catchments,
+                    out_flows=filtered_flows,
+                    huc_code=huc_code,
+                    wbd8_clp_gpkg=self.wbd8_clp_gpkg,
+                ).run()
+                outputs["filtered_catchments"] = filtered_catchments
+                outputs["filtered_flows"]      = filtered_flows
+            except NoFlowlinesError as exc:
+                log.warning("FilterCatchments: %s", exc)
+        else:
+            log.warning("Skipping filter catchments -- missing polygonized catchments or split reaches")
+
+        # Rasterize filtered catchments → GeoTIFF (HydroID burn)
+        filtered_catch_tif = bd / f"gw_catchments_reaches_filtered_addedAttributes_{bid}.tif"
+        if filtered_catch_tif.exists() and filtered_catch_tif.stat().st_size > 0:
+            _progress(15, "rasterize filtered catchments", skipped=True)
+            log.info("Rasterize filtered catchments: output exists, skipping")
+            outputs["filtered_catchments_tif"] = filtered_catch_tif
+        elif filtered_catchments.exists() and gw_reaches.exists():
+            _progress(15, "rasterize filtered catchments")
+            log.info("Rasterize filtered catchments")
+            _rasterize_catchments(filtered_catchments, gw_reaches, filtered_catch_tif)
+            outputs["filtered_catchments_tif"] = filtered_catch_tif
+        else:
+            log.warning("Skipping rasterize filtered catchments -- missing inputs")
+
         log.info("CreateHAND outputs: %s", list(outputs.keys()))
         return outputs
+
+    def _resolve_huc_code(self) -> str:
+        """Derive 8-digit HUC from aoi_dir name if branch has none set."""
+        name = self.aoi_dir.name
+        # aoi_dir is typically named HUC<code> e.g. HUC08060202
+        if name.upper().startswith("HUC"):
+            return name[3:]
+        # last 8 digits of directory name
+        digits = "".join(c for c in name if c.isdigit())
+        return digits[-8:] if len(digits) >= 8 else digits
 
 
 def _exists_warn(path: Optional[Path], name: str) -> None:
     if path is None or not path.exists():
         log.warning("Expected file not found: %s = %s", name, path)
+
+
+def _rem_zeroed_masked(rem_path: Path, catchments_path: Path, out_path: Path) -> None:
+    """
+    Replicates FIM gdal_calc step:
+        gdal_calc.py -A rem.tif -B gw_catchments_reaches.tif
+            --calc="(A*(A>=0)*(B>0))" --outfile=rem_zeroed_masked.tif
+    Written block-wise, float32, LZW.
+    """
+    import numpy as np
+    import rasterio
+
+    with rasterio.open(str(rem_path)) as rem_ds:
+        meta = rem_ds.meta.copy()
+        nodata_rem = rem_ds.nodata if rem_ds.nodata is not None else -9999.0
+
+    meta.update(
+        dtype="float32",
+        nodata=float(nodata_rem),
+        compress="lzw",
+        tiled=True,
+        blockxsize=512,
+        blockysize=512,
+        BIGTIFF="YES",
+    )
+
+    if out_path.exists():
+        out_path.unlink()
+
+    with (
+        rasterio.open(str(rem_path))       as rem_ds,
+        rasterio.open(str(catchments_path)) as cat_ds,
+        rasterio.open(str(out_path), "w", **meta) as out_ds,
+    ):
+        for _, window in rem_ds.block_windows(1):
+            rem_blk = rem_ds.read(1, window=window).astype(np.float32)
+            cat_blk = cat_ds.read(1, window=window)
+
+            result = rem_blk * (rem_blk >= 0).astype(np.float32) * (cat_blk > 0).astype(np.float32)
+            # preserve nodata where REM was nodata
+            result[rem_blk == nodata_rem] = nodata_rem
+            out_ds.write(result, window=window, indexes=1)
+
+    log.info("REM zeroed+masked → %s", out_path.name)
+
+
+def _polygonize_catchments(catchments_raster: Path, out_gpkg: Path) -> None:
+    """
+    Polygonize the catchment ID raster into a GeoPackage (one polygon per HydroID).
+    Uses 8-connectivity, matching gdal_polygonize -8.  No smoothing is applied —
+    the pixel boundaries are exact and shared between adjacent catchments, so
+    any simplification would break topology and create slivers/overlaps.
+    """
+    import numpy as np
+    import rasterio
+    from rasterio.features import shapes
+    import geopandas as gpd
+    from shapely.geometry import shape
+
+    if out_gpkg.exists():
+        out_gpkg.unlink()
+
+    geoms = []
+    values = []
+
+    with rasterio.open(str(catchments_raster)) as src:
+        data = src.read(1).astype(np.int32)
+        crs = src.crs
+        transform = src.transform
+
+    mask = data > 0
+    for geom, val in shapes(data, mask=mask, transform=transform, connectivity=8):
+        geoms.append(shape(geom))
+        values.append(int(val))
+
+    gdf = gpd.GeoDataFrame({"HydroID": values}, geometry=geoms, crs=crs)
+    gdf.to_file(str(out_gpkg), driver="GPKG", layer="catchments", index=False, engine="fiona")
+    log.info("Polygonize: %d catchment polygons → %s", len(gdf), out_gpkg.name)
+
+
+def _rasterize_catchments(
+    catchments_gpkg: Path,
+    reference_raster: Path,
+    out_tif: Path,
+) -> None:
+    """
+    Replicates FIM:
+        gdal_rasterize -a HydroID -a_nodata 0
+                       gw_catchments_filtered.gpkg gw_catchments_filtered.tif
+    Burns HydroID attribute onto the reference raster grid.
+    """
+    import numpy as np
+    import rasterio
+    from rasterio.features import rasterize as rio_rasterize
+    import geopandas as gpd
+
+    gdf = gpd.read_file(str(catchments_gpkg), engine="fiona")
+
+    with rasterio.open(str(reference_raster)) as ref:
+        meta = ref.meta.copy()
+        transform = ref.transform
+        height = ref.height
+        width  = ref.width
+
+    meta.update(
+        dtype="int32",
+        nodata=0,
+        compress="lzw",
+        tiled=True,
+        blockxsize=512,
+        blockysize=512,
+        BIGTIFF="YES",
+    )
+
+    shapes_iter = (
+        (geom, int(hid))
+        for geom, hid in zip(gdf.geometry, gdf["HydroID"])
+        if geom is not None and not geom.is_empty
+    )
+
+    burned = rio_rasterize(
+        shapes_iter,
+        out_shape=(height, width),
+        transform=transform,
+        fill=0,
+        dtype=np.int32,
+        all_touched=False,
+    )
+
+    if out_tif.exists():
+        out_tif.unlink()
+
+    with rasterio.open(str(out_tif), "w", **meta) as dst:
+        dst.write(burned, 1)
+
+    log.info("Rasterize filtered catchments → %s  (%d features)", out_tif.name, len(gdf))

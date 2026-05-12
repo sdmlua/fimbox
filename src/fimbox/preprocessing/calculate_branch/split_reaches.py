@@ -79,17 +79,17 @@ def split_derived_reaches(
         log.warning("SplitReaches: no stream features found in %s", reaches_gpkg.name)
         return out_split_gpkg, out_points_gpkg
 
-    flows_crs = flows.crs
+    # DEM CRS is authoritative for all projected geometry (length, buffer, slope, sjoin).
+    # All operations stay in dem_crs; WBD and lakes are reprojected to match.
+    with rasterio.open(str(dem_thalweg_cond)) as _src:
+        dem_crs = _src.crs
 
-    # optional: read wbd for HydroID generation
+    flows = flows.to_crs(dem_crs)
+
+    # optional: read wbd for HydroID generation and boundary split
     wbd8 = None
     if wbd8_clp_gpkg and Path(wbd8_clp_gpkg).exists():
-        wbd8 = gpd.read_file(str(wbd8_clp_gpkg), engine="fiona")
-        flows = flows.to_crs(wbd8.crs)
-        flows_crs = flows.crs
-
-    # optional: split at area boundaries
-    if wbd8 is not None:
+        wbd8 = gpd.read_file(str(wbd8_clp_gpkg), engine="fiona").to_crs(dem_crs)
         log.info("SplitReaches: splitting at area boundaries")
         flows = (
             gpd.overlay(flows, wbd8[["geometry"]], how="union", keep_geom_type=True)
@@ -103,11 +103,11 @@ def split_derived_reaches(
     if nwm_streams_gpkg.exists():
         flows = _snap_and_trim(flows, nwm_streams_gpkg)
 
-    # optional: split at lake boundaries 
+    # optional: split at lake boundaries
     lakes = None
     lake_id_col = None
     if lakes_gpkg and Path(lakes_gpkg).exists():
-        lakes_gdf = gpd.read_file(str(lakes_gpkg), engine="fiona")
+        lakes_gdf = gpd.read_file(str(lakes_gpkg), engine="fiona").to_crs(dem_crs)
         if len(lakes_gdf) > 0:
             lake_id_col = next(
                 (c for c in ("newID", "wb_id", "LakeID") if c in lakes_gdf.columns), None
@@ -127,7 +127,7 @@ def split_derived_reaches(
         log.warning("SplitReaches: no flows remain after boundary splits")
         return out_split_gpkg, out_points_gpkg
 
-    # split long segments & compute slope
+    # split long segments & compute slope — geometries are in dem_crs (metres)
     log.info("SplitReaches: splitting %d segments (max_length=%.0fm)", len(flows), max_length)
     split_lines: list[LineString] = []
     slopes: list[float] = []
@@ -144,22 +144,25 @@ def split_derived_reaches(
         return out_split_gpkg, out_points_gpkg
 
     split_gdf = gpd.GeoDataFrame(
-        {"S0": slopes, "geometry": split_lines}, crs=flows_crs
+        {"S0": slopes, "geometry": split_lines}, crs=dem_crs
     )
     split_gdf["LengthKm"] = split_gdf.geometry.length * _TO_KM
 
     # Assign LakeID
     if lakes is not None and lake_id_col is not None:
         lakes_buf = lakes.copy()
-        lakes_buf["geometry"] = lakes.buffer(lakes_buffer_dist)
-        split_gdf = gpd.sjoin(split_gdf, lakes_buf, how="left", predicate="within")
+        lakes_buf.index.name = lake_id_col
+        lakes_buf = lakes_buf.reset_index()
+        lakes_buf["geometry"] = lakes_buf.buffer(lakes_buffer_dist)
+        split_gdf = gpd.sjoin(split_gdf, lakes_buf[[lake_id_col, "geometry"]], how="left", predicate="within")
         split_gdf = split_gdf.rename(columns={lake_id_col: "LakeID"}).fillna(-999)
+        split_gdf = split_gdf.drop(columns=["index_right"], errors="ignore")
     else:
         split_gdf["LakeID"] = -999
 
-    split_gdf = split_gdf.drop_duplicates()
+    split_gdf = split_gdf.drop_duplicates(subset=["geometry"])
 
-    # assign HydroIDs and network topology 
+    # assign HydroIDs and network topology (wbd8 already in dem_crs)
     split_gdf = _assign_hydro_ids(split_gdf, wbd8)
     split_gdf = split_gdf.query("From_Node != To_Node")
 
@@ -167,7 +170,7 @@ def split_derived_reaches(
         log.warning("SplitReaches: no valid segments after topology build")
         return out_split_gpkg, out_points_gpkg
 
-    # create split points
+    # create split points (outlet point of each reach, used as gage-watershed seeds)
     split_points_od: OrderedDict = OrderedDict()
     for _, seg in split_gdf.iterrows():
         line = seg.geometry
@@ -181,10 +184,13 @@ def split_derived_reaches(
     hydro_ids_pts = list(split_points_od.values())
     points = [Point(*pt) for pt in split_points_od]
     pts_gdf = gpd.GeoDataFrame(
-        {"id": hydro_ids_pts, "geometry": points}, crs=flows_crs
+        {"id": hydro_ids_pts, "geometry": points}, crs=dem_crs
     )
 
-    # write outputs
+    # write outputs (remove any 0-byte leftovers from prior failed runs)
+    for _p in (out_split_gpkg, out_points_gpkg):
+        if _p.exists():
+            _p.unlink()
     log.info("SplitReaches: writing %d segments → %s", len(split_gdf), out_split_gpkg.name)
     split_gdf.to_file(str(out_split_gpkg), driver="GPKG", index=False, engine="fiona")
     pts_gdf.to_file(str(out_points_gpkg), driver="GPKG", index=False, engine="fiona")
@@ -323,14 +329,15 @@ def _assign_hydro_ids(
             {"geometry": [g.interpolate(0.5, normalized=True) for g in split_gdf.geometry]},
             crs=split_gdf.crs,
         )
-        # Determine the area boundary ID column (look for 'fimid' or first non-geometry string col)
-        boundary_id_col = next(
-            (c for c in wbd8.columns if c.lower() in ("fimid", "huc8", "huc_8")), None
+        # fimid is the 4-digit node ID FIM uses as the HydroID prefix (e.g. "1864").
+        # HUC8 is 8 digits and would produce 12-digit HydroIDs that overflow int32.
+        # Always prefer fimid; fall back to first non-geometry column only if absent.
+        _wbd_cols_lower = {c.lower(): c for c in wbd8.columns}
+        boundary_id_col = (
+            _wbd_cols_lower.get("fimid")
+            or _wbd_cols_lower.get("fossid")
+            or next((c for c in wbd8.columns if c != "geometry"), None)
         )
-        if boundary_id_col is None:
-            boundary_id_col = next(
-                (c for c in wbd8.columns if c != "geometry"), None
-            )
 
         if boundary_id_col:
             joined = gpd.sjoin(midpoints, wbd8[[boundary_id_col, "geometry"]], how="left", predicate="within")

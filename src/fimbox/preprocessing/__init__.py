@@ -35,6 +35,8 @@ from .calculate_branch import CreateHAND
 from .calculate_branch import D8SlopeDEM
 from .calculate_branch import FlowAccDEM
 from .calculate_branch import GageCatchments, OutletBackpoolMitigate, stream_pixel_points
+from .calculate_branch import MakeREM
+from .calculate_branch import FilterCatchments, NoFlowlinesError
 from .calculate_branch import StreamNetReaches
 from .calculate_branch import ThalwegAdjustment
 from .calculate_branch import split_derived_reaches
@@ -61,6 +63,9 @@ __all__ = [
     "GageCatchments",
     "OutletBackpoolMitigate",
     "stream_pixel_points",
+    "MakeREM",
+    "FilterCatchments",
+    "NoFlowlinesError",
     "CreateHAND",
 ]
 

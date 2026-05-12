@@ -24,7 +24,7 @@ from fimbox import (
 # )
 
 # input paths
-OUT_DIR = Path("/Users/supath/Downloads/MSResearch/FIMBOX/out/HUC03020202")
+OUT_DIR = Path("/Users/Supath/Downloads/SDML/FIMBOX/out/HUC08060202")
 
 DEM           = OUT_DIR / "dem.tif"
 STREAMS       = OUT_DIR / "nwm_subset_streams.gpkg"
@@ -50,6 +50,14 @@ HW_RASTER     = BRANCH_DIR / f"headwaters_{BRANCH_ID}.tif"
 STREAM_BOOL   = BRANCH_DIR / f"flows_grid_boolean_{BRANCH_ID}.tif"
 DEM_BURNED    = BRANCH_DIR / f"dem_burned_{BRANCH_ID}.tif"
 DEM_FILLED    = BRANCH_DIR / f"dem_burned_filled_{BRANCH_ID}.tif"
+
+# REM + filtered catchment paths
+REM           = BRANCH_DIR / f"rem_{BRANCH_ID}.tif"
+REM_ZEROED    = BRANCH_DIR / f"rem_zeroed_masked_{BRANCH_ID}.tif"
+CATCH_POLY    = BRANCH_DIR / f"gw_catchments_reaches_{BRANCH_ID}.gpkg"
+FILT_CATCH    = BRANCH_DIR / f"gw_catchments_reaches_filtered_addedAttributes_{BRANCH_ID}.gpkg"
+FILT_FLOWS    = BRANCH_DIR / f"demDerived_reaches_split_filtered_{BRANCH_ID}.gpkg"
+FILT_TIF      = BRANCH_DIR / f"gw_catchments_reaches_filtered_addedAttributes_{BRANCH_ID}.tif"
 
 # HAND generation derived paths
 FLOWACCUM     = BRANCH_DIR / f"flowaccum_d8_burned_filled_{BRANCH_ID}.tif"
@@ -147,6 +155,12 @@ def test_create_hand():
     assert GW_REACHES.exists(),    "gw_catchments_reaches not produced"
     assert PIXEL_PTS.exists(),     "flows_points_pixels not produced"
     assert GW_PIXELS.exists(),     "gw_catchments_pixels not produced"
+    assert REM.exists(),           "rem not produced"
+    assert REM_ZEROED.exists(),    "rem_zeroed_masked not produced"
+    assert CATCH_POLY.exists(),    "gw_catchments_reaches gpkg not produced"
+    assert FILT_CATCH.exists(),    "filtered catchments not produced"
+    assert FILT_FLOWS.exists(),    "filtered flows not produced"
+    assert FILT_TIF.exists(),      "filtered catchments tif not produced"
 
 
 # individual component tests — uncomment to run a single step in isolation
@@ -233,6 +247,42 @@ def test_create_hand():
 
 # def test_flowdir_dem():
 #     FlowdirDEM(DEM_FILLED, BRANCH_DIR / "flowdir_d8_test.tif").run()
+
+# def test_make_rem():
+#     from fimbox import MakeREM
+#     for p in (THALWEG_COND, GW_PIXELS, STREAM_PIX):
+#         assert p.exists(), f"missing: {p}"
+#     out = MakeREM(
+#         dem_thalweg_cond=THALWEG_COND,
+#         gw_catchments_pixels=GW_PIXELS,
+#         stream_pixels=STREAM_PIX,
+#         out_rem=REM,
+#     ).run()
+#     import rasterio, numpy as np
+#     with rasterio.open(str(out)) as src:
+#         data = src.read(1); nd = src.nodata
+#         valid = data[data != nd] if nd is not None else data.ravel()
+#     print(f"\nREM range: [{float(valid.min()):.2f}, {float(valid.max()):.2f}]")
+#     assert out.exists() and float(valid.min()) >= 0.0
+
+# def test_filter_catchments():
+#     from fimbox import FilterCatchments
+#     for p in (CATCH_POLY, SPLIT_REACHES):
+#         assert p.exists(), f"missing: {p}"
+#     out_catch, out_flows = FilterCatchments(
+#         catchments_gpkg=CATCH_POLY,
+#         flows_gpkg=SPLIT_REACHES,
+#         out_catchments=FILT_CATCH,
+#         out_flows=FILT_FLOWS,
+#         huc_code="08060202",
+#         wbd8_clp_gpkg=WBD8_CLP if WBD8_CLP.exists() else None,
+#     ).run()
+#     import geopandas as gpd
+#     catches = gpd.read_file(str(out_catch))
+#     flows   = gpd.read_file(str(out_flows))
+#     print(f"\nFiltered catchments: {len(catches)}  flows: {len(flows)}")
+#     assert len(catches) > 0 and "areasqkm" in catches.columns
+#     assert len(flows) > 0 and "HydroID" in flows.columns
 
 # def test_levee_rasterize_and_burn():
 #     if not NLD_LEVEES.exists():

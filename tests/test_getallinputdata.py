@@ -2,7 +2,7 @@
 import fimbox
 
 test_boundary = "/Users/supath/Downloads/MSResearch/FIMBOX/fimbox/docs/test_boundary/test_smallB.shp"
-test_huc8 = "03020202"  # Yazoo River basin, MS
+test_huc8 = "08060202"  # Yazoo River basin, MS
 
 
 # Combined preprocessing pipeline tests
