@@ -30,7 +30,7 @@ from .calculate_branch import (
 # 3D NLD levee rasterization, DEM burning, and levee-area masking
 from .calculate_branch import burn_levee_elevations, mask_levee_dem, rasterize_3d_levee_lines
 
-# HAND Phase-3 components
+# HAND components
 from .calculate_branch import CreateHAND
 from .calculate_branch import D8SlopeDEM
 from .calculate_branch import FlowAccDEM
@@ -40,6 +40,12 @@ from .calculate_branch import FilterCatchments, NoFlowlinesError
 from .calculate_branch import StreamNetReaches
 from .calculate_branch import ThalwegAdjustment
 from .calculate_branch import split_derived_reaches
+from .calculate_branch import mask_slopes_to_catchments, rem_zeroed_masked
+from .calculate_branch import make_stages_and_catchlist
+from .calculate_branch import build_src_base
+from .calculate_branch import NoCrosswalkError, add_crosswalk
+from .calculate_branch import heal_bridges_osm
+from .calculate_branch import process_roads_fimpact
 
 __all__ = [
     "BranchDerivation",
@@ -67,6 +73,14 @@ __all__ = [
     "FilterCatchments",
     "NoFlowlinesError",
     "CreateHAND",
+    "rem_zeroed_masked",
+    "mask_slopes_to_catchments",
+    "make_stages_and_catchlist",
+    "build_src_base",
+    "add_crosswalk",
+    "NoCrosswalkError",
+    "heal_bridges_osm",
+    "process_roads_fimpact",
 ]
 
 # preprocess_area
@@ -125,8 +139,7 @@ except ImportError:
     pass
 
 # process_bridgedem
-# LiDAR bridge point cloud → raster
-# bridge elevation difference (DEM_diff) generator
+# LiDAR bridge point cloud --> raster, generate DEM difference raster
 try:
     from .process_bridgedem import generateBridgeRaster, BridgeDEMDiff
 

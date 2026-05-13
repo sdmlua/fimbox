@@ -136,7 +136,9 @@ def split_derived_reaches(
         for geom in flows.geometry:
             if geom is None or geom.is_empty or geom.length == 0:
                 continue
-            line = LineString(geom.coords[::-1])  # reverse to align with flow direction
+            # TauDEM streamnet outputs reaches upstream-first (headwater → confluence).
+            # Do NOT reverse — coords[0] = headwater, coords[-1] = outlet/confluence.
+            line = LineString(geom.coords)
             _split_one_line(line, dem_ds, max_length, slope_min, split_lines, slopes)
 
     if len(split_lines) == 0:
@@ -170,7 +172,10 @@ def split_derived_reaches(
         log.warning("SplitReaches: no valid segments after topology build")
         return out_split_gpkg, out_points_gpkg
 
-    # create split points (outlet point of each reach, used as gage-watershed seeds)
+    # create split points — one outlet point per reach (last coord = downstream end).
+    # FIM iterates all vertices, but using only the outlet avoids competing seeds at
+    # confluences where two tributary reaches share the same upstream start point.
+    # The outlet point is what GageCatchments seeds to label each sub-watershed.
     split_points_od: OrderedDict = OrderedDict()
     for _, seg in split_gdf.iterrows():
         line = seg.geometry
@@ -357,7 +362,8 @@ def _assign_hydro_ids(
 
     split_gdf = split_gdf.sort_values(hydro_id).reset_index(drop=True)
 
-    # From_Node / To_Node from endpoint coordinates
+    # From_Node / To_Node from endpoint coordinates.
+    # Replicates FIM build_stream_traversal.py: round to 7 decimal places.
     xy_dict: dict[str, int] = {}
     node_counter = [0]
 
@@ -381,10 +387,22 @@ def _assign_hydro_ids(
     split_gdf["From_Node"] = from_nodes
     split_gdf["To_Node"] = to_nodes
 
-    # NextDownID: find the HydroID of the segment whose From_Node == our To_Node
-    to_node_to_hydro: dict[int, int] = dict(
-        zip(split_gdf["From_Node"].tolist(), split_gdf[hydro_id].tolist())
-    )
-    split_gdf["NextDownID"] = split_gdf["To_Node"].map(to_node_to_hydro).fillna(-1).astype(np.int64)
+    # NextDownID: find the HydroID of the segment whose From_Node == our To_Node.
+    # FIM uses a From_Node → [list of HydroIDs] dict (multiple segments can start
+    # from the same node at confluences). We replicate that: when multiple segments
+    # share a From_Node, take the one with the smallest HydroID (first in sort order,
+    # matching FIM's behaviour of taking next_down_ids[0]).
+    dnodes: dict[int, list[int]] = {}
+    for fn, hid_val in zip(split_gdf["From_Node"].tolist(), split_gdf[hydro_id].tolist()):
+        if fn in dnodes:
+            dnodes[fn].append(int(hid_val))
+        else:
+            dnodes[fn] = [int(hid_val)]
+
+    def _next_down(to_node: int) -> int:
+        candidates = dnodes.get(int(to_node), [])
+        return candidates[0] if candidates else -1
+
+    split_gdf["NextDownID"] = split_gdf["To_Node"].apply(_next_down).astype(np.int64)
 
     return split_gdf

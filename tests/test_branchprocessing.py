@@ -23,8 +23,30 @@ from fimbox import (
 #     FlowAccDEM, ThalwegAdjustment, D8SlopeDEM, StreamNetReaches, split_derived_reaches,
 # )
 
-# input paths
-OUT_DIR = Path("/Users/Supath/Downloads/SDML/FIMBOX/out/HUC08060202")
+# AOI parameters — point this at any user-supplied AOI working directory.
+# aoi_code is recorded on every hydroTable row; a generic string is fine
+# (HUC IDs work unchanged for legacy datasets).
+OUT_DIR  = Path("/Users/Supath/Downloads/SDML/FIMBOX/out/HUC08060202")
+AOI_CODE = "08060202"
+
+# Tunable CreateHAND parameters — change here to play with the pipeline without
+# editing the call site below. All have sensible defaults in CreateHAND itself.
+PARAMS_CREATE_HAND = dict(
+    # geometry / topology
+    cost_distance_tolerance     = 50.0,     # m, lateral cost distance
+    lateral_elevation_threshold = 3,        # m, lateral thalweg drop cap
+    max_split_distance_m        = 2000.0,   # m, split-reach max length
+    slope_min                   = 0.0001,   # rise/run floor
+    lakes_buffer_dist_m         = 100.0,    # m, lake-boundary buffer
+    # SRC / crosswalk
+    mannings_n                  = 0.06,     # channel roughness
+    stage_min_m                 = 0.0,      # SRC stage ladder start
+    stage_interval_m            = 0.3048,   # SRC stage step (1 ft)
+    stage_max_m                 = 25.2984,  # SRC stage ladder end (~83 ft)
+    min_catchment_area          = 0.25,     # km^2, short-reach replace threshold
+    min_stream_length           = 0.5,      # km, short-reach replace threshold
+    crosswalk_max_distance_m    = 100.0,    # m, midpoint-to-NWM-flowline cap
+)
 
 DEM           = OUT_DIR / "dem.tif"
 STREAMS       = OUT_DIR / "nwm_subset_streams.gpkg"
@@ -58,6 +80,20 @@ CATCH_POLY    = BRANCH_DIR / f"gw_catchments_reaches_{BRANCH_ID}.gpkg"
 FILT_CATCH    = BRANCH_DIR / f"gw_catchments_reaches_filtered_addedAttributes_{BRANCH_ID}.gpkg"
 FILT_FLOWS    = BRANCH_DIR / f"demDerived_reaches_split_filtered_{BRANCH_ID}.gpkg"
 FILT_TIF      = BRANCH_DIR / f"gw_catchments_reaches_filtered_addedAttributes_{BRANCH_ID}.tif"
+
+# SRC / crosswalk / hydroTable outputs (steps 16-21)
+SLOPES_MASKED = BRANCH_DIR / f"slopes_d8_dem_meters_masked_{BRANCH_ID}.tif"
+STAGE_TXT     = BRANCH_DIR / f"stage_{BRANCH_ID}.txt"
+CATCHLIST_TXT = BRANCH_DIR / f"catch_list_{BRANCH_ID}.txt"
+SRC_BASE_CSV  = BRANCH_DIR / f"src_base_{BRANCH_ID}.csv"
+XWALK_CATCH   = BRANCH_DIR / f"gw_catchments_reaches_filtered_addedAttributes_crosswalked_{BRANCH_ID}.gpkg"
+XWALK_FLOWS   = BRANCH_DIR / f"demDerived_reaches_split_filtered_addedAttributes_crosswalked_{BRANCH_ID}.gpkg"
+SRC_FULL_CSV  = BRANCH_DIR / f"src_full_crosswalked_{BRANCH_ID}.csv"
+SRC_JSON      = BRANCH_DIR / f"src_{BRANCH_ID}.json"
+XWALK_CSV     = BRANCH_DIR / f"crosswalk_table_{BRANCH_ID}.csv"
+HYDRO_TABLE   = BRANCH_DIR / f"hydroTable_{BRANCH_ID}.csv"
+ROADS_CSV     = BRANCH_DIR / f"osm_roads_fimpact_{BRANCH_ID}.csv"
+BRIDGES_GPKG  = BRANCH_DIR / f"osm_bridge_centroids_{BRANCH_ID}.gpkg"
 
 # HAND generation derived paths
 FLOWACCUM     = BRANCH_DIR / f"flowaccum_d8_burned_filled_{BRANCH_ID}.tif"
@@ -126,8 +162,9 @@ def test_branch_zero_full():
 
 def test_create_hand():
     """
-    Run the full HAND generation pipeline for branch zero.
+    Run the full HAND generation pipeline (22 steps) for branch zero.
     All standard input paths are resolved from OUT_DIR and BRANCH_DIR automatically.
+    Tunable parameters live in ``PARAMS_CREATE_HAND`` at the top of this file.
     Requires: test_branch_zero_full outputs to exist.
     """
     assert DEM_BRANCH.exists(), f"Run test_branch_zero_full first — {DEM_BRANCH} missing"
@@ -137,16 +174,19 @@ def test_create_hand():
         aoi_dir=OUT_DIR,
         branch_dir=BRANCH_DIR,
         branch_id=BRANCH_ID,
+        aoi_code=AOI_CODE,
         levee_protected_areas_gpkg=LEVEE_AREAS if LEVEE_AREAS.exists() else None,
         levee_levelpaths_csv=LEVEE_LP_CSV if LEVEE_LP_CSV.exists() else None,
         lakes_gpkg=LAKES if LAKES.exists() else None,
-        wbd8_clp_gpkg=WBD8_CLP if WBD8_CLP.exists() else None,
+        boundary_gpkg=WBD8_CLP if WBD8_CLP.exists() else None,
+        **PARAMS_CREATE_HAND,
     ).run()
 
     print(f"\nCreateHAND outputs ({len(outputs)} files):")
     for k, v in outputs.items():
         print(f"  {k:35s}: {v.name}  {'ok' if v.exists() else 'MISSING'}")
 
+    # HAND base outputs
     assert THALWEG_COND.exists(),  "dem_thalwegCond not produced"
     assert SLOPES_D8.exists(),     "slopes_d8 not produced"
     assert DEM_REACHES.exists(),   "demDerived_reaches not produced"
@@ -161,6 +201,39 @@ def test_create_hand():
     assert FILT_CATCH.exists(),    "filtered catchments not produced"
     assert FILT_FLOWS.exists(),    "filtered flows not produced"
     assert FILT_TIF.exists(),      "filtered catchments tif not produced"
+
+    # SRC, crosswalk with hydroTable
+    assert SLOPES_MASKED.exists(), "slopes mask not produced"
+    assert STAGE_TXT.exists(),     "stage list not produced"
+    assert CATCHLIST_TXT.exists(), "catchlist file not produced"
+    assert SRC_BASE_CSV.exists(),  "SRC base CSV not produced"
+    assert XWALK_CATCH.exists(),   "crosswalked catchments not produced"
+    assert XWALK_FLOWS.exists(),   "crosswalked flows not produced"
+    assert SRC_FULL_CSV.exists(),  "SRC full CSV not produced"
+    assert SRC_JSON.exists(),      "SRC JSON not produced"
+    assert XWALK_CSV.exists(),     "crosswalk table not produced"
+    assert HYDRO_TABLE.exists(),   "hydroTable not produced"
+
+    # hydroTable sanity: required columns + monotonic stage→discharge per HydroID
+    import pandas as pd
+    # Read aoi_code/HydroID/feature_id as strings — pandas otherwise infers them
+    # numeric and strips leading zeros that legitimately exist in HUC-style codes.
+    ht = pd.read_csv(
+        HYDRO_TABLE,
+        dtype={"aoi_code": str, "HydroID": str, "feature_id": str},
+    )
+    required = {"HydroID", "feature_id", "aoi_code", "stage", "discharge_cms",
+                "ManningN", "SLOPE", "LENGTHKM"}
+    missing = required - set(ht.columns)
+    assert not missing, f"hydroTable missing columns: {missing}"
+    assert (ht["stage"] >= 0).all(), "negative stage values in hydroTable"
+    assert (ht["discharge_cms"] >= 0).all(), "negative discharge in hydroTable"
+    aoi_unique = set(ht["aoi_code"].unique())
+    assert AOI_CODE in aoi_unique or any(AOI_CODE in v for v in aoi_unique), \
+        f"aoi_code column {aoi_unique} does not contain test AOI_CODE={AOI_CODE!r}"
+    print(f"hydroTable rows: {len(ht)}, HydroIDs: {ht['HydroID'].nunique()}, "
+          f"feature_ids: {ht['feature_id'].nunique()}, "
+          f"aoi_code: {sorted(aoi_unique)}")
 
 
 # individual component tests — uncomment to run a single step in isolation

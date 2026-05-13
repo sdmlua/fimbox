@@ -43,7 +43,25 @@ from .gage_catchments import GageCatchments, OutletBackpoolMitigate, stream_pixe
 # split DEM-derived reaches and build network topology
 from .split_reaches import split_derived_reaches
 
-# stream network delineation (stream order, link IDs, vectorised reaches)
+# REM zero/mask + slope mask
+from .mask_to_catchments import mask_slopes_to_catchments, rem_zeroed_masked
+
+# stage ladder + per-HydroID catchment list
+from .stages_catchlist import make_stages_and_catchlist
+
+# synthetic rating curve base table
+from .build_src import build_src_base
+
+# crosswalk to NWM feature_ids & final hydroTable / SRC
+from .add_crosswalk import NoCrosswalkError, add_crosswalk
+
+# OSM bridge healing of HAND
+from .heal_bridges_osm import heal_bridges_osm
+
+# OSM road minimum-HAND FIMpact
+from .process_roads_fimpact import process_roads_fimpact
+
+# stream network delineation
 from .streamnet_reaches import StreamNetReaches
 
 # lateral thalweg adjustment + flow conditioning
@@ -87,4 +105,16 @@ __all__ = [
     # catchment filtering
     "FilterCatchments",
     "NoFlowlinesError",
+    # REM / slope masking to catchments
+    "rem_zeroed_masked",
+    "mask_slopes_to_catchments",
+    # stage + catchlist builders
+    "make_stages_and_catchlist",
+    # SRC base + crosswalk
+    "build_src_base",
+    "add_crosswalk",
+    "NoCrosswalkError",
+    # bridges + roads
+    "heal_bridges_osm",
+    "process_roads_fimpact",
 ]

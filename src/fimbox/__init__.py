@@ -30,6 +30,12 @@ from .preprocessing import GageCatchments, OutletBackpoolMitigate, stream_pixel_
 from .preprocessing import MakeREM
 from .preprocessing import FilterCatchments, NoFlowlinesError
 from .preprocessing import CreateHAND
+from .preprocessing import mask_slopes_to_catchments, rem_zeroed_masked
+from .preprocessing import make_stages_and_catchlist
+from .preprocessing import build_src_base
+from .preprocessing import NoCrosswalkError, add_crosswalk
+from .preprocessing import heal_bridges_osm
+from .preprocessing import process_roads_fimpact
 
 __all__ = [
     "BranchDerivation",
@@ -57,6 +63,14 @@ __all__ = [
     "FilterCatchments",
     "NoFlowlinesError",
     "CreateHAND",
+    "rem_zeroed_masked",
+    "mask_slopes_to_catchments",
+    "make_stages_and_catchlist",
+    "build_src_base",
+    "add_crosswalk",
+    "NoCrosswalkError",
+    "heal_bridges_osm",
+    "process_roads_fimpact",
 ]
 
 try:

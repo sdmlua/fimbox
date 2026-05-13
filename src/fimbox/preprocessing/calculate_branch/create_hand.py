@@ -66,7 +66,13 @@ class CreateHAND:
     levee_protected_areas_gpkg: Optional[Path] = None
     levee_levelpaths_csv: Optional[Path] = None
     lakes_gpkg: Optional[Path] = None
-    wbd8_clp_gpkg: Optional[Path] = None
+    boundary_gpkg: Optional[Path] = None          # AOI boundary file (e.g. wbd8_clp.gpkg)
+    osm_bridges_gpkg: Optional[Path] = None       # osm_bridges_subset.gpkg
+    osm_roads_gpkg: Optional[Path] = None         # osm_roads_subset.gpkg
+    bridge_diff_raster: Optional[Path] = None     # bridge_elev_diff_meters_{id}.tif
+
+    # AOI identifier. When unset, derived from the aoi_dir name as a fallback.
+    aoi_code: Optional[str] = None
 
     # tuning parameters
     cost_distance_tolerance: float = 50.0
@@ -75,6 +81,19 @@ class CreateHAND:
     slope_min: float = 0.0001
     lakes_buffer_dist_m: float = 100.0
     wbt_path: Optional[str] = None
+
+    # SRC / crosswalk parameters
+    mannings_n: float = 0.06
+    stage_min_m: float = 0.0
+    stage_interval_m: float = 0.3048
+    stage_max_m: float = 25.2984
+    min_catchment_area: float = 0.25
+    min_stream_length: float = 0.5
+    crosswalk_max_distance_m: float = 100.0
+
+    # back-compat alias — older callers pass ``wbd8_clp_gpkg``. Resolved to
+    # ``boundary_gpkg`` in __post_init__ if explicitly set.
+    wbd8_clp_gpkg: Optional[Path] = None
 
     def __post_init__(self):
         self.aoi_dir = Path(self.aoi_dir)
@@ -95,11 +114,28 @@ class CreateHAND:
         for attr in ("dem_path", "flowdir_path", "headwaters_path",
                      "streams_gpkg", "catchments_gpkg"):
             setattr(self, attr, Path(getattr(self, attr)))
-        for attr in ("levee_protected_areas_gpkg", "levee_levelpaths_csv",
-                     "lakes_gpkg", "wbd8_clp_gpkg"):
+        # Resolve back-compat alias: if a caller still passes ``wbd8_clp_gpkg``
+        # but not ``boundary_gpkg``, lift the value to the generic field.
+        if self.boundary_gpkg is None and self.wbd8_clp_gpkg is not None:
+            self.boundary_gpkg = self.wbd8_clp_gpkg
+        for attr in (
+            "levee_protected_areas_gpkg", "levee_levelpaths_csv",
+            "lakes_gpkg", "boundary_gpkg", "wbd8_clp_gpkg",
+            "osm_bridges_gpkg", "osm_roads_gpkg", "bridge_diff_raster",
+        ):
             val = getattr(self, attr)
             if val is not None:
                 setattr(self, attr, Path(val))
+        # Defaults for the OSM helper inputs: they live next to the AOI inputs.
+        if self.osm_bridges_gpkg is None:
+            cand = self.aoi_dir / "osm_bridges_subset.gpkg"
+            self.osm_bridges_gpkg = cand if cand.exists() else None
+        if self.osm_roads_gpkg is None:
+            cand = self.aoi_dir / "osm_roads_subset.gpkg"
+            self.osm_roads_gpkg = cand if cand.exists() else None
+        if self.bridge_diff_raster is None:
+            cand = self.branch_dir / f"bridge_elev_diff_meters_{bid}.tif"
+            self.bridge_diff_raster = cand if cand.exists() else None
         self.branch_dir.mkdir(parents=True, exist_ok=True)
 
     def run(self) -> dict[str, Path]:
@@ -135,20 +171,26 @@ class CreateHAND:
             fh.close()
 
     def _run(self) -> dict[str, Path]:
+        from .add_crosswalk import add_crosswalk, NoCrosswalkError
+        from .build_src import build_src_base
         from .filter_catchments import FilterCatchments, NoFlowlinesError
         from .flowacc_dem import FlowAccDEM
         from .flowdir_dem import D8SlopeDEM
         from .gage_catchments import GageCatchments, OutletBackpoolMitigate, stream_pixel_points
+        from .heal_bridges_osm import heal_bridges_osm
         from .levee_rasterize import mask_levee_dem
         from .make_rem import MakeREM
+        from .mask_to_catchments import mask_slopes_to_catchments, rem_zeroed_masked
+        from .process_roads_fimpact import process_roads_fimpact
         from .split_reaches import split_derived_reaches
+        from .stages_catchlist import make_stages_and_catchlist
         from .streamnet_reaches import StreamNetReaches
         from .thalweg_adjustment import ThalwegAdjustment
 
         bid = self.branch_id
         bd  = self.branch_dir
         outputs: dict[str, Path] = {}
-        _TOTAL = 15
+        _TOTAL = 22
 
         def _progress(n: int, label: str, skipped: bool = False) -> None:
             tag = "skip" if skipped else "run "
@@ -290,7 +332,7 @@ class CreateHAND:
                 nwm_streams_gpkg=self.streams_gpkg,
                 out_split_gpkg=out_split,
                 out_points_gpkg=out_pts,
-                wbd8_clp_gpkg=self.wbd8_clp_gpkg,
+                wbd8_clp_gpkg=self.boundary_gpkg,
                 lakes_gpkg=(
                     self.lakes_gpkg
                     if (self.lakes_gpkg and self.lakes_gpkg.exists())
@@ -401,7 +443,7 @@ class CreateHAND:
         elif rem_path.exists() and gw_reaches.exists():
             _progress(12, "REM zeroed+masked")
             log.info("REM zero/mask")
-            _rem_zeroed_masked(rem_path, gw_reaches, rem_zeroed)
+            rem_zeroed_masked(rem_path, gw_reaches, rem_zeroed)
             outputs["rem_zeroed_masked"] = rem_zeroed
         else:
             log.warning("Skipping REM zeroed+masked -- missing rem / gw_catchments_reaches")
@@ -434,15 +476,14 @@ class CreateHAND:
         elif catch_poly_gpkg.exists() and out_split.exists():
             _progress(14, "filter catchments")
             log.info("Filter catchments and add attributes")
-            huc_code = self._resolve_huc_code()
             try:
                 FilterCatchments(
                     catchments_gpkg=catch_poly_gpkg,
                     flows_gpkg=out_split,
                     out_catchments=filtered_catchments,
                     out_flows=filtered_flows,
-                    huc_code=huc_code,
-                    wbd8_clp_gpkg=self.wbd8_clp_gpkg,
+                    aoi_code=self._resolve_aoi_code(),
+                    boundary_gpkg=self.boundary_gpkg,
                 ).run()
                 outputs["filtered_catchments"] = filtered_catchments
                 outputs["filtered_flows"]      = filtered_flows
@@ -465,67 +506,201 @@ class CreateHAND:
         else:
             log.warning("Skipping rasterize filtered catchments -- missing inputs")
 
+        # Mask slopes to filtered catchments
+        slopes_masked = bd / f"slopes_d8_dem_meters_masked_{bid}.tif"
+        if slopes_masked.exists() and slopes_masked.stat().st_size > 0:
+            _progress(16, "mask slopes to catchments", skipped=True)
+            log.info("Slopes mask: output exists, skipping")
+            outputs["slopes_masked"] = slopes_masked
+        elif slopes_d8.exists() and filtered_catch_tif.exists():
+            _progress(16, "mask slopes to catchments")
+            mask_slopes_to_catchments(slopes_d8, filtered_catch_tif, slopes_masked)
+            outputs["slopes_masked"] = slopes_masked
+        else:
+            log.warning("Skipping slopes mask -- missing slopes or filtered catchments raster")
+
+        # Stage ladder + catchment list (inputs to the SRC builder)
+        stages_txt = bd / f"stage_{bid}.txt"
+        catchlist_txt = bd / f"catch_list_{bid}.txt"
+        if stages_txt.exists() and catchlist_txt.exists():
+            _progress(17, "stages + catchlist", skipped=True)
+            log.info("stages_catchlist: outputs exist, skipping")
+            outputs["stages_txt"] = stages_txt
+            outputs["catchlist_txt"] = catchlist_txt
+        elif filtered_flows.exists() and filtered_catchments.exists():
+            _progress(17, "stages + catchlist")
+            make_stages_and_catchlist(
+                flows_gpkg=filtered_flows,
+                catchments_gpkg=filtered_catchments,
+                out_stages=stages_txt,
+                out_catchlist=catchlist_txt,
+                stages_min=self.stage_min_m,
+                stages_interval=self.stage_interval_m,
+                stages_max=self.stage_max_m,
+            )
+            outputs["stages_txt"] = stages_txt
+            outputs["catchlist_txt"] = catchlist_txt
+        else:
+            log.warning("Skipping stages_catchlist -- missing filtered flows or catchments")
+
+        # SRC base (Python port of TauDEM catchhydrogeo)
+        src_base_csv = bd / f"src_base_{bid}.csv"
+        if src_base_csv.exists() and src_base_csv.stat().st_size > 0:
+            _progress(18, "synthetic rating curve base", skipped=True)
+            log.info("build_src: output exists, skipping")
+            outputs["src_base_csv"] = src_base_csv
+        elif (
+            rem_zeroed.exists()
+            and filtered_catch_tif.exists()
+            and slopes_masked.exists()
+            and stages_txt.exists()
+            and catchlist_txt.exists()
+        ):
+            _progress(18, "synthetic rating curve base")
+            build_src_base(
+                hand_raster=rem_zeroed,
+                catch_raster=filtered_catch_tif,
+                slope_raster=slopes_masked,
+                catchlist_txt=catchlist_txt,
+                stages_txt=stages_txt,
+                out_csv=src_base_csv,
+            )
+            outputs["src_base_csv"] = src_base_csv
+        else:
+            log.warning("Skipping SRC base -- missing HAND / catchments raster / slopes / stage files")
+
+        # Crosswalk to NWM feature_ids + hydroTable
+        xwalk_catch = bd / f"gw_catchments_reaches_filtered_addedAttributes_crosswalked_{bid}.gpkg"
+        xwalk_flows = bd / f"demDerived_reaches_split_filtered_addedAttributes_crosswalked_{bid}.gpkg"
+        src_full_csv = bd / f"src_full_crosswalked_{bid}.csv"
+        src_json = bd / f"src_{bid}.json"
+        crosswalk_csv = bd / f"crosswalk_table_{bid}.csv"
+        hydro_table_csv = bd / f"hydroTable_{bid}.csv"
+        sml_seg_csv = bd / f"small_segments_{bid}.csv"
+
+        if hydro_table_csv.exists() and hydro_table_csv.stat().st_size > 0:
+            _progress(19, "crosswalk + hydroTable", skipped=True)
+            log.info("add_crosswalk: outputs exist, skipping")
+            outputs["hydro_table"] = hydro_table_csv
+            outputs["crosswalked_catchments"] = xwalk_catch
+            outputs["crosswalked_flows"] = xwalk_flows
+        elif (
+            filtered_catchments.exists()
+            and filtered_flows.exists()
+            and src_base_csv.exists()
+            and self.streams_gpkg.exists()
+        ):
+            _progress(19, "crosswalk + hydroTable")
+            try:
+                xwalk_out = add_crosswalk(
+                    catchments_gpkg=filtered_catchments,
+                    flows_gpkg=filtered_flows,
+                    src_base_csv=src_base_csv,
+                    boundary_gpkg=self.boundary_gpkg,
+                    nwm_streams_gpkg=self.streams_gpkg,
+                    out_catchments_gpkg=xwalk_catch,
+                    out_flows_gpkg=xwalk_flows,
+                    out_src_csv=src_full_csv,
+                    out_src_json=src_json,
+                    out_crosswalk_csv=crosswalk_csv,
+                    out_hydro_csv=hydro_table_csv,
+                    aoi_code=self._resolve_aoi_code(),
+                    mannings_n=self.mannings_n,
+                    min_catchment_area=self.min_catchment_area,
+                    min_stream_length=self.min_stream_length,
+                    max_distance_m=self.crosswalk_max_distance_m,
+                    small_segments_csv=sml_seg_csv,
+                )
+                outputs.update(xwalk_out)
+            except NoCrosswalkError as exc:
+                log.warning("add_crosswalk: %s", exc)
+        else:
+            log.warning("Skipping crosswalk -- missing filtered catchments, SRC base, or NWM streams")
+
+        # Heal HAND for OSM bridges (in-place update of rem_zeroed_masked)
+        bridges_gpkg = self.osm_bridges_gpkg
+        bridge_centroids = bd / f"osm_bridge_centroids_{bid}.gpkg"
+        if bridge_centroids.exists() and bridge_centroids.stat().st_size > 0:
+            _progress(20, "heal HAND bridges", skipped=True)
+            log.info("heal_bridges_osm: output exists, skipping")
+            outputs["osm_bridge_centroids"] = bridge_centroids
+        elif (
+            bridges_gpkg is not None
+            and bridges_gpkg.exists()
+            and rem_zeroed.exists()
+            and xwalk_catch.exists()
+        ):
+            _progress(20, "heal HAND bridges")
+            try:
+                heal_out = heal_bridges_osm(
+                    hand_raster=rem_zeroed,
+                    bridges_gpkg=bridges_gpkg,
+                    catchments_gpkg=xwalk_catch,
+                    out_centroids_gpkg=bridge_centroids,
+                    bridge_diff_raster=self.bridge_diff_raster,
+                )
+                if heal_out is not None:
+                    outputs["osm_bridge_centroids"] = bridge_centroids
+            except ModuleNotFoundError as exc:
+                log.warning("Bridge healing skipped: %s", exc)
+        else:
+            log.info("Skipping bridge healing -- no OSM bridges or crosswalked catchments")
+
+        # OSM road FIMpact
+        roads_gpkg = self.osm_roads_gpkg
+        roads_fimpact_csv = bd / f"osm_roads_fimpact_{bid}.csv"
+        if roads_fimpact_csv.exists() and roads_fimpact_csv.stat().st_size > 0:
+            _progress(21, "OSM road FIMpact", skipped=True)
+            log.info("process_roads_fimpact: output exists, skipping")
+            outputs["osm_roads_fimpact_csv"] = roads_fimpact_csv
+        elif (
+            roads_gpkg is not None
+            and roads_gpkg.exists()
+            and rem_zeroed.exists()
+            and xwalk_catch.exists()
+        ):
+            _progress(21, "OSM road FIMpact")
+            try:
+                roads_out = process_roads_fimpact(
+                    hand_raster=rem_zeroed,
+                    roads_gpkg=roads_gpkg,
+                    catchments_gpkg=xwalk_catch,
+                    out_csv=roads_fimpact_csv,
+                )
+                if roads_out is not None:
+                    outputs["osm_roads_fimpact_csv"] = roads_fimpact_csv
+            except ModuleNotFoundError as exc:
+                log.warning("Road FIMpact skipped: %s", exc)
+        else:
+            log.info("Skipping road FIMpact -- no OSM roads or crosswalked catchments")
+
+        # Final summary line — counts the produced outputs for quick diff inspection.
+        _progress(22, "summary")
         log.info("CreateHAND outputs: %s", list(outputs.keys()))
         return outputs
 
-    def _resolve_huc_code(self) -> str:
-        """Derive 8-digit HUC from aoi_dir name if branch has none set."""
+    def _resolve_aoi_code(self) -> str:
+        """
+        Return the user-supplied ``aoi_code`` when set, otherwise derive a
+        fallback from the AOI directory name. The fallback strips an optional
+        ``HUC`` prefix and then keeps the trailing digits — convenient for
+        HUC-named workdirs but works for any directory name that ends in a
+        digit-only identifier.
+        """
+        if self.aoi_code:
+            return self.aoi_code
         name = self.aoi_dir.name
-        # aoi_dir is typically named HUC<code> e.g. HUC08060202
         if name.upper().startswith("HUC"):
-            return name[3:]
-        # last 8 digits of directory name
+            stripped = name[3:]
+            if stripped:
+                return stripped
         digits = "".join(c for c in name if c.isdigit())
-        return digits[-8:] if len(digits) >= 8 else digits
+        return digits if digits else name
 
 
 def _exists_warn(path: Optional[Path], name: str) -> None:
     if path is None or not path.exists():
         log.warning("Expected file not found: %s = %s", name, path)
-
-
-def _rem_zeroed_masked(rem_path: Path, catchments_path: Path, out_path: Path) -> None:
-    """
-    Replicates FIM gdal_calc step:
-        gdal_calc.py -A rem.tif -B gw_catchments_reaches.tif
-            --calc="(A*(A>=0)*(B>0))" --outfile=rem_zeroed_masked.tif
-    Written block-wise, float32, LZW.
-    """
-    import numpy as np
-    import rasterio
-
-    with rasterio.open(str(rem_path)) as rem_ds:
-        meta = rem_ds.meta.copy()
-        nodata_rem = rem_ds.nodata if rem_ds.nodata is not None else -9999.0
-
-    meta.update(
-        dtype="float32",
-        nodata=float(nodata_rem),
-        compress="lzw",
-        tiled=True,
-        blockxsize=512,
-        blockysize=512,
-        BIGTIFF="YES",
-    )
-
-    if out_path.exists():
-        out_path.unlink()
-
-    with (
-        rasterio.open(str(rem_path))       as rem_ds,
-        rasterio.open(str(catchments_path)) as cat_ds,
-        rasterio.open(str(out_path), "w", **meta) as out_ds,
-    ):
-        for _, window in rem_ds.block_windows(1):
-            rem_blk = rem_ds.read(1, window=window).astype(np.float32)
-            cat_blk = cat_ds.read(1, window=window)
-
-            result = rem_blk * (rem_blk >= 0).astype(np.float32) * (cat_blk > 0).astype(np.float32)
-            # preserve nodata where REM was nodata
-            result[rem_blk == nodata_rem] = nodata_rem
-            out_ds.write(result, window=window, indexes=1)
-
-    log.info("REM zeroed+masked → %s", out_path.name)
 
 
 def _polygonize_catchments(catchments_raster: Path, out_gpkg: Path) -> None:

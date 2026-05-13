@@ -6,7 +6,7 @@ Filter catchment polygons and split reaches, then attach flow attributes.
 
 Steps:
   1. Optionally clip to reaches whose HydroID prefix matches a node ID inside
-     the WBD8 boundary.  When the WBD file is absent all reaches are kept.
+     the AOI boundary file. When the boundary file is absent all reaches are kept.
   2. Drop isolated tiny outlet stubs: reaches with NextDownID == -1,
      no upstream branch, and LengthKm < 0.02 km.
   3. Drop sub-metre reaches (LengthKm < 0.001 km).
@@ -18,8 +18,12 @@ Inputs
 ------
 catchments_gpkg  : gw_catchments_reaches_{id}.gpkg  (polygonised from raster)
 flows_gpkg       : demDerived_reaches_split_{id}.gpkg
-huc_code         : 8-digit HUC string passed by the caller (e.g. "08060202")
-wbd8_clp_gpkg    : optional WBD8 boundary clip file
+aoi_code         : AOI identifier used to look up matching boundary rows
+                   (e.g. an 8-digit HUC for HUC-based AOIs, or any user-defined
+                   code that appears in the boundary attribute table).
+boundary_gpkg    : optional AOI boundary clip file. The first column whose name
+                   matches one of {HUC8, HUC_attribute, HUC, aoi_code, AOI, code}
+                   is used to filter rows by ``aoi_code``.
 
 Outputs
 -------
@@ -54,22 +58,29 @@ class FilterCatchments:
     flows_gpkg      : demDerived_reaches_split_{id}.gpkg
     out_catchments  : output filtered catchment polygons (.gpkg)
     out_flows       : output filtered reaches (.gpkg)
-    huc_code        : 8-digit HUC string supplied by the caller
-    wbd8_clp_gpkg   : optional WBD8 boundary; when absent all reaches are kept
+    aoi_code        : AOI identifier used to filter the boundary file when
+                      provided. Pass any user-defined code; HUC8 strings work
+                      unchanged.
+    boundary_gpkg   : optional AOI boundary file; when absent all reaches are kept.
+                      (Alias kept: ``wbd8_clp_gpkg``.)
+    min_length_km   : sub-metre reach cutoff (default 0.001 km).
+    min_tiny_stub_km: isolated-outlet-stub cutoff (default 0.02 km).
     """
 
     catchments_gpkg: Path
     flows_gpkg: Path
     out_catchments: Path
     out_flows: Path
-    huc_code: str
-    wbd8_clp_gpkg: Optional[Path] = None
+    aoi_code: str = ""
+    boundary_gpkg: Optional[Path] = None
+    min_length_km: float = _MIN_LENGTH_KM
+    min_tiny_stub_km: float = _MIN_LENGTH_TINY_KM
 
     def __post_init__(self):
         for attr in ("catchments_gpkg", "flows_gpkg", "out_catchments", "out_flows"):
             setattr(self, attr, Path(getattr(self, attr)))
-        if self.wbd8_clp_gpkg is not None:
-            self.wbd8_clp_gpkg = Path(self.wbd8_clp_gpkg)
+        if self.boundary_gpkg is not None:
+            self.boundary_gpkg = Path(self.boundary_gpkg)
         self.out_catchments.parent.mkdir(parents=True, exist_ok=True)
 
     def run(self) -> tuple[Path, Path]:
@@ -88,14 +99,14 @@ class FilterCatchments:
         catchments = gpd.read_file(str(self.catchments_gpkg), engine="fiona")
         flows      = gpd.read_file(str(self.flows_gpkg),      engine="fiona")
 
-        flows = _filter_by_huc(flows, self.wbd8_clp_gpkg, self.huc_code)
-        flows = _drop_tiny_outlet_stubs(flows)
-        flows = flows[flows["LengthKm"] > _MIN_LENGTH_KM].copy()
+        flows = _filter_by_aoi(flows, self.boundary_gpkg, self.aoi_code)
+        flows = _drop_tiny_outlet_stubs(flows, self.min_tiny_stub_km)
+        flows = flows[flows["LengthKm"] > self.min_length_km].copy()
         log.info("FilterCatchments: %d reaches after length filter", len(flows))
 
         if len(flows) == 0:
             raise NoFlowlinesError(
-                f"No flowlines remain after filtering for HUC {self.huc_code}"
+                f"No flowlines remain after filtering for AOI {self.aoi_code!r}"
             )
 
         # join filtered reaches onto catchment polygons
@@ -113,7 +124,7 @@ class FilterCatchments:
 
         if out_catchments.empty:
             raise NoFlowlinesError(
-                f"No catchments remain after join for HUC {self.huc_code}"
+                f"No catchments remain after join for AOI {self.aoi_code!r}"
             )
 
         log.info(
@@ -136,59 +147,66 @@ class FilterCatchments:
 
 
 class NoFlowlinesError(RuntimeError):
-    """Raised when no flowlines survive the HUC / length filters."""
+    """Raised when no flowlines survive the AOI / length filters."""
 
 
 # internal helpers
 
-def _filter_by_huc(
+_AOI_CODE_COLUMNS = ("HUC8", "HUC_attribute", "huc8", "HUC", "aoi_code", "AOI", "code")
+
+
+def _filter_by_aoi(
     flows: gpd.GeoDataFrame,
-    wbd_path: Optional[Path],
-    huc_code: str,
+    boundary_path: Optional[Path],
+    aoi_code: str,
 ) -> gpd.GeoDataFrame:
     """
-    Keep only reaches whose HydroID prefix matches a node ID inside the WBD8
-    boundary for this HUC.  The WBD file column holding HUC values is detected
-    automatically from common names.  When the file is absent or no matching
-    IDs are found, all reaches are returned unchanged.
+    Keep only reaches whose HydroID prefix matches a node ID inside the AOI
+    boundary file for this ``aoi_code``. The boundary file column holding the
+    code is auto-detected from common names (see ``_AOI_CODE_COLUMNS``). When
+    the file is missing, the column is missing, or no rows match, all reaches
+    are returned unchanged.
     """
-    if wbd_path is None or not wbd_path.exists():
-        log.debug("FilterCatchments: no WBD — keeping all %d reaches", len(flows))
+    if boundary_path is None or not boundary_path.exists():
+        log.debug("FilterCatchments: no boundary file — keeping all %d reaches", len(flows))
+        return flows.copy()
+    if not aoi_code:
+        log.debug("FilterCatchments: no aoi_code — keeping all reaches")
         return flows.copy()
 
-    wbd = gpd.read_file(str(wbd_path), engine="fiona")
+    boundary = gpd.read_file(str(boundary_path), engine="fiona")
 
-    huc_col = next(
-        (c for c in ("HUC8", "HUC_attribute", "huc8", "HUC") if c in wbd.columns),
-        None,
-    )
-    if huc_col is None:
-        log.warning("FilterCatchments: WBD has no recognised HUC column — keeping all reaches")
+    code_col = next((c for c in _AOI_CODE_COLUMNS if c in boundary.columns), None)
+    if code_col is None:
+        log.warning("FilterCatchments: boundary file has no recognised code column — keeping all reaches")
         return flows.copy()
 
-    if "HydroID" not in wbd.columns:
-        log.debug("FilterCatchments: WBD has no HydroID column — keeping all reaches")
+    if "HydroID" not in boundary.columns:
+        log.debug("FilterCatchments: boundary file has no HydroID column — keeping all reaches")
         return flows.copy()
 
     select_ids = tuple(
         str(int(v))
-        for v in wbd.loc[wbd[huc_col].astype(str).str.contains(huc_code), "HydroID"]
+        for v in boundary.loc[boundary[code_col].astype(str).str.contains(aoi_code), "HydroID"]
     )
     if not select_ids:
-        log.debug("FilterCatchments: WBD HUC filter produced no IDs — keeping all reaches")
+        log.debug("FilterCatchments: AOI filter produced no IDs — keeping all reaches")
         return flows.copy()
 
     mask = flows["HydroID"].astype(str).str.startswith(select_ids)
     result = flows[mask].copy()
-    log.debug("FilterCatchments: HUC filter kept %d / %d reaches", len(result), len(flows))
+    log.debug("FilterCatchments: AOI filter kept %d / %d reaches", len(result), len(flows))
     return result
 
 
-def _drop_tiny_outlet_stubs(flows: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
+def _drop_tiny_outlet_stubs(
+    flows: gpd.GeoDataFrame,
+    min_tiny_km: float = _MIN_LENGTH_TINY_KM,
+) -> gpd.GeoDataFrame:
     """
     Remove reaches that drain to nothing (NextDownID == -1), have no upstream
-    branch, and are shorter than _MIN_LENGTH_TINY_KM km.  These are isolated
-    stub artifacts at the network outlet.
+    branch, and are shorter than ``min_tiny_km``. These are isolated stub
+    artifacts at the network outlet.
     """
     if "NextDownID" not in flows.columns or "LengthKm" not in flows.columns:
         return flows
@@ -201,7 +219,7 @@ def _drop_tiny_outlet_stubs(flows: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
     drop_mask = (
         (next_dn_ids == -1)
         & (~hydro_ids.isin(referenced_as_downstream))
-        & (flows["LengthKm"] < _MIN_LENGTH_TINY_KM)
+        & (flows["LengthKm"] < min_tiny_km)
     )
     n_dropped = int(drop_mask.sum())
     if n_dropped:
