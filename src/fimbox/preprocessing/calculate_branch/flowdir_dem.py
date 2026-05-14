@@ -10,17 +10,17 @@ import numpy as np
 
 log = logging.getLogger(__name__)
 
-# WBT d8_pointer direction → (row_offset, col_offset)
+# WBT d8_pointer direction --> (row_offset, col_offset)
 # Diagonal directions have distance factor sqrt(2); cardinal = 1.
 _D8_OFFSETS = {
-    1:   (0,  1,  1.0),    # E
-    2:   (1,  1,  1.41421356),  # SE
-    4:   (1,  0,  1.0),    # S
-    8:   (1, -1,  1.41421356),  # SW
-    16:  (0, -1,  1.0),    # W
-    32:  (-1, -1, 1.41421356),  # NW
-    64:  (-1,  0,  1.0),   # N
-    128: (-1,  1,  1.41421356),  # NE
+    1: (0, 1, 1.0),  # E
+    2: (1, 1, 1.41421356),  # SE
+    4: (1, 0, 1.0),  # S
+    8: (1, -1, 1.41421356),  # SW
+    16: (0, -1, 1.0),  # W
+    32: (-1, -1, 1.41421356),  # NW
+    64: (-1, 0, 1.0),  # N
+    128: (-1, 1, 1.41421356),  # NE
 }
 
 
@@ -55,7 +55,7 @@ class FlowdirDEM:
             if wbt_dir:
                 wbt.set_whitebox_dir(wbt_dir)
             wbt.d8_pointer(str(self.dem), str(self.out_path))
-            log.info("D8 flow direction written → %s", self.out_path.name)
+            log.info("D8 flow direction written --> %s", self.out_path.name)
             return self.out_path
         except Exception:
             log.exception("D8 flow direction FAILED: dem=%s", self.dem)
@@ -107,14 +107,19 @@ class D8SlopeDEM:
         slope = _compute_d8_slope(elev, d8, res, nodata, self.slope_min)
 
         profile.update(
-            dtype="float32", nodata=nodata,
-            compress="lzw", tiled=True, blockxsize=512, blockysize=512, BIGTIFF="YES",
+            dtype="float32",
+            nodata=nodata,
+            compress="lzw",
+            tiled=True,
+            blockxsize=512,
+            blockysize=512,
+            BIGTIFF="YES",
         )
         self.out_path.parent.mkdir(parents=True, exist_ok=True)
         with rasterio.open(str(self.out_path), "w", **profile) as dst:
             dst.write(slope.astype(np.float32), 1)
 
-        log.info("D8 slopes written → %s", self.out_path.name)
+        log.info("D8 slopes written --> %s", self.out_path.name)
         return self.out_path
 
 
@@ -135,9 +140,7 @@ def _compute_d8_slope(
     r_all = np.arange(n) // cols
     c_all = np.arange(n) % cols
 
-    nodata_mask = (
-        flat_elev == nodata if nodata is not None else np.zeros(n, dtype=bool)
-    )
+    nodata_mask = flat_elev == nodata if nodata is not None else np.zeros(n, dtype=bool)
 
     for d8_val, (dr, dc, dist_factor) in _D8_OFFSETS.items():
         sel = flat_d8 == d8_val

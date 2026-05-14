@@ -11,7 +11,7 @@ Combines three steps:
      euclidean_distance / euclidean_allocation to produce per-cell zone
      proximity and allocation grids used by step 2.
 
-  2. adjust_thalweg_laterally 
+  2. adjust_thalweg_laterally
      For each thalweg cell, replaces its elevation with the lateral zonal
      minimum if that minimum is lower and within the elevation threshold.
 
@@ -49,16 +49,16 @@ import rasterio
 
 log = logging.getLogger(__name__)
 
-# WBT D8 direction 
+# WBT D8 direction
 _D8_OFFSETS: dict[int, tuple[int, int]] = {
-    1: (0, 1),    # E
-    2: (1, 1),    # SE
-    4: (1, 0),    # S
-    8: (1, -1),   # SW
+    1: (0, 1),  # E
+    2: (1, 1),  # SE
+    4: (1, 0),  # S
+    8: (1, -1),  # SW
     16: (0, -1),  # W
-    32: (-1, -1), # NW
+    32: (-1, -1),  # NW
     64: (-1, 0),  # N
-    128: (-1, 1), # NE
+    128: (-1, 1),  # NE
 }
 
 
@@ -90,8 +90,14 @@ class ThalwegAdjustment:
     wbt_path: Optional[str] = None
 
     def __post_init__(self):
-        for attr in ("dem", "stream_pixels", "flowdir",
-                     "out_thalweg_adj", "out_flowdir_streams", "out_thalweg_cond"):
+        for attr in (
+            "dem",
+            "stream_pixels",
+            "flowdir",
+            "out_thalweg_adj",
+            "out_flowdir_streams",
+            "out_thalweg_cond",
+        ):
             setattr(self, attr, Path(getattr(self, attr)))
 
     def run(self) -> dict[str, Path]:
@@ -101,15 +107,15 @@ class ThalwegAdjustment:
 
         # unique pixel IDs with WBT proximity / allocation
         pixel_ids, dist_grid, allo_grid = self._stream_pixel_zones()
-        log.info("  stream pixel zones → %s  %s", dist_grid.name, allo_grid.name)
+        log.info("  stream pixel zones --> %s  %s", dist_grid.name, allo_grid.name)
 
         # lateral thalweg adjustment
         self._adjust_thalweg(allo_grid, dist_grid)
-        log.info("  thalweg adjusted   → %s", self.out_thalweg_adj.name)
+        log.info("  thalweg adjusted   --> %s", self.out_thalweg_adj.name)
 
         # mask flowdir to stream cells with flow-condition DEM
         self._mask_and_condition()
-        log.info("  thalweg conditioned → %s", self.out_thalweg_cond.name)
+        log.info("  thalweg conditioned --> %s", self.out_thalweg_cond.name)
 
         return {
             "stream_pixel_ids": pixel_ids,
@@ -122,6 +128,7 @@ class ThalwegAdjustment:
 
     def _wbt(self):
         import whitebox
+
         wbt = whitebox.WhiteboxTools()
         wbt.set_verbose_mode(False)
         wbt_dir = self.wbt_path or os.environ.get("WBT_PATH")
@@ -149,14 +156,19 @@ class ThalwegAdjustment:
 
         stream_mask = data == 1
 
-        # Unique float64 values per stream pixel; background = 0 
+        # Unique float64 values per stream pixel; background = 0
         unique_vals = np.arange(data.size, dtype=np.float64).reshape(data.shape)
         pixel_values = np.where(stream_mask, unique_vals, 0.0)
 
         uid_profile = profile.copy()
         uid_profile.update(
-            dtype="float64", nodata=0.0,
-            compress="lzw", tiled=True, blockxsize=512, blockysize=512, BIGTIFF="YES",
+            dtype="float64",
+            nodata=0.0,
+            compress="lzw",
+            tiled=True,
+            blockxsize=512,
+            blockysize=512,
+            BIGTIFF="YES",
         )
         with rasterio.open(str(pixel_ids), "w", **uid_profile) as dst:
             dst.write(pixel_values, 1)
@@ -194,7 +206,13 @@ class ThalwegAdjustment:
             rasterio.open(str(self.stream_pixels)) as stream_ds,
         ):
             meta = elev_ds.meta.copy()
-            meta.update(tiled=True, compress="lzw", blockxsize=512, blockysize=512, BIGTIFF="YES")
+            meta.update(
+                tiled=True,
+                compress="lzw",
+                blockxsize=512,
+                blockysize=512,
+                BIGTIFF="YES",
+            )
             nodata = meta.get("nodata")
             tol = self.cost_distance_tolerance
             threshold = float(self.lateral_elevation_threshold)
@@ -239,13 +257,17 @@ class ThalwegAdjustment:
                         zones = allo_w.ravel()[thal_flat].astype(np.int64)
                         elevs = elev_w.ravel()[thal_flat]
                         valid_z = (zones >= 0) & (zones < lut.size)
-                        zone_mins = np.where(valid_z, lut[np.minimum(zones, lut.size - 1)], np.inf)
+                        zone_mins = np.where(
+                            valid_z, lut[np.minimum(zones, lut.size - 1)], np.inf
+                        )
                         diff = elevs - zone_mins
                         should_update = (zone_mins < elevs) & (diff <= threshold)
 
                         result_flat = result.ravel()
                         thal_indices = np.where(thal_flat)[0]
-                        result_flat[thal_indices[should_update]] = zone_mins[should_update]
+                        result_flat[thal_indices[should_update]] = zone_mins[
+                            should_update
+                        ]
                         result = result_flat.reshape(elev_w.shape)
 
                     out_ds.write(result.astype(np.float32), window=window, indexes=1)
@@ -276,8 +298,13 @@ class ThalwegAdjustment:
 
         fd_profile = rasterio.open(str(self.flowdir)).profile.copy()
         fd_profile.update(
-            dtype="int32", nodata=0,
-            compress="lzw", tiled=True, blockxsize=512, blockysize=512, BIGTIFF="YES",
+            dtype="int32",
+            nodata=0,
+            compress="lzw",
+            tiled=True,
+            blockxsize=512,
+            blockysize=512,
+            BIGTIFF="YES",
         )
         with rasterio.open(str(self.out_flowdir_streams), "w", **fd_profile) as dst:
             dst.write(d8_streams.astype(np.int32), 1)
@@ -287,7 +314,11 @@ class ThalwegAdjustment:
 
         profile.update(
             dtype="float32",
-            compress="lzw", tiled=True, blockxsize=512, blockysize=512, BIGTIFF="YES",
+            compress="lzw",
+            tiled=True,
+            blockxsize=512,
+            blockysize=512,
+            BIGTIFF="YES",
         )
         with rasterio.open(str(self.out_thalweg_cond), "w", **profile) as dst:
             dst.write(elev_cond.astype(np.float32), 1)
@@ -304,8 +335,11 @@ def _recompress_lzw(path: Path) -> None:
         with rasterio.open(str(path)) as src:
             profile = src.profile.copy()
             profile.update(
-                compress="lzw", tiled=True,
-                blockxsize=512, blockysize=512, BIGTIFF="YES",
+                compress="lzw",
+                tiled=True,
+                blockxsize=512,
+                blockysize=512,
+                BIGTIFF="YES",
             )
             data = src.read(1)
         with rasterio.open(str(tmp), "w", **profile) as dst:

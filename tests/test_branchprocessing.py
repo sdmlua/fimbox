@@ -7,6 +7,7 @@ Run order:
   3. test_create_hand        — full HAND generation (flow accum → split reaches)
 """
 
+import logging
 from pathlib import Path
 
 from fimbox import (
@@ -14,6 +15,8 @@ from fimbox import (
     BranchZero,
     CreateHAND,
 )
+
+log = logging.getLogger(__name__)
 
 # imports used only by individual component tests below
 # from fimbox import (
@@ -26,90 +29,100 @@ from fimbox import (
 # AOI parameters — point this at any user-supplied AOI working directory.
 # aoi_code is recorded on every hydroTable row; a generic string is fine
 # (HUC IDs work unchanged for legacy datasets).
-OUT_DIR  = Path("/Users/Supath/Downloads/SDML/FIMBOX/out/HUC08060202")
+OUT_DIR = Path("/Users/Supath/Downloads/SDML/FIMBOX/out/HUC08060202")
 AOI_CODE = "08060202"
 
 # Tunable CreateHAND parameters — change here to play with the pipeline without
 # editing the call site below. All have sensible defaults in CreateHAND itself.
 PARAMS_CREATE_HAND = dict(
     # geometry / topology
-    cost_distance_tolerance     = 50.0,     # m, lateral cost distance
-    lateral_elevation_threshold = 3,        # m, lateral thalweg drop cap
-    max_split_distance_m        = 2000.0,   # m, split-reach max length
-    slope_min                   = 0.0001,   # rise/run floor
-    lakes_buffer_dist_m         = 100.0,    # m, lake-boundary buffer
+    cost_distance_tolerance=50.0,  # m, lateral cost distance
+    lateral_elevation_threshold=3,  # m, lateral thalweg drop cap
+    max_split_distance_m=2000.0,  # m, split-reach max length
+    slope_min=0.0001,  # rise/run floor
+    lakes_buffer_dist_m=100.0,  # m, lake-boundary buffer
     # SRC / crosswalk
-    mannings_n                  = 0.06,     # channel roughness
-    stage_min_m                 = 0.0,      # SRC stage ladder start
-    stage_interval_m            = 0.3048,   # SRC stage step (1 ft)
-    stage_max_m                 = 25.2984,  # SRC stage ladder end (~83 ft)
-    min_catchment_area          = 0.25,     # km^2, short-reach replace threshold
-    min_stream_length           = 0.5,      # km, short-reach replace threshold
-    crosswalk_max_distance_m    = 100.0,    # m, midpoint-to-NWM-flowline cap
+    mannings_n=0.06,  # channel roughness
+    stage_min_m=0.0,  # SRC stage ladder start
+    stage_interval_m=0.3048,  # SRC stage step (1 ft)
+    stage_max_m=25.2984,  # SRC stage ladder end (~83 ft)
+    min_catchment_area=0.25,  # km^2, short-reach replace threshold
+    min_stream_length=0.5,  # km, short-reach replace threshold
+    crosswalk_max_distance_m=100.0,  # m, midpoint-to-NWM-flowline cap
 )
 
-DEM           = OUT_DIR / "dem.tif"
-STREAMS       = OUT_DIR / "nwm_subset_streams.gpkg"
-BOUNDARY_BUF  = OUT_DIR / "wbd_buffered.gpkg"
-CATCHMENTS    = OUT_DIR / "nwm_catchments_proj_subset.gpkg"
-HEADWATERS    = OUT_DIR / "nwm_headwater_points_subset.gpkg"
+DEM = OUT_DIR / "dem.tif"
+STREAMS = OUT_DIR / "nwm_subset_streams.gpkg"
+BOUNDARY_BUF = OUT_DIR / "wbd_buffered.gpkg"
+CATCHMENTS = OUT_DIR / "nwm_catchments_proj_subset.gpkg"
+HEADWATERS = OUT_DIR / "nwm_headwater_points_subset.gpkg"
 LEVELPATH_EXT = OUT_DIR / "nwm_subset_streams_levelPaths_extended.gpkg"
-BRIDGE_DIFF   = OUT_DIR / "bridge_elev_diff.tif"
-NLD_LEVEES    = OUT_DIR / "3d_nld_subset_levees_burned.gpkg"
+BRIDGE_DIFF = OUT_DIR / "bridge_elev_diff.tif"
+NLD_LEVEES = OUT_DIR / "3d_nld_subset_levees_burned.gpkg"
 
 # optional files
-WBD8_CLP      = OUT_DIR / "wbd8_clp.gpkg"
-LAKES         = OUT_DIR / "nwm_lakes_proj_subset.gpkg"
-LEVEE_AREAS   = OUT_DIR / "LeveeProtectedAreas_subset.gpkg"
-LEVEE_LP_CSV  = OUT_DIR / "levee_levelpaths.csv"
+WBD8_CLP = OUT_DIR / "wbd8_clp.gpkg"
+LAKES = OUT_DIR / "nwm_lakes_proj_subset.gpkg"
+LEVEE_AREAS = OUT_DIR / "LeveeProtectedAreas_subset.gpkg"
+LEVEE_LP_CSV = OUT_DIR / "levee_levelpaths.csv"
 
 # branch-zero derived paths
-BRANCH_DIR    = OUT_DIR / "branches" / "0"
-BRANCH_ID     = "0"
-DEM_BRANCH    = BRANCH_DIR / f"dem_{BRANCH_ID}.tif"
-FLOWDIR       = BRANCH_DIR / f"flowdir_d8_burned_filled_{BRANCH_ID}.tif"
-HW_RASTER     = BRANCH_DIR / f"headwaters_{BRANCH_ID}.tif"
-STREAM_BOOL   = BRANCH_DIR / f"flows_grid_boolean_{BRANCH_ID}.tif"
-DEM_BURNED    = BRANCH_DIR / f"dem_burned_{BRANCH_ID}.tif"
-DEM_FILLED    = BRANCH_DIR / f"dem_burned_filled_{BRANCH_ID}.tif"
+BRANCH_DIR = OUT_DIR / "branches" / "0"
+BRANCH_ID = "0"
+DEM_BRANCH = BRANCH_DIR / f"dem_{BRANCH_ID}.tif"
+FLOWDIR = BRANCH_DIR / f"flowdir_d8_burned_filled_{BRANCH_ID}.tif"
+HW_RASTER = BRANCH_DIR / f"headwaters_{BRANCH_ID}.tif"
+STREAM_BOOL = BRANCH_DIR / f"flows_grid_boolean_{BRANCH_ID}.tif"
+DEM_BURNED = BRANCH_DIR / f"dem_burned_{BRANCH_ID}.tif"
+DEM_FILLED = BRANCH_DIR / f"dem_burned_filled_{BRANCH_ID}.tif"
 
 # REM + filtered catchment paths
-REM           = BRANCH_DIR / f"rem_{BRANCH_ID}.tif"
-REM_ZEROED    = BRANCH_DIR / f"rem_zeroed_masked_{BRANCH_ID}.tif"
-CATCH_POLY    = BRANCH_DIR / f"gw_catchments_reaches_{BRANCH_ID}.gpkg"
-FILT_CATCH    = BRANCH_DIR / f"gw_catchments_reaches_filtered_addedAttributes_{BRANCH_ID}.gpkg"
-FILT_FLOWS    = BRANCH_DIR / f"demDerived_reaches_split_filtered_{BRANCH_ID}.gpkg"
-FILT_TIF      = BRANCH_DIR / f"gw_catchments_reaches_filtered_addedAttributes_{BRANCH_ID}.tif"
+REM = BRANCH_DIR / f"rem_{BRANCH_ID}.tif"
+REM_ZEROED = BRANCH_DIR / f"rem_zeroed_masked_{BRANCH_ID}.tif"
+CATCH_POLY = BRANCH_DIR / f"gw_catchments_reaches_{BRANCH_ID}.gpkg"
+FILT_CATCH = (
+    BRANCH_DIR / f"gw_catchments_reaches_filtered_addedAttributes_{BRANCH_ID}.gpkg"
+)
+FILT_FLOWS = BRANCH_DIR / f"demDerived_reaches_split_filtered_{BRANCH_ID}.gpkg"
+FILT_TIF = (
+    BRANCH_DIR / f"gw_catchments_reaches_filtered_addedAttributes_{BRANCH_ID}.tif"
+)
 
 # SRC / crosswalk / hydroTable outputs (steps 16-21)
 SLOPES_MASKED = BRANCH_DIR / f"slopes_d8_dem_meters_masked_{BRANCH_ID}.tif"
-STAGE_TXT     = BRANCH_DIR / f"stage_{BRANCH_ID}.txt"
+STAGE_TXT = BRANCH_DIR / f"stage_{BRANCH_ID}.txt"
 CATCHLIST_TXT = BRANCH_DIR / f"catch_list_{BRANCH_ID}.txt"
-SRC_BASE_CSV  = BRANCH_DIR / f"src_base_{BRANCH_ID}.csv"
-XWALK_CATCH   = BRANCH_DIR / f"gw_catchments_reaches_filtered_addedAttributes_crosswalked_{BRANCH_ID}.gpkg"
-XWALK_FLOWS   = BRANCH_DIR / f"demDerived_reaches_split_filtered_addedAttributes_crosswalked_{BRANCH_ID}.gpkg"
-SRC_FULL_CSV  = BRANCH_DIR / f"src_full_crosswalked_{BRANCH_ID}.csv"
-SRC_JSON      = BRANCH_DIR / f"src_{BRANCH_ID}.json"
-XWALK_CSV     = BRANCH_DIR / f"crosswalk_table_{BRANCH_ID}.csv"
-HYDRO_TABLE   = BRANCH_DIR / f"hydroTable_{BRANCH_ID}.csv"
-ROADS_CSV     = BRANCH_DIR / f"osm_roads_fimpact_{BRANCH_ID}.csv"
-BRIDGES_GPKG  = BRANCH_DIR / f"osm_bridge_centroids_{BRANCH_ID}.gpkg"
+SRC_BASE_CSV = BRANCH_DIR / f"src_base_{BRANCH_ID}.csv"
+XWALK_CATCH = (
+    BRANCH_DIR
+    / f"gw_catchments_reaches_filtered_addedAttributes_crosswalked_{BRANCH_ID}.gpkg"
+)
+XWALK_FLOWS = (
+    BRANCH_DIR
+    / f"demDerived_reaches_split_filtered_addedAttributes_crosswalked_{BRANCH_ID}.gpkg"
+)
+SRC_FULL_CSV = BRANCH_DIR / f"src_full_crosswalked_{BRANCH_ID}.csv"
+SRC_JSON = BRANCH_DIR / f"src_{BRANCH_ID}.json"
+XWALK_CSV = BRANCH_DIR / f"crosswalk_table_{BRANCH_ID}.csv"
+HYDRO_TABLE = BRANCH_DIR / f"hydroTable_{BRANCH_ID}.csv"
+ROADS_CSV = BRANCH_DIR / f"osm_roads_fimpact_{BRANCH_ID}.csv"
+BRIDGES_GPKG = BRANCH_DIR / f"osm_bridge_centroids_{BRANCH_ID}.gpkg"
 
 # HAND generation derived paths
-FLOWACCUM     = BRANCH_DIR / f"flowaccum_d8_burned_filled_{BRANCH_ID}.tif"
-STREAM_PIX    = BRANCH_DIR / f"demDerived_streamPixels_{BRANCH_ID}.tif"
-THALWEG_ADJ   = BRANCH_DIR / f"dem_lateral_thalweg_adj_{BRANCH_ID}.tif"
-FLOWDIR_STR   = BRANCH_DIR / f"flowdir_d8_burned_filled_flows_{BRANCH_ID}.tif"
-THALWEG_COND  = BRANCH_DIR / f"dem_thalwegCond_{BRANCH_ID}.tif"
-SLOPES_D8     = BRANCH_DIR / f"slopes_d8_dem_{BRANCH_ID}.tif"
-STREAM_ORDER  = BRANCH_DIR / f"streamOrder_{BRANCH_ID}.tif"
-SN_CATCH      = BRANCH_DIR / f"sn_catchments_reaches_{BRANCH_ID}.tif"
-DEM_REACHES   = BRANCH_DIR / f"demDerived_reaches_{BRANCH_ID}.gpkg"
+FLOWACCUM = BRANCH_DIR / f"flowaccum_d8_burned_filled_{BRANCH_ID}.tif"
+STREAM_PIX = BRANCH_DIR / f"demDerived_streamPixels_{BRANCH_ID}.tif"
+THALWEG_ADJ = BRANCH_DIR / f"dem_lateral_thalweg_adj_{BRANCH_ID}.tif"
+FLOWDIR_STR = BRANCH_DIR / f"flowdir_d8_burned_filled_flows_{BRANCH_ID}.tif"
+THALWEG_COND = BRANCH_DIR / f"dem_thalwegCond_{BRANCH_ID}.tif"
+SLOPES_D8 = BRANCH_DIR / f"slopes_d8_dem_{BRANCH_ID}.tif"
+STREAM_ORDER = BRANCH_DIR / f"streamOrder_{BRANCH_ID}.tif"
+SN_CATCH = BRANCH_DIR / f"sn_catchments_reaches_{BRANCH_ID}.tif"
+DEM_REACHES = BRANCH_DIR / f"demDerived_reaches_{BRANCH_ID}.gpkg"
 SPLIT_REACHES = BRANCH_DIR / f"demDerived_reaches_split_{BRANCH_ID}.gpkg"
-SPLIT_PTS     = BRANCH_DIR / f"demDerived_reaches_split_points_{BRANCH_ID}.gpkg"
-GW_REACHES    = BRANCH_DIR / f"gw_catchments_reaches_{BRANCH_ID}.tif"
-PIXEL_PTS     = BRANCH_DIR / f"flows_points_pixels_{BRANCH_ID}.gpkg"
-GW_PIXELS     = BRANCH_DIR / f"gw_catchments_pixels_{BRANCH_ID}.tif"
+SPLIT_PTS = BRANCH_DIR / f"demDerived_reaches_split_points_{BRANCH_ID}.gpkg"
+GW_REACHES = BRANCH_DIR / f"gw_catchments_reaches_{BRANCH_ID}.tif"
+PIXEL_PTS = BRANCH_DIR / f"flows_points_pixels_{BRANCH_ID}.gpkg"
+GW_PIXELS = BRANCH_DIR / f"gw_catchments_pixels_{BRANCH_ID}.tif"
 
 
 def test_branch_derivation():
@@ -122,15 +135,15 @@ def test_branch_derivation():
     ).run()
 
     assert result.dissolved_levelpaths.exists(), "dissolved levelpaths not written"
-    assert result.branch_polygons.exists(),      "branch polygons not written"
-    assert result.branch_list.exists(),          "branch list file not written"
-    assert len(result.branch_dataframe) > 0,     "branch dataframe is empty"
+    assert result.branch_polygons.exists(), "branch polygons not written"
+    assert result.branch_list.exists(), "branch list file not written"
+    assert len(result.branch_dataframe) > 0, "branch dataframe is empty"
 
-    print(f"\nLevel paths    : {result.levelpaths}")
-    print(f"Dissolved      : {result.dissolved_levelpaths}")
-    print(f"Branch polygons: {result.branch_polygons}")
-    print(f"Branch list    : {result.branch_list}")
-    print(f"Branch count   : {len(result.branch_dataframe)}")
+    log.info(f"Level paths     --> {result.levelpaths}")
+    log.info(f"Dissolved       --> {result.dissolved_levelpaths}")
+    log.info(f"Branch polygons --> {result.branch_polygons}")
+    log.info(f"Branch list     --> {result.branch_list}")
+    log.info(f"Branch count: {len(result.branch_dataframe)}")
 
 
 def test_branch_zero_full():
@@ -149,15 +162,15 @@ def test_branch_zero_full():
         branch_zero_id=BRANCH_ID,
     ).run()
 
-    assert outputs["dem"].exists(),               "clipped DEM not written"
+    assert outputs["dem"].exists(), "clipped DEM not written"
     assert outputs["flows_grid_boolean"].exists(), "stream boolean grid not written"
-    assert outputs["dem_burned"].exists(),         "AGREE DEM not written"
-    assert outputs["dem_burned_filled"].exists(),  "pit-filled DEM not written"
-    assert outputs["flowdir_d8"].exists(),         "D8 flow direction not written"
+    assert outputs["dem_burned"].exists(), "AGREE DEM not written"
+    assert outputs["dem_burned_filled"].exists(), "pit-filled DEM not written"
+    assert outputs["flowdir_d8"].exists(), "D8 flow direction not written"
 
-    print("\nBranch-zero outputs:")
+    log.info(f"Branch-zero outputs ({len(outputs)} files):")
     for k, v in outputs.items():
-        print(f"  {k:35s}: {v.name}")
+        log.info(f"  {k:35s} --> {v.name}")
 
 
 def test_create_hand():
@@ -167,8 +180,10 @@ def test_create_hand():
     Tunable parameters live in ``PARAMS_CREATE_HAND`` at the top of this file.
     Requires: test_branch_zero_full outputs to exist.
     """
-    assert DEM_BRANCH.exists(), f"Run test_branch_zero_full first — {DEM_BRANCH} missing"
-    assert FLOWDIR.exists(),    f"flowdir missing — run test_branch_zero_full first"
+    assert (
+        DEM_BRANCH.exists()
+    ), f"Run test_branch_zero_full first — {DEM_BRANCH} missing"
+    assert FLOWDIR.exists(), f"flowdir missing — run test_branch_zero_full first"
 
     outputs = CreateHAND(
         aoi_dir=OUT_DIR,
@@ -182,58 +197,70 @@ def test_create_hand():
         **PARAMS_CREATE_HAND,
     ).run()
 
-    print(f"\nCreateHAND outputs ({len(outputs)} files):")
+    log.info(f"CreateHAND outputs ({len(outputs)} files):")
     for k, v in outputs.items():
-        print(f"  {k:35s}: {v.name}  {'ok' if v.exists() else 'MISSING'}")
+        log.info(f"  {k:35s} --> {v.name}  {'ok' if v.exists() else 'MISSING'}")
 
     # HAND base outputs
-    assert THALWEG_COND.exists(),  "dem_thalwegCond not produced"
-    assert SLOPES_D8.exists(),     "slopes_d8 not produced"
-    assert DEM_REACHES.exists(),   "demDerived_reaches not produced"
+    assert THALWEG_COND.exists(), "dem_thalwegCond not produced"
+    assert SLOPES_D8.exists(), "slopes_d8 not produced"
+    assert DEM_REACHES.exists(), "demDerived_reaches not produced"
     assert SPLIT_REACHES.exists(), "demDerived_reaches_split not produced"
-    assert SPLIT_PTS.exists(),     "demDerived_reaches_split_points not produced"
-    assert GW_REACHES.exists(),    "gw_catchments_reaches not produced"
-    assert PIXEL_PTS.exists(),     "flows_points_pixels not produced"
-    assert GW_PIXELS.exists(),     "gw_catchments_pixels not produced"
-    assert REM.exists(),           "rem not produced"
-    assert REM_ZEROED.exists(),    "rem_zeroed_masked not produced"
-    assert CATCH_POLY.exists(),    "gw_catchments_reaches gpkg not produced"
-    assert FILT_CATCH.exists(),    "filtered catchments not produced"
-    assert FILT_FLOWS.exists(),    "filtered flows not produced"
-    assert FILT_TIF.exists(),      "filtered catchments tif not produced"
+    assert SPLIT_PTS.exists(), "demDerived_reaches_split_points not produced"
+    assert GW_REACHES.exists(), "gw_catchments_reaches not produced"
+    assert PIXEL_PTS.exists(), "flows_points_pixels not produced"
+    assert GW_PIXELS.exists(), "gw_catchments_pixels not produced"
+    assert REM.exists(), "rem not produced"
+    assert REM_ZEROED.exists(), "rem_zeroed_masked not produced"
+    assert CATCH_POLY.exists(), "gw_catchments_reaches gpkg not produced"
+    assert FILT_CATCH.exists(), "filtered catchments not produced"
+    assert FILT_FLOWS.exists(), "filtered flows not produced"
+    assert FILT_TIF.exists(), "filtered catchments tif not produced"
 
     # SRC, crosswalk with hydroTable
     assert SLOPES_MASKED.exists(), "slopes mask not produced"
-    assert STAGE_TXT.exists(),     "stage list not produced"
+    assert STAGE_TXT.exists(), "stage list not produced"
     assert CATCHLIST_TXT.exists(), "catchlist file not produced"
-    assert SRC_BASE_CSV.exists(),  "SRC base CSV not produced"
-    assert XWALK_CATCH.exists(),   "crosswalked catchments not produced"
-    assert XWALK_FLOWS.exists(),   "crosswalked flows not produced"
-    assert SRC_FULL_CSV.exists(),  "SRC full CSV not produced"
-    assert SRC_JSON.exists(),      "SRC JSON not produced"
-    assert XWALK_CSV.exists(),     "crosswalk table not produced"
-    assert HYDRO_TABLE.exists(),   "hydroTable not produced"
+    assert SRC_BASE_CSV.exists(), "SRC base CSV not produced"
+    assert XWALK_CATCH.exists(), "crosswalked catchments not produced"
+    assert XWALK_FLOWS.exists(), "crosswalked flows not produced"
+    assert SRC_FULL_CSV.exists(), "SRC full CSV not produced"
+    assert SRC_JSON.exists(), "SRC JSON not produced"
+    assert XWALK_CSV.exists(), "crosswalk table not produced"
+    assert HYDRO_TABLE.exists(), "hydroTable not produced"
 
     # hydroTable sanity: required columns + monotonic stage→discharge per HydroID
     import pandas as pd
+
     # Read aoi_code/HydroID/feature_id as strings — pandas otherwise infers them
     # numeric and strips leading zeros that legitimately exist in HUC-style codes.
     ht = pd.read_csv(
         HYDRO_TABLE,
         dtype={"aoi_code": str, "HydroID": str, "feature_id": str},
     )
-    required = {"HydroID", "feature_id", "aoi_code", "stage", "discharge_cms",
-                "ManningN", "SLOPE", "LENGTHKM"}
+    required = {
+        "HydroID",
+        "feature_id",
+        "aoi_code",
+        "stage",
+        "discharge_cms",
+        "ManningN",
+        "SLOPE",
+        "LENGTHKM",
+    }
     missing = required - set(ht.columns)
     assert not missing, f"hydroTable missing columns: {missing}"
     assert (ht["stage"] >= 0).all(), "negative stage values in hydroTable"
     assert (ht["discharge_cms"] >= 0).all(), "negative discharge in hydroTable"
     aoi_unique = set(ht["aoi_code"].unique())
-    assert AOI_CODE in aoi_unique or any(AOI_CODE in v for v in aoi_unique), \
-        f"aoi_code column {aoi_unique} does not contain test AOI_CODE={AOI_CODE!r}"
-    print(f"hydroTable rows: {len(ht)}, HydroIDs: {ht['HydroID'].nunique()}, "
-          f"feature_ids: {ht['feature_id'].nunique()}, "
-          f"aoi_code: {sorted(aoi_unique)}")
+    assert AOI_CODE in aoi_unique or any(
+        AOI_CODE in v for v in aoi_unique
+    ), f"aoi_code column {aoi_unique} does not contain test AOI_CODE={AOI_CODE!r}"
+    log.info(
+        f"hydroTable rows: {len(ht)}, HydroIDs: {ht['HydroID'].nunique()}, "
+        f"feature_ids: {ht['feature_id'].nunique()}, "
+        f"aoi_code: {sorted(aoi_unique)}"
+    )
 
 
 # individual component tests — uncomment to run a single step in isolation

@@ -23,6 +23,7 @@ Download bridge features from OpenStreetMap (OSM) within a user-provided boundar
 - User can pass out_dir, out_name (or ourfile), out_layer (or ourlayer); defaults used otherwise
 """
 
+import logging
 import math
 import random
 import time
@@ -38,6 +39,8 @@ import pandas as pd
 import requests
 from networkx import Graph, connected_components
 from shapely.geometry import LineString, Polygon, MultiPolygon, box
+
+log = logging.getLogger(__name__)
 from shapely.ops import unary_union
 from tqdm import tqdm
 
@@ -223,7 +226,7 @@ class DownloadOSMRoads(_OSMBoundaryIO):
             f"Overpass query failed after {self.max_attempts} attempts: {last_exc}"
         ) from last_exc
 
-    # JSON → GDF
+    # JSON --> GDF
     @staticmethod
     def _json_to_lines_gdf(osm_json: dict) -> gpd.GeoDataFrame:
         elems = osm_json.get("elements", [])
@@ -306,17 +309,17 @@ class DownloadOSMRoads(_OSMBoundaryIO):
         geom4326 = self._boundary_to_geom4326(boundary, boundary_layer, boundary_crs)
         minx, miny, maxx, maxy = geom4326.bounds
         tiles = self._make_tiles(minx, miny, maxx, maxy)
-        print(
-            f"OSM roads: {len(tiles)} tile(s), {self._n_workers(len(tiles))} worker(s)."
+        log.info(
+            f"OSM roads: {len(tiles)} tile(s), {self._n_workers(len(tiles))} worker(s)"
         )
 
         gdf = self._fetch_all(tiles)
         if gdf.empty:
-            print("No road features returned.")
+            log.warning("No OSM road features returned.")
             return gpd.GeoDataFrame(geometry=[], crs=f"EPSG:{self.out_sr}")
 
         gdf = gdf.drop_duplicates(subset=["osmid"]).reset_index(drop=True)
-        print(f"  {len(gdf)} unique segments after dedup.")
+        log.info(f"OSM roads: {len(gdf)} unique segments after dedup")
 
         if clip_to_boundary:
             gdf = gpd.clip(
@@ -324,7 +327,7 @@ class DownloadOSMRoads(_OSMBoundaryIO):
                 gpd.GeoDataFrame(geometry=[geom4326], crs="EPSG:4326"),
                 keep_geom_type=True,
             )
-            print(f"  {len(gdf)} segments after clipping.")
+            log.info(f"OSM roads: {len(gdf)} segments after clipping")
 
         return gdf.to_crs(epsg=self.out_sr)
 
@@ -359,7 +362,7 @@ class DownloadOSMRoads(_OSMBoundaryIO):
             clip_to_boundary=True,
         )
         out_path = self._write_gpkg(gdf, out_dir, out_name, out_layer)
-        print(f"Saved: {out_path}")
+        log.info(f"{out_layer} --> {out_path.name}")
         return gdf
 
 

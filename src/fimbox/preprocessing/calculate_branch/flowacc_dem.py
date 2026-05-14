@@ -26,17 +26,17 @@ import numpy as np
 
 log = logging.getLogger(__name__)
 
-# WBT D8 pointer encoding: powers-of-2 → (row_offset, col_offset)
+# WBT D8 pointer encoding: powers-of-2 --> (row_offset, col_offset)
 # 64=N  128=NE  1=E  2=SE  4=S  8=SW  16=W  32=NW
 _D8_OFFSETS: dict[int, tuple[int, int]] = {
-    1:   ( 0,  1),
-    2:   ( 1,  1),
-    4:   ( 1,  0),
-    8:   ( 1, -1),
-    16:  ( 0, -1),
-    32:  (-1, -1),
-    64:  (-1,  0),
-    128: (-1,  1),
+    1: (0, 1),
+    2: (1, 1),
+    4: (1, 0),
+    8: (1, -1),
+    16: (0, -1),
+    32: (-1, -1),
+    64: (-1, 0),
+    128: (-1, 1),
 }
 
 
@@ -71,13 +71,13 @@ class FlowAccDEM:
     def run(self) -> tuple[Path, Path]:
         import rasterio
 
-        log.info("FlowAccDEM: reading D8 flow direction → %s", self.flowdir.name)
+        log.info("FlowAccDEM: reading D8 flow direction --> %s", self.flowdir.name)
         with rasterio.open(str(self.flowdir)) as src:
             profile = src.profile.copy()
             d8_raw = src.read(1)
             nodata_d8 = src.nodata
 
-        log.info("FlowAccDEM: reading headwaters raster → %s", self.headwaters.name)
+        log.info("FlowAccDEM: reading headwaters raster --> %s", self.headwaters.name)
         with rasterio.open(str(self.headwaters)) as src:
             hw_raw = src.read(1).astype(np.float32)
             nodata_hw = src.nodata
@@ -85,7 +85,7 @@ class FlowAccDEM:
         # zero out nodata cells so they don't contribute
         if nodata_hw is not None:
             hw_raw[hw_raw == nodata_hw] = 0.0
-        # treat WBT nodata D8 cells as outlets (code = 0 → no downstream)
+        # treat WBT nodata D8 cells as outlets (code = 0 --> no downstream)
         d8 = d8_raw.copy()
         if nodata_d8 is not None:
             d8[d8_raw == nodata_d8] = 0
@@ -109,14 +109,17 @@ class FlowAccDEM:
         fa_prof.update(dtype="float32", nodata=None, **_lzw_profile)
         with rasterio.open(str(self.out_flowaccum), "w", **fa_prof) as dst:
             dst.write(accum.astype(np.float32), 1)
-        log.info("FlowAccDEM: flowaccum → %s", self.out_flowaccum.name)
+        log.info("FlowAccDEM: flowaccum --> %s", self.out_flowaccum.name)
 
         sp_prof = profile.copy()
         sp_prof.update(dtype="float32", nodata=-9999.0, **_lzw_profile)
         self.out_stream_pixels.parent.mkdir(parents=True, exist_ok=True)
         with rasterio.open(str(self.out_stream_pixels), "w", **sp_prof) as dst:
             dst.write(stream_pix, 1)
-        log.info("FlowAccDEM: stream pixels → %s  (nodata=-9999)", self.out_stream_pixels.name)
+        log.info(
+            "FlowAccDEM: stream pixels --> %s  (nodata=-9999)",
+            self.out_stream_pixels.name,
+        )
 
         return self.out_flowaccum, self.out_stream_pixels
 

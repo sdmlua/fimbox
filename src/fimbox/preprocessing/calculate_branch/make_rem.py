@@ -17,7 +17,7 @@ stream_pixels        : demDerived_streamPixels_{id}.tif   (1 = thalweg)
 
 Outputs
 -------
-rem_{id}.tif  
+rem_{id}.tif
 """
 
 from __future__ import annotations
@@ -51,13 +51,18 @@ class MakeREM:
     out_rem: Path
 
     def __post_init__(self):
-        for attr in ("dem_thalweg_cond", "gw_catchments_pixels", "stream_pixels", "out_rem"):
+        for attr in (
+            "dem_thalweg_cond",
+            "gw_catchments_pixels",
+            "stream_pixels",
+            "out_rem",
+        ):
             setattr(self, attr, Path(getattr(self, attr)))
         self.out_rem.parent.mkdir(parents=True, exist_ok=True)
 
     def run(self) -> Path:
         if self.out_rem.exists() and self.out_rem.stat().st_size > 0:
-            log.info("MakeREM: output exists, skipping → %s", self.out_rem.name)
+            log.info("MakeREM: output exists, skipping --> %s", self.out_rem.name)
             return self.out_rem
 
         log.info("MakeREM: building catchment-minimum dict (pass 1)")
@@ -68,7 +73,7 @@ class MakeREM:
         )
         log.info("MakeREM: %d catchment minima found", len(catchment_min))
 
-        log.info("MakeREM: computing REM (pass 2) → %s", self.out_rem.name)
+        log.info("MakeREM: computing REM (pass 2) --> %s", self.out_rem.name)
         _write_rem(
             self.dem_thalweg_cond,
             self.gw_catchments_pixels,
@@ -76,7 +81,7 @@ class MakeREM:
             self.out_rem,
         )
 
-        log.info("MakeREM: done → %s", self.out_rem.name)
+        log.info("MakeREM: done --> %s", self.out_rem.name)
         return self.out_rem
 
 
@@ -93,24 +98,24 @@ def _build_catchment_min(
     catchment_min: dict[int, float] = {}
 
     with (
-        rasterio.open(str(dem_path))        as dem_ds,
+        rasterio.open(str(dem_path)) as dem_ds,
         rasterio.open(str(catchments_path)) as cat_ds,
-        rasterio.open(str(thalweg_path))    as thal_ds,
+        rasterio.open(str(thalweg_path)) as thal_ds,
     ):
         nodata = dem_ds.nodata
 
         for _, window in dem_ds.block_windows(1):
-            dem_blk   = dem_ds.read(1,  window=window).ravel().astype(np.float32)
-            cat_blk   = cat_ds.read(1,  window=window).ravel().astype(np.int32)
-            thal_blk  = thal_ds.read(1, window=window).ravel()
+            dem_blk = dem_ds.read(1, window=window).ravel().astype(np.float32)
+            cat_blk = cat_ds.read(1, window=window).ravel().astype(np.int32)
+            thal_blk = thal_ds.read(1, window=window).ravel()
 
             # Only thalweg pixels contribute reference elevation (FIM rule).
             thal_mask = thal_blk == 1
             if not thal_mask.any():
                 continue
 
-            dem_t  = dem_blk[thal_mask]
-            cat_t  = cat_blk[thal_mask]
+            dem_t = dem_blk[thal_mask]
+            cat_t = cat_blk[thal_mask]
 
             # Skip nodata elevations
             if nodata is not None:
@@ -171,14 +176,14 @@ def _write_rem(
     valid_ids = np.zeros(max_id + 1, dtype=bool)
     for cid, cmin in catchment_min.items():
         if 0 <= cid <= max_id:
-            lut[cid]       = cmin
+            lut[cid] = cmin
             valid_ids[cid] = True
 
     if out_path.exists():
         out_path.unlink()
 
     with (
-        rasterio.open(str(dem_path))        as dem_ds,
+        rasterio.open(str(dem_path)) as dem_ds,
         rasterio.open(str(catchments_path)) as cat_ds,
         rasterio.open(str(out_path), "w", **meta) as out_ds,
     ):
@@ -190,10 +195,10 @@ def _write_rem(
 
             # Pixels with a known catchment ID and valid DEM value
             in_range = (cat_blk > 0) & (cat_blk <= max_id)
-            has_lut  = in_range & valid_ids[np.where(in_range, cat_blk, 0)]
-            dem_ok   = dem_blk != nodata
+            has_lut = in_range & valid_ids[np.where(in_range, cat_blk, 0)]
+            dem_ok = dem_blk != nodata
 
-            compute  = has_lut & dem_ok
+            compute = has_lut & dem_ok
             if compute.any():
                 rem_blk[compute] = dem_blk[compute] - lut[cat_blk[compute]]
 

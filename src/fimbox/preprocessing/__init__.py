@@ -28,13 +28,21 @@ from .calculate_branch import (
 )
 
 # 3D NLD levee rasterization, DEM burning, and levee-area masking
-from .calculate_branch import burn_levee_elevations, mask_levee_dem, rasterize_3d_levee_lines
+from .calculate_branch import (
+    burn_levee_elevations,
+    mask_levee_dem,
+    rasterize_3d_levee_lines,
+)
 
 # HAND components
 from .calculate_branch import CreateHAND
 from .calculate_branch import D8SlopeDEM
 from .calculate_branch import FlowAccDEM
-from .calculate_branch import GageCatchments, OutletBackpoolMitigate, stream_pixel_points
+from .calculate_branch import (
+    GageCatchments,
+    OutletBackpoolMitigate,
+    stream_pixel_points,
+)
 from .calculate_branch import MakeREM
 from .calculate_branch import FilterCatchments, NoFlowlinesError
 from .calculate_branch import StreamNetReaches
@@ -129,7 +137,7 @@ try:
 except ImportError:
     pass
 
-# huc_test 
+# huc_test
 # HUC ID format validation and lookup utilities
 try:
     from .huc_test import HUCChecker, HUCValidationError, HUCCheckResult

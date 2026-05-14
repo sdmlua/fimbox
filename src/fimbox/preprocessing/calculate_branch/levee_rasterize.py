@@ -79,7 +79,11 @@ def rasterize_3d_levee_lines(
         log.warning("  %d line segments skipped (no Z coordinates)", skipped_2d)
 
     burned_pixels = int((out != nodata).sum())
-    log.info("  levee elevation raster written → %s  (%d pixels)", Path(out_path).name, burned_pixels)
+    log.info(
+        "  levee elevation raster written --> %s  (%d pixels)",
+        Path(out_path).name,
+        burned_pixels,
+    )
     if burned_pixels == 0:
         log.warning("  levee raster has 0 valid pixels — check levee CRS and Z values")
 
@@ -95,7 +99,10 @@ def burn_levee_elevations(
 ) -> None:
     # raise DEM to levee elevation where levee raster has valid data
     log.info("Burning levee elevations into DEM: %s", Path(dem_path).name)
-    with rasterio.open(str(dem_path)) as dem, rasterio.open(str(levee_elev_raster)) as nld:
+    with (
+        rasterio.open(str(dem_path)) as dem,
+        rasterio.open(str(levee_elev_raster)) as nld,
+    ):
         dem_data = dem.read(1)
         nld_data = nld.read(1).astype(np.float32)
         nodata = float(nld.nodata) if nld.nodata is not None else -9999.0
@@ -105,7 +112,7 @@ def burn_levee_elevations(
         profile = dem.profile.copy()
     with rasterio.open(str(out_path), "w", **profile) as dst:
         dst.write(burned, 1)
-    log.info("  DEM burned → %s  (%d cells raised)", Path(out_path).name, changed)
+    log.info("  DEM burned --> %s  (%d cells raised)", Path(out_path).name, changed)
 
 
 def mask_levee_dem(
@@ -153,7 +160,9 @@ def mask_levee_dem(
         dem_crs = dem.crs
         dem_bounds = dem.bounds
 
-    raster_box = box(dem_bounds.left, dem_bounds.bottom, dem_bounds.right, dem_bounds.top)
+    raster_box = box(
+        dem_bounds.left, dem_bounds.bottom, dem_bounds.right, dem_bounds.top
+    )
 
     def _clip_geoms(geoms):
         clipped = []
@@ -217,11 +226,12 @@ def mask_levee_dem(
             out_masked = np.where(levee_catchments_masked == nodata, nodata, dem_masked)
 
     if out_masked is not None:
-        dem_profile.update(BIGTIFF="YES", compress="lzw", tiled=True,
-                           blockxsize=512, blockysize=512)
+        dem_profile.update(
+            BIGTIFF="YES", compress="lzw", tiled=True, blockxsize=512, blockysize=512
+        )
         out_path.parent.mkdir(parents=True, exist_ok=True)
         with rasterio.open(str(out_path), "w", **dem_profile) as dst:
             dst.write(out_masked[0, :, :], indexes=1)
-        log.info("  levee mask written → %s", out_path.name)
+        log.info("  levee mask written --> %s", out_path.name)
     else:
         log.info("  no levee masking applied for branch %s", branch_id)

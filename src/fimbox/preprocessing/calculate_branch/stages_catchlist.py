@@ -94,7 +94,9 @@ def make_stages_and_catchlist(
             f.write(f"{h} {s} {l} {a}\n")
 
     log.info(
-        "stages_catchlist: %d hydroIDs, %d stages → %s",
-        len(hydro_ids), len(stages), out_catchlist.name,
+        "stages_catchlist: %d hydroIDs, %d stages --> %s",
+        len(hydro_ids),
+        len(stages),
+        out_catchlist.name,
     )
     return out_stages, out_catchlist

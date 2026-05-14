@@ -12,7 +12,7 @@ from .calculate_branchzero import BranchZero
 # HAND production pipeline (Phase 3)
 from .create_hand import CreateHAND
 
-# D8 flow accumulation → stream pixels
+# D8 flow accumulation --> stream pixels
 from .flowacc_dem import FlowAccDEM
 
 # D8 flow direction pointer + D8 slope raster
@@ -22,7 +22,11 @@ from .flowdir_dem import D8SlopeDEM, FlowdirDEM
 from .hydroenforce_dem import HydroenforceDEM
 
 # 3D NLD levee line rasterization, DEM burning, and levee-area masking
-from .levee_rasterize import burn_levee_elevations, mask_levee_dem, rasterize_3d_levee_lines
+from .levee_rasterize import (
+    burn_levee_elevations,
+    mask_levee_dem,
+    rasterize_3d_levee_lines,
+)
 
 # stream / level-path / headwater boolean grids
 from .reach_rasterize import (

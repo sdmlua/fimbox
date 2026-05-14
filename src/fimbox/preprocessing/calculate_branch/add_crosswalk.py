@@ -38,7 +38,7 @@ out_catchments_gpkg : *_crosswalked.gpkg  (catchments with feature_id + order_)
 out_flows_gpkg      : *_crosswalked.gpkg  (flows with feature_id + ManningN)
 out_src_csv         : src_full_crosswalked_{id}.csv  (per-stage hydraulics)
 out_src_json        : src_{id}.json        (per-HydroID stage/q arrays)
-out_crosswalk_csv   : crosswalk_table_{id}.csv       (HydroID → feature_id)
+out_crosswalk_csv   : crosswalk_table_{id}.csv       (HydroID --> feature_id)
 out_hydro_csv       : hydroTable_{id}.csv            (final hydraulic table)
 """
 
@@ -101,8 +101,12 @@ def add_crosswalk(
     out_crosswalk_csv = Path(out_crosswalk_csv)
     out_hydro_csv = Path(out_hydro_csv)
     for p in (
-        out_catchments_gpkg, out_flows_gpkg, out_src_csv,
-        out_src_json, out_crosswalk_csv, out_hydro_csv,
+        out_catchments_gpkg,
+        out_flows_gpkg,
+        out_src_csv,
+        out_src_json,
+        out_crosswalk_csv,
+        out_hydro_csv,
     ):
         p.parent.mkdir(parents=True, exist_ok=True)
     if small_segments_csv is not None:
@@ -185,7 +189,9 @@ def add_crosswalk(
 
     log.info(
         "add_crosswalk: writing %d catchments, %d flows, %d SRC rows",
-        len(output_catchments), len(output_flows), len(src),
+        len(output_catchments),
+        len(output_flows),
+        len(src),
     )
     output_catchments.to_file(
         str(out_catchments_gpkg), driver="GPKG", index=False, engine="fiona"
@@ -242,21 +248,17 @@ def _build_crosswalk(
     nwm_indexed: gpd.GeoDataFrame,
     max_distance_m: float,
 ) -> pd.DataFrame:
-    """Nearest-neighbour join: split-reach midpoint → NWM feature_id."""
+    """Nearest-neighbour join: split-reach midpoint --> NWM feature_id."""
     midpoints = gpd.GeoDataFrame(
         {
             "HydroID": flows["HydroID"].values,
-            "geometry": [
-                g.interpolate(0.5, normalized=True) for g in flows.geometry
-            ],
+            "geometry": [g.interpolate(0.5, normalized=True) for g in flows.geometry],
         },
         crs=flows.crs,
     ).set_index("HydroID")
 
     joined = (
-        gpd.sjoin_nearest(
-            midpoints, nwm_indexed, how="left", distance_col="distance"
-        )
+        gpd.sjoin_nearest(midpoints, nwm_indexed, how="left", distance_col="distance")
         .reset_index()
         .rename(columns={"index_right": "feature_id"})
     )
@@ -298,9 +300,7 @@ def _find_short_segments(
 
         upstreams = flows[flows["NextDownID"] == short_id]
         if len(upstreams) >= 1:
-            update_id = int(
-                upstreams.loc[upstreams["order_"].idxmax(), "HydroID"]
-            )
+            update_id = int(upstreams.loc[upstreams["order_"].idxmax(), "HydroID"])
         else:
             siblings = flows[flows["From_Node"] == to_node]
             siblings = siblings[siblings["HydroID"] != short_id]
@@ -309,11 +309,13 @@ def _find_short_segments(
             else:
                 continue  # no neighbour to borrow from — leave SRC untouched
 
-        out_rows.append({
-            "short_id": short_id,
-            "update_id": update_id,
-            "str_order": int(row.get("order_", 0)),
-        })
+        out_rows.append(
+            {
+                "short_id": short_id,
+                "update_id": update_id,
+                "str_order": int(row.get("order_", 0)),
+            }
+        )
 
     return pd.DataFrame(out_rows)
 
@@ -367,7 +369,7 @@ def _build_src_full(
 def _apply_short_segment_replacement(
     src: pd.DataFrame, sml_segs: pd.DataFrame
 ) -> pd.DataFrame:
-    """Replace each short reach's stage→discharge curve with its donor's curve."""
+    """Replace each short reach's stage-->discharge curve with its donor's curve."""
     donor = src[["HydroID", "Stage", "Discharge (m3s-1)"]].rename(
         columns={"HydroID": "update_id", "Discharge (m3s-1)": "Q_donor"}
     )
@@ -388,13 +390,25 @@ def _build_hydro_table(
 ) -> pd.DataFrame:
     """Project the full SRC into the hydroTable schema."""
     cols = [
-        "HydroID", "feature_id", "NextDownID", "order_",
-        "Number of Cells", "SurfaceArea (m2)", "BedArea (m2)", "TopWidth (m)",
+        "HydroID",
+        "feature_id",
+        "NextDownID",
+        "order_",
+        "Number of Cells",
+        "SurfaceArea (m2)",
+        "BedArea (m2)",
+        "TopWidth (m)",
         "LENGTHKM",
-        "WettedPerimeter (m)", "HydraulicRadius (m)",
-        "WetArea (m2)", "Volume (m3)",
-        "SLOPE_HFAB", "SLOPE_RISE_RUN", "SLOPE", "ManningN",
-        "Stage", "Discharge (m3s-1)",
+        "WettedPerimeter (m)",
+        "HydraulicRadius (m)",
+        "WetArea (m2)",
+        "Volume (m3)",
+        "SLOPE_HFAB",
+        "SLOPE_RISE_RUN",
+        "SLOPE",
+        "ManningN",
+        "Stage",
+        "Discharge (m3s-1)",
     ]
     cols = [c for c in cols if c in src.columns]
     ht = src.loc[:, cols].rename(
@@ -406,7 +420,10 @@ def _build_hydro_table(
     _ = boundary
     ht["LakeID"] = (
         flows.set_index("HydroID")["LakeID"]
-        .reindex(ht["HydroID"]).fillna(-999).astype(int).values
+        .reindex(ht["HydroID"])
+        .fillna(-999)
+        .astype(int)
+        .values
     )
 
     ht["HydroID"] = ht["HydroID"].astype(str)

@@ -3,13 +3,13 @@ Author: Supath Dhital
 Branch Zero preprocessing
 
 Steps performed:
-  1. Clip 3DEP DEM to HUC boundary  → dem.tif
-  2. Clip bridge_elev_diff raster   → bridge_elev_diff.tif  (optional)
-  3. Burn levees into DEM           → overwrites dem_{id}.tif  (optional)
-  4. Rasterize NWM streams          → flows_grid_boolean_{id}.tif
-  5. AGREE DEM conditioning         → dem_burned_{id}.tif
-  6. Fill depressions (pit removal) → dem_burned_filled_{id}.tif
-  7. D8 flow directions             → flowdir_d8_burned_filled_{id}.tif
+  1. Clip 3DEP DEM to HUC boundary  --> dem.tif
+  2. Clip bridge_elev_diff raster   --> bridge_elev_diff.tif  (optional)
+  3. Burn levees into DEM           --> overwrites dem_{id}.tif  (optional)
+  4. Rasterize NWM streams          --> flows_grid_boolean_{id}.tif
+  5. AGREE DEM conditioning         --> dem_burned_{id}.tif
+  6. Fill depressions (pit removal) --> dem_burned_filled_{id}.tif
+  7. D8 flow directions             --> flowdir_d8_burned_filled_{id}.tif
 """
 
 from __future__ import annotations
@@ -106,48 +106,28 @@ class BranchZero:
 
     def run(self) -> dict:
         """Run all Phase-2 steps. Returns dict of output Path objects."""
-        log_path = self.out_dir / "preprocess.log"
-        log_path.parent.mkdir(parents=True, exist_ok=True)
-        fh = logging.FileHandler(log_path, mode="a", encoding="utf-8")
-        fh.setLevel(logging.DEBUG)
-        fh.setFormatter(
-            logging.Formatter(
-                "%(asctime)s  %(levelname)-8s  %(name)s  %(message)s",
-                datefmt="%Y-%m-%d %H:%M:%S",
-            )
-        )
-        # attach to the fimbox root logger so all child modules write here too
-        fimbox_log = logging.getLogger("fimbox")
-        fimbox_log.setLevel(logging.DEBUG)
-        fimbox_log.addHandler(fh)
+        from ...logging_utils import attach_case_log
+
+        attach_case_log(self.out_dir)
         try:
-            log.info("=" * 60)
+            log.info(f"--- BranchZero: branch_id={self.branch_zero_id} ---")
+            log.info(f"out_dir: {self.out_dir}")
+            log.info(f"dem: {self.dem_path}")
+            log.info(f"streams: {self.streams_gpkg}")
+            log.info(f"boundary: {self.boundary_gpkg}")
+            log.info(f"bridge_diff: {self.bridge_elev_diff_path or 'not provided'}")
+            log.info(f"levees: {self.levee_raster_path or 'not provided'}")
             log.info(
-                "BranchZero START  out_dir=%s  branch_id=%s",
-                self.out_dir,
-                self.branch_zero_id,
-            )
-            log.info("  dem        : %s", self.dem_path)
-            log.info("  streams    : %s", self.streams_gpkg)
-            log.info("  boundary   : %s", self.boundary_gpkg)
-            log.info("  bridge_diff: %s", self.bridge_elev_diff_path or "not provided")
-            log.info("  levees     : %s", self.levee_raster_path or "not provided")
-            log.info(
-                "  AGREE      : buffer=%.0fm  smooth=%.0fm  sharp=%.0fm",
-                self.agree_buffer_m,
-                self.agree_smooth_drop,
-                self.agree_sharp_drop,
+                f"AGREE: buffer={self.agree_buffer_m:.0f}m  "
+                f"smooth={self.agree_smooth_drop:.0f}m  "
+                f"sharp={self.agree_sharp_drop:.0f}m"
             )
             result = self._run()
-            log.info("BranchZero DONE — %d output files written", len(result))
-            log.info("=" * 60)
+            log.info(f"BranchZero complete: {len(result)} output files written")
             return result
         except Exception:
-            log.exception("BranchZero FAILED")
+            log.exception("BranchZero failed")
             raise
-        finally:
-            fimbox_log.removeHandler(fh)
-            fh.close()
 
     def _run(self) -> dict:
         bid = self.branch_zero_id
@@ -158,8 +138,10 @@ class BranchZero:
 
         # clip DEM to HUC boundary once, then copy into branch subdirectory
         dem_clipped = self.out_dir / "dem.tif"
-        _rasterio_clip_reproject(self.dem_path, self.boundary_gpkg, dem_clipped, crs=crs, res=res)
-        log.info("DEM clipped → %s", dem_clipped.name)
+        _rasterio_clip_reproject(
+            self.dem_path, self.boundary_gpkg, dem_clipped, crs=crs, res=res
+        )
+        log.info("DEM clipped --> %s", dem_clipped.name)
 
         dem_branch = branch_dir / f"dem_{bid}.tif"
         shutil.copy2(dem_clipped, dem_branch)
@@ -176,15 +158,17 @@ class BranchZero:
                 crs=crs,
                 res=res,
             )
-            log.info("Bridge elev diff clipped → %s", bridge_clipped.name)
+            log.info("Bridge elev diff clipped --> %s", bridge_clipped.name)
             bridge_branch = branch_dir / f"bridge_elev_diff_{bid}.tif"
             shutil.copy2(bridge_clipped, bridge_branch)
 
         # rasterize 3D levee lines if GeoPackage provided, then burn into DEM
         if self.levee_gpkg_path and self.levee_gpkg_path.exists():
             levee_elev_raster = branch_dir / f"nld_rasterized_elev_{bid}.tif"
-            rasterize_3d_levee_lines(self.levee_gpkg_path, dem_branch, levee_elev_raster)
-            log.info("Levee lines rasterized → %s", levee_elev_raster.name)
+            rasterize_3d_levee_lines(
+                self.levee_gpkg_path, dem_branch, levee_elev_raster
+            )
+            log.info("Levee lines rasterized --> %s", levee_elev_raster.name)
             burn_levee_elevations(dem_branch, levee_elev_raster, dem_branch)
             log.info("Levees burned into DEM")
         elif self.levee_raster_path and self.levee_raster_path.exists():
@@ -194,14 +178,14 @@ class BranchZero:
         # rasterize streams to boolean grid (branch 0 — all NWM streams)
         flows_bool = branch_dir / f"flows_grid_boolean_{bid}.tif"
         StreamBooleanRasterizer(self.streams_gpkg, dem_branch, flows_bool).run()
-        log.info("Stream boolean grid → %s", flows_bool.name)
+        log.info("Stream boolean grid --> %s", flows_bool.name)
 
         # rasterize headwater points if provided
         headwaters_bool = None
         if self.headwaters_gpkg and self.headwaters_gpkg.exists():
             headwaters_bool = branch_dir / f"headwaters_{bid}.tif"
             HeadwaterRasterizer(self.headwaters_gpkg, dem_branch, headwaters_bool).run()
-            log.info("Headwaters boolean grid → %s", headwaters_bool.name)
+            log.info("Headwaters boolean grid --> %s", headwaters_bool.name)
 
         # rasterize extended level path streams if provided (used by non-zero branches)
         levelpaths_bool = None
@@ -210,7 +194,7 @@ class BranchZero:
             LevelPathBooleanRasterizer(
                 self.levelpaths_extended_gpkg, dem_branch, levelpaths_bool
             ).run()
-            log.info("Level path boolean grid → %s", levelpaths_bool.name)
+            log.info("Level path boolean grid --> %s", levelpaths_bool.name)
 
         # AGREE DEM conditioning
         dem_burned = branch_dir / f"dem_burned_{bid}.tif"
@@ -226,17 +210,17 @@ class BranchZero:
             wbt_path=self.wbt_path,
             keep_intermediates=self.keep_agree_intermediates,
         ).run()
-        log.info("AGREE DEM → %s", dem_burned.name)
+        log.info("AGREE DEM --> %s", dem_burned.name)
 
         # fill depressions
         dem_filled = branch_dir / f"dem_burned_filled_{bid}.tif"
         _fill_depressions(dem_burned, dem_filled, wbt_path=self.wbt_path)
-        log.info("Pit-filled DEM → %s", dem_filled.name)
+        log.info("Pit-filled DEM --> %s", dem_filled.name)
 
         # D8 flow directions
         flowdir = branch_dir / f"flowdir_d8_burned_filled_{bid}.tif"
         FlowdirDEM(dem_filled, flowdir, wbt_path=self.wbt_path).run()
-        log.info("D8 flow directions → %s", flowdir.name)
+        log.info("D8 flow directions --> %s", flowdir.name)
 
         outputs = {
             "dem": dem_clipped,
@@ -325,22 +309,25 @@ def _rasterio_clip_reproject(
 
     dst.parent.mkdir(parents=True, exist_ok=True)
     with rasterio.open(
-        str(dst), "w",
-        driver="GTiff", dtype="float32",
-        width=ncols, height=nrows,
-        count=1, crs=target_crs, transform=dst_transform,
+        str(dst),
+        "w",
+        driver="GTiff",
+        dtype="float32",
+        width=ncols,
+        height=nrows,
+        count=1,
+        crs=target_crs,
+        transform=dst_transform,
         nodata=nodata_val,
-        compress="lzw", tiled=True,
-        blockxsize=512, blockysize=512,
+        compress="lzw",
+        tiled=True,
+        blockxsize=512,
+        blockysize=512,
         BIGTIFF="YES",
     ) as dst_ds:
         dst_ds.write(dst_arr, 1)
 
-    log.debug("Clip written → %s  (%dx%d  res=%.2fm)", dst.name, ncols, nrows, res)
-
-
-
-
+    log.debug("Clip written --> %s  (%dx%d  res=%.2fm)", dst.name, ncols, nrows, res)
 
 
 def _fill_depressions(dem: Path, out: Path, wbt_path: Optional[str] = None) -> None:
@@ -388,7 +375,10 @@ def _fill_depressions(dem: Path, out: Path, wbt_path: Optional[str] = None) -> N
             data = src.read(1)
         profile.update(
             compress="lzw",
-            tiled=True, blockxsize=512, blockysize=512, BIGTIFF="YES",
+            tiled=True,
+            blockxsize=512,
+            blockysize=512,
+            BIGTIFF="YES",
         )
         with rasterio.open(str(tmp), "w", **profile) as dst:
             dst.write(data, 1)
@@ -396,5 +386,3 @@ def _fill_depressions(dem: Path, out: Path, wbt_path: Optional[str] = None) -> N
     except Exception:
         if tmp.exists():
             tmp.unlink()
-
-

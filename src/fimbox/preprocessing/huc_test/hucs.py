@@ -13,7 +13,10 @@ from pathlib import Path
 from typing import Set, List, Optional, Union, Sequence
 import argparse
 import csv
+import logging
 from importlib import resources as importlib_resources
+
+log = logging.getLogger(__name__)
 
 
 class HUCValidationError(KeyError):
@@ -194,9 +197,12 @@ def hucinfo(argv: Optional[List[str]] = None) -> int:
 
     res = checker.check_any(inp, strict=args.strict)
 
-    print(f"total={res.n_total} found={res.n_found} missing={res.n_missing}")
+    from ...logging_utils import configure_cli_logging
+
+    configure_cli_logging()
+    log.info(f"total={res.n_total} found={res.n_found} missing={res.n_missing}")
     if args.print_missing and res.missing_hucs:
-        print("missing:", ", ".join(sorted(res.missing_hucs)))
+        log.info(f"missing: {', '.join(sorted(res.missing_hucs))}")
 
     return 0 if (not args.strict or res.n_missing == 0) else 2
 

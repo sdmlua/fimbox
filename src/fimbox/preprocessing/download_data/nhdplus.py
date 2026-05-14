@@ -126,7 +126,7 @@ class ArcGISDownloader:
         if not features:
             return gpd.GeoDataFrame()
         gdf = gpd.GeoDataFrame.from_features(features, crs=f"EPSG:{self.out_sr}")
-        print(f"  Page {page}/{total_pages}: {len(gdf)} records")
+        logger.debug(f"Page {page}/{total_pages}: {len(gdf)} records")
         return gdf
 
     # public API
@@ -170,12 +170,12 @@ class ArcGISDownloader:
         count_data = self._post({**base_params, "f": "json", "returnCountOnly": "true"})
         total = count_data.get("count", 0)
         if total == 0:
-            print("No records found.")
+            logger.warning("No records returned by service for this boundary.")
             return gpd.GeoDataFrame()
 
         n_pages = math.ceil(total / self.page_size)
-        print(
-            f"Total records: {total}  |  Pages: {n_pages}  |  Workers: {min(n_pages, self.n_workers)}"
+        logger.info(
+            f"Records: {total} | pages: {n_pages} | workers: {min(n_pages, self.n_workers)}"
         )
 
         # Parallel page fetch with dask
@@ -193,20 +193,20 @@ class ArcGISDownloader:
 
         chunks = [p for p in pages if not p.empty]
         if not chunks:
-            print("No data downloaded.")
+            logger.warning("No data downloaded.")
             return gpd.GeoDataFrame()
 
         result = gpd.GeoDataFrame(
             pd.concat(chunks, ignore_index=True), crs=f"EPSG:{self.out_sr}"
         )
-        print(f"Downloaded {len(result)} total records.")
+        logger.info(f"Downloaded {len(result)} records")
 
         if out_dir:
             out_dir = Path(out_dir)
             out_dir.mkdir(parents=True, exist_ok=True)
             out_path = out_dir / out_name
             result.to_file(out_path, layer=out_layer, driver="GPKG")
-            print(f"Saved → {out_path}")
+            logger.info(f"{out_layer} --> {out_name}")
 
         return result
 
@@ -363,7 +363,7 @@ def getNHDPlusData(
     )
 
     if download_flowlines:
-        print("\n=== NWM Flowlines ===")
+        logger.info("--- NWM Flowlines ---")
         try:
             results["flowlines"] = NWMFlowlinesDownloader(
                 out_sr=epsg, n_workers=n_workers
@@ -372,7 +372,7 @@ def getNHDPlusData(
             logger.error(f"Flowlines download failed: {exc}", exc_info=True)
 
     if download_catchments:
-        print("\n=== NWM Catchments ===")
+        logger.info("--- NWM Catchments ---")
         try:
             results["catchments"] = NWMCatchmentsDownloader(
                 out_sr=epsg, n_workers=n_workers
@@ -381,7 +381,7 @@ def getNHDPlusData(
             logger.error(f"Catchments download failed: {exc}", exc_info=True)
 
     if download_lakes:
-        print("\n=== NWM Lakes ===")
+        logger.info("--- NWM Lakes ---")
         try:
             results["lakes"] = NWMLakesDownloader(
                 out_sr=epsg, n_workers=n_workers
@@ -390,6 +390,36 @@ def getNHDPlusData(
             logger.error(f"Lakes download failed: {exc}", exc_info=True)
 
     return results
+
+
+# CLI
+if __name__ == "__main__":
+    import argparse
+    from ...logging_utils import configure_cli_logging
+
+    configure_cli_logging()
+    parser = argparse.ArgumentParser(
+        description="Download NWM flowlines / catchments / lakes for a boundary."
+    )
+    parser.add_argument("--boundary", required=True)
+    parser.add_argument("--boundary-layer", default=None)
+    parser.add_argument("--out-dir", required=True)
+    parser.add_argument("--epsg", type=int, default=5070)
+    parser.add_argument("--no-flowlines", action="store_true")
+    parser.add_argument("--no-catchments", action="store_true")
+    parser.add_argument("--no-lakes", action="store_true")
+    parser.add_argument("--workers", type=int, default=8)
+    args = parser.parse_args()
+    getNHDPlusData(
+        boundary=args.boundary,
+        boundary_layer=args.boundary_layer,
+        out_dir=args.out_dir,
+        epsg=args.epsg,
+        download_flowlines=not args.no_flowlines,
+        download_catchments=not args.no_catchments,
+        download_lakes=not args.no_lakes,
+        n_workers=args.workers,
+    )
 
 
 # OLD pipeline — EPA NHDPlus V2.1 S3 bucket

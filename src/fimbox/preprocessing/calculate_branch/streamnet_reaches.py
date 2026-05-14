@@ -33,16 +33,16 @@ import numpy as np
 
 log = logging.getLogger(__name__)
 
-# WBT D8 pointer: power-of-2 code → (row_offset, col_offset)
+# WBT D8 pointer: power-of-2 code --> (row_offset, col_offset)
 _D8_OFFSETS: dict[int, tuple[int, int]] = {
-    1:   (0,  1),
-    2:   (1,  1),
-    4:   (1,  0),
-    8:   (1, -1),
-    16:  (0, -1),
-    32:  (-1, -1),
-    64:  (-1,  0),
-    128: (-1,  1),
+    1: (0, 1),
+    2: (1, 1),
+    4: (1, 0),
+    8: (1, -1),
+    16: (0, -1),
+    32: (-1, -1),
+    64: (-1, 0),
+    128: (-1, 1),
 }
 
 
@@ -75,7 +75,13 @@ class StreamNetReaches:
     wbt_path: Optional[str] = None
 
     def __post_init__(self):
-        for attr in ("flowdir", "dem_thalweg_cond", "flowaccum", "stream_pixels", "out_dir"):
+        for attr in (
+            "flowdir",
+            "dem_thalweg_cond",
+            "flowaccum",
+            "stream_pixels",
+            "out_dir",
+        ):
             setattr(self, attr, Path(getattr(self, attr)))
         self.out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -86,8 +92,8 @@ class StreamNetReaches:
 
         bid = self.branch_id
         stream_order_path = self.out_dir / f"streamOrder_{bid}.tif"
-        sn_catchments     = self.out_dir / f"sn_catchments_reaches_{bid}.tif"
-        reaches_gpkg      = self.out_dir / f"demDerived_reaches_{bid}.gpkg"
+        sn_catchments = self.out_dir / f"sn_catchments_reaches_{bid}.tif"
+        reaches_gpkg = self.out_dir / f"demDerived_reaches_{bid}.gpkg"
 
         def _valid(p: Path) -> bool:
             return p.exists() and p.stat().st_size > 0
@@ -108,7 +114,7 @@ class StreamNetReaches:
             crs = src.crs
 
         with rasterio.open(str(self.stream_pixels)) as src:
-            stream_mask = (src.read(1) == 1)
+            stream_mask = src.read(1) == 1
 
         rows, cols = d8_raw.shape
         n = rows * cols
@@ -134,11 +140,11 @@ class StreamNetReaches:
 
         # ── Count stream-cell in-degrees (fully vectorised) ─────────────────────
         stream_flat = stream_mask.ravel()
-        stream_idx  = np.where(stream_flat)[0].astype(np.int64)
+        stream_idx = np.where(stream_flat)[0].astype(np.int64)
 
         # downstream index of each stream cell
-        ds_stream = ds[stream_idx]                   # downstream flat-idx
-        non_self  = ds_stream != stream_idx           # exclude self-loops (outlets)
+        ds_stream = ds[stream_idx]  # downstream flat-idx
+        non_self = ds_stream != stream_idx  # exclude self-loops (outlets)
         # only count when the downstream cell is also a stream cell
         ds_is_stream = stream_flat[ds_stream]
         valid = non_self & ds_is_stream
@@ -152,17 +158,17 @@ class StreamNetReaches:
             int((in_deg[stream_idx] >= 2).sum()),
         )
 
-        # ── Assign reach IDs in topological (upstream→downstream) order ─────────
+        # ── Assign reach IDs in topological (upstream-->downstream) order ─────────
         # Rules:
-        #   • headwater cell (in_deg == 0) → start reach R
-        #   • single-upstream cell (in_deg == 1) → continue reach from upstream
-        #   • junction cell (in_deg >= 2) → end all incoming reaches HERE;
+        #   • headwater cell (in_deg == 0) --> start reach R
+        #   • single-upstream cell (in_deg == 1) --> continue reach from upstream
+        #   • junction cell (in_deg >= 2) --> end all incoming reaches HERE;
         #     the junction cell itself starts a NEW reach going downstream
         #
         # We process cells in topological order using a BFS queue seeded from
         # headwaters, decrementing in-degree as we go.
 
-        reach_of: np.ndarray = np.zeros(n, dtype=np.int32)  # cell → reach ID
+        reach_of: np.ndarray = np.zeros(n, dtype=np.int32)  # cell --> reach ID
         next_rid = 1
 
         # queue holds (cell_idx, reach_id_to_continue)
@@ -172,7 +178,7 @@ class StreamNetReaches:
         # Seed headwaters
         for i in stream_idx:
             if in_deg[i] == 0:
-                pq.append((int(i), 0))   # 0 → allocate new reach
+                pq.append((int(i), 0))  # 0 --> allocate new reach
 
         remaining_in = in_deg.copy()
 
@@ -218,7 +224,7 @@ class StreamNetReaches:
         rids = reach_of[assigned]
         sort_ord = np.argsort(rids, kind="stable")
         assigned_sorted = assigned[sort_ord]
-        rids_sorted     = rids[sort_ord]
+        rids_sorted = rids[sort_ord]
         split_pts = np.flatnonzero(np.diff(rids_sorted)) + 1
         bounds = np.concatenate([[0], split_pts, [len(rids_sorted)]])
         groups = np.split(assigned_sorted, split_pts)
@@ -234,7 +240,7 @@ class StreamNetReaches:
         reach_geoms = []
         reach_ids_out = []
 
-        pixel_size = abs(transform[0])   # metres per pixel
+        pixel_size = abs(transform[0])  # metres per pixel
 
         for k, rid in enumerate(unique_rids):
             cells = groups[k]
@@ -267,15 +273,17 @@ class StreamNetReaches:
             # centre of the last *owned* cell, one pixel short of where the next
             # reach starts — producing a 1-pixel gap at every confluence.
             tail = path[-1]
-            nxt  = int(ds[tail])
-            if nxt != tail:                     # not a self-loop outlet
+            nxt = int(ds[tail])
+            if nxt != tail:  # not a self-loop outlet
                 path.append(nxt)
 
             # Build coords and simplify to remove the D8 staircase effect.
             # RDP with tolerance = 0.5 pixel collapses diagonal stair-steps into
             # straight diagonals while preserving all true bends.
             coords = [cell_xy(c) for c in path]
-            line = LineString(coords).simplify(pixel_size * 0.5, preserve_topology=False)
+            line = LineString(coords).simplify(
+                pixel_size * 0.5, preserve_topology=False
+            )
             if line.is_empty or line.geom_type != "LineString":
                 line = LineString(coords)
             reach_geoms.append(line)
@@ -286,8 +294,13 @@ class StreamNetReaches:
         # ── Write sn_catchments raster ──────────────────────────────────────────
         sn_profile = profile.copy()
         sn_profile.update(
-            dtype="int32", nodata=0,
-            compress="lzw", tiled=True, blockxsize=512, blockysize=512, BIGTIFF="YES",
+            dtype="int32",
+            nodata=0,
+            compress="lzw",
+            tiled=True,
+            blockxsize=512,
+            blockysize=512,
+            BIGTIFF="YES",
         )
         with rasterio.open(str(sn_catchments), "w", **sn_profile) as dst:
             dst.write(reach_of.reshape(rows, cols).astype(np.int32), 1)
@@ -307,8 +320,13 @@ class StreamNetReaches:
             log.warning("StreamNet: WBT Strahler order failed (%s), writing zeros", exc)
             so_profile = profile.copy()
             so_profile.update(
-                dtype="int32", nodata=0,
-                compress="lzw", tiled=True, blockxsize=512, blockysize=512, BIGTIFF="YES",
+                dtype="int32",
+                nodata=0,
+                compress="lzw",
+                tiled=True,
+                blockxsize=512,
+                blockysize=512,
+                BIGTIFF="YES",
             )
             with rasterio.open(str(stream_order_path), "w", **so_profile) as dst:
                 dst.write(np.zeros((rows, cols), dtype=np.int32), 1)
@@ -322,7 +340,9 @@ class StreamNetReaches:
         if reaches_gpkg.exists():
             reaches_gpkg.unlink()
         gdf.to_file(str(reaches_gpkg), driver="GPKG", index=False, engine="fiona")
-        log.info("StreamNet: reaches --> %s  (%d features)", reaches_gpkg.name, len(gdf))
+        log.info(
+            "StreamNet: reaches --> %s  (%d features)", reaches_gpkg.name, len(gdf)
+        )
 
         log.info("StreamNetReaches done for branch %s", bid)
         return {
@@ -333,6 +353,7 @@ class StreamNetReaches:
 
     def _wbt(self):
         import whitebox
+
         wbt = whitebox.WhiteboxTools()
         wbt.set_verbose_mode(False)
         wbt_dir = self.wbt_path or os.environ.get("WBT_PATH")
@@ -352,8 +373,11 @@ def _recompress_lzw(path: Path) -> None:
         with rasterio.open(str(path)) as src:
             profile = src.profile.copy()
             profile.update(
-                compress="lzw", tiled=True,
-                blockxsize=512, blockysize=512, BIGTIFF="YES",
+                compress="lzw",
+                tiled=True,
+                blockxsize=512,
+                blockysize=512,
+                BIGTIFF="YES",
             )
             data = src.read(1)
         with rasterio.open(str(tmp), "w", **profile) as dst:

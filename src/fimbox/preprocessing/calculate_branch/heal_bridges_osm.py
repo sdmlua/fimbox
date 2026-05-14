@@ -125,7 +125,9 @@ def heal_bridges_osm(
     catchments_df = gpd.read_file(str(catchments_gpkg), engine="fiona")
     if catchments_df.crs != healed.crs:
         catchments_df = catchments_df.to_crs(healed.crs)
-    join_cols = [c for c in ("HydroID", "feature_id", "order_") if c in catchments_df.columns]
+    join_cols = [
+        c for c in ("HydroID", "feature_id", "order_") if c in catchments_df.columns
+    ]
     healed = gpd.sjoin(
         healed, catchments_df[join_cols + ["geometry"]], how="inner"
     ).drop(columns=["index_right"])
@@ -143,7 +145,11 @@ def heal_bridges_osm(
     if out_centroids_gpkg.exists():
         out_centroids_gpkg.unlink()
     healed.to_file(str(out_centroids_gpkg), index=False, engine="fiona", driver="GPKG")
-    log.info("heal_bridges_osm: wrote %d bridges → %s", len(healed), out_centroids_gpkg.name)
+    log.info(
+        "heal_bridges_osm: wrote %d bridges --> %s",
+        len(healed),
+        out_centroids_gpkg.name,
+    )
     return out_centroids_gpkg
 
 
@@ -152,6 +158,7 @@ def _require_zonal_stats():
     """Import rasterstats lazily so the rest of the pipeline can run without it."""
     try:
         from rasterstats import zonal_stats  # noqa: F401
+
         return zonal_stats
     except ModuleNotFoundError as exc:
         raise ModuleNotFoundError(
@@ -175,7 +182,9 @@ def _process_non_lidar(
     if non_lidar.empty:
         return None, hand_array
 
-    non_lidar["geometry"] = non_lidar.geometry.buffer(buffer_m, resolution=int(buffer_m))
+    non_lidar["geometry"] = non_lidar.geometry.buffer(
+        buffer_m, resolution=int(buffer_m)
+    )
 
     zonal_stats = _require_zonal_stats()
     stats = zonal_stats(

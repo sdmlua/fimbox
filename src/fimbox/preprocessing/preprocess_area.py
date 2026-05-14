@@ -35,6 +35,7 @@ from shapely.geometry import LineString, MultiLineString
 
 from shapely.geometry import box as shapely_box
 
+from ..logging_utils import attach_case_log, get_logger
 from .download_data.dem_process import DEMProcessor
 from .download_data.area_masks import DownloadDEMDomain, DownloadLandSea
 from .download_data.nfhl_data import DownloadFEMANFHL
@@ -147,7 +148,7 @@ def _remove_null_z_vertices(geom: LineString, huc2: str):
 
         z = coord[2]
         if z > min_z:
-            current_part.append((coord[0], coord[1], z * 0.3048))  # ft → m
+            current_part.append((coord[0], coord[1], z * 0.3048))  # ft --> m
             skipped = 0
         elif skipped < max_skip:
             skipped += 1
@@ -205,17 +206,10 @@ def preprocess_nld_lines(
     # Explode any MultiLineStrings so _remove_null_z_vertices always gets a single LineString
     gdf = gdf.explode(index_parts=False).reset_index(drop=True)
 
+    log = get_logger(__name__)
     total = len(gdf)
-    results = []
-    for i, row in enumerate(gdf.itertuples(), 1):
-        results.append(_remove_null_z_vertices(row.geometry, huc2))
-        if i % 10 == 0 or i == total:
-            print(
-                f"\r  Filtering levee vertices [{huc2=}]: {i}/{total}",
-                end="",
-                flush=True,
-            )
-    print()
+    log.info(f"Filtering levee vertices (huc2={huc2}): {total} features")
+    results = [_remove_null_z_vertices(row.geometry, huc2) for row in gdf.itertuples()]
     gdf["geometry"] = results
     gdf = gdf[gdf["geometry"].notna() & ~gdf.is_empty].copy()
 
@@ -302,20 +296,11 @@ class getAllInputData:
         return self.case_dir / _FILENAMES[key]
 
     def _setup_logger(self):
-        log_name = f"PreprocessAll.{self.case_name}"
-        self.logger = logging.getLogger(log_name)
-        if self.logger.handlers:
-            return
-        self.logger.setLevel(logging.INFO)
-        fmt = logging.Formatter(
-            "%(asctime)s [%(levelname)s] %(message)s", datefmt="%H:%M:%S"
-        )
-        ch = logging.StreamHandler()
-        ch.setFormatter(fmt)
-        self.logger.addHandler(ch)
-        fh = logging.FileHandler(self.case_dir / "preprocess.log", mode="a")
-        fh.setFormatter(fmt)
-        self.logger.addHandler(fh)
+        # All fimbox modules log under `fimbox.*` via getLogger(__name__);
+        # attaching handlers to the `fimbox` root makes every nested log
+        # call land in this case's preprocess.log as well as stdout.
+        attach_case_log(self.case_dir)
+        self.logger = get_logger(f"fimbox.preprocess.{self.case_name}")
 
     @staticmethod
     def _drop_fid(gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
@@ -419,7 +404,7 @@ class getAllInputData:
         self.logger.info(f"Study boundary --> {_FILENAMES['wbd']}")
 
         # wbd8_clp.gpkg is the canonical name expected by split_reaches and filter_catchments
-        wbd8_clp_path = self.out_dir / "wbd8_clp.gpkg"
+        wbd8_clp_path = self.case_dir / "wbd8_clp.gpkg"
         self.boundary_gdf.to_file(str(wbd8_clp_path), driver="GPKG", index=False)
         self.logger.info(f"Study boundary (clipped) --> wbd8_clp.gpkg")
 
@@ -614,29 +599,53 @@ class getAllInputData:
 
     # full pipeline
     def run(self):
-        self.logger.info(
-            f"\n{'='*60}\n"
-            f"  PreprocessAll: {self.case_name}\n"
-            f"  Output: {self.case_dir}\n"
-            f"{'='*60}"
-        )
+        self.logger.info(f"=== PreprocessAll: {self.case_name} ===")
+        self.logger.info(f"Output: {self.case_dir}")
         self.run_dem()
         self.run_nhd()
         self.run_nld()
         self.run_osm()
         self.logger.info("=== ALL STEPS COMPLETE ===")
-        self._print_summary()
+        self._log_summary()
 
-    def _print_summary(self):
-        print(f"\n{'='*60}")
-        print(f"  {self.case_name}  -->  {self.case_dir}")
-        print(f"{'='*60}")
+    def _log_summary(self):
         files = sorted(
             f
             for f in self.case_dir.iterdir()
             if f.suffix in (".gpkg", ".tif", ".log") and f.is_file()
         )
+        self.logger.info(f"--- Summary: {self.case_name} ({len(files)} files) ---")
         for f in files:
             size_kb = f.stat().st_size // 1024
-            print(f"  {f.name:<45}  {size_kb:>6} KB")
-        print()
+            self.logger.info(f"  {f.name:<45}  {size_kb:>6} KB")
+
+
+# CLI
+if __name__ == "__main__":
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        description="Download and preprocess all FIM input data for a HUC8 or boundary."
+    )
+    src = parser.add_mutually_exclusive_group(required=True)
+    src.add_argument("--huc8", help="HUC8 ID (e.g. 08060202)")
+    src.add_argument("--boundary", help="Path to boundary file (gpkg/shp/etc.)")
+    parser.add_argument("--boundary-layer", default=None)
+    parser.add_argument("--out-dir", default="fimbox_preprocess")
+    parser.add_argument("--epsg", type=int, default=5070)
+    parser.add_argument("--dem-resolution", type=int, default=10)
+    parser.add_argument("--buffer-m", type=float, default=2000.0)
+    parser.add_argument("--headwater-buffer-cells", type=int, default=8)
+    args = parser.parse_args()
+
+    pp = getAllInputData(
+        huc8=args.huc8,
+        boundary=args.boundary,
+        boundary_layer=args.boundary_layer,
+        out_dir=args.out_dir,
+        epsg=args.epsg,
+        dem_resolution=args.dem_resolution,
+        buffer_m=args.buffer_m,
+        headwater_buffer_cells=args.headwater_buffer_cells,
+    )
+    pp.run()

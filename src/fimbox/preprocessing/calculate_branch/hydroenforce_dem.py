@@ -60,7 +60,10 @@ class HydroenforceDEM:
     def run(self) -> Path:
         log.info(
             "AGREE DEM start: buffer=%.0fm smooth=%.0fm sharp=%.0fm  dem=%s",
-            self.buffer_dist, self.smooth_drop, self.sharp_drop, self.dem.name,
+            self.buffer_dist,
+            self.smooth_drop,
+            self.sharp_drop,
+            self.dem.name,
         )
         try:
             with rasterio.open(str(self.dem)) as src:
@@ -71,7 +74,10 @@ class HydroenforceDEM:
                 nodata_val = src.nodata if src.nodata is not None else -9999.0
                 log.debug(
                     "  DEM grid %dx%d  res=%.1fm  valid_cells=%d",
-                    src.width, src.height, pixel_size, int(dem_mask.sum()),
+                    src.width,
+                    src.height,
+                    pixel_size,
+                    int(dem_mask.sum()),
                 )
 
             with rasterio.open(str(self.rivers_raster)) as src:
@@ -93,10 +99,15 @@ class HydroenforceDEM:
                 not_stream, sampling=pixel_size, return_indices=True
             )
 
-            smogrid = np.where(stream_mask, dem_data - self.smooth_drop, 0.0).astype(np.float32)
+            smogrid = np.where(stream_mask, dem_data - self.smooth_drop, 0.0).astype(
+                np.float32
+            )
             vectallo = smogrid[idx_str[0], idx_str[1]]
 
-            log.debug("  computing euclidean distance from buffer edge (%.0fm)", self.buffer_dist)
+            log.debug(
+                "  computing euclidean distance from buffer edge (%.0fm)",
+                self.buffer_dist,
+            )
             final_buffer = self.buffer_dist - pixel_size / 2
             outside_buf = (vectdist > final_buffer) & dem_mask
             bufgrid = np.where(outside_buf, dem_data, 0.0).astype(np.float32)
@@ -121,9 +132,11 @@ class HydroenforceDEM:
             with rasterio.open(str(self.output_raster), "w", **out_profile) as dst:
                 dst.write(agree_dem, 1)
 
-            log.info("AGREE DEM written → %s", self.output_raster.name)
+            log.info("AGREE DEM written --> %s", self.output_raster.name)
             return self.output_raster
 
         except Exception:
-            log.exception("AGREE DEM FAILED: dem=%s rivers=%s", self.dem, self.rivers_raster)
+            log.exception(
+                "AGREE DEM FAILED: dem=%s rivers=%s", self.dem, self.rivers_raster
+            )
             raise

@@ -4,7 +4,10 @@ Step 1 (generateBridgeRaster): streams USGS LiDAR and writes per-bridge .tif
 Step 2 (BridgeDEMDiff):        computes lidar_elev - dem_elev and saves bridge_elev_diff.tif
 """
 
+import logging
 import fimbox
+
+log = logging.getLogger(__name__)
 
 bridge_gpkg = (
     "/Users/Supath/Downloads/SDML/FIMBOX/out/HUC08060202/osm_bridges_subset.gpkg"
@@ -32,7 +35,7 @@ def test_generate_bridge_raster():
         n_workers=4,
         # id_col="my_id",  # only needed if gpkg has no 'osmid' column
     ).run()
-    print(f"Per-bridge tifs saved to: {tif_dir}")
+    log.info(f"Per-bridge tifs --> {tif_dir}")
 
 
 # compute difference raster
@@ -45,7 +48,7 @@ def test_bridge_dem_diff():
         out_name="bridge_elev_diff.tif",
         n_workers=4,
     ).run()
-    print(f"Bridge diff raster saved to: {out_path}")
+    log.info(f"Bridge diff raster --> {out_path}")
 
 
 # Run both steps end-to-end (needs pdal + laspy)

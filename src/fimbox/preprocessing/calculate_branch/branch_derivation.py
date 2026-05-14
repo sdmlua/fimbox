@@ -22,8 +22,8 @@ import numpy as np
 import pandas as pd
 from shapely.geometry import Point
 
-
 gpd.options.io_engine = "pyogrio"
+
 
 @dataclass(slots=True)
 class BranchDerivationResult:
@@ -458,9 +458,13 @@ class BranchDerivation:
                 )
                 if written:
                     result.levee_levelpaths = levee_levelpaths_path
-                    self.logger.info("Levee levelpaths --> %s", levee_levelpaths_path.name)
+                    self.logger.info(
+                        "Levee levelpaths --> %s", levee_levelpaths_path.name
+                    )
                 else:
-                    self.logger.info("Levee levelpaths --> no associations found, skipped")
+                    self.logger.info(
+                        "Levee levelpaths --> no associations found, skipped"
+                    )
             else:
                 self.logger.warning(
                     "Levees provided but leveed-areas file not found; skipping levee association"
@@ -474,26 +478,18 @@ class BranchDerivation:
         return result
 
     def _setup_logger(self) -> logging.Logger:
+        # Attach the shared file+stream handlers to the fimbox root so this
+        # stage's logs appear in the same preprocess.log as the rest of the
+        # pipeline, then return a child logger for branch derivation.
+        from ...logging_utils import attach_case_log, get_logger
+
         self.out_dir.mkdir(parents=True, exist_ok=True)
-        logger_name = f"BranchDerivation.{self.out_dir}"
-        logger = logging.getLogger(logger_name)
-        if logger.handlers:
-            return logger
-        logger.setLevel(logging.INFO)
-        logger.propagate = False
-        fmt = logging.Formatter(
-            "%(asctime)s [%(levelname)s] %(message)s", datefmt="%H:%M:%S"
-        )
-        fh = logging.FileHandler(
-            self.out_dir / "preprocess.log", mode="a", encoding="utf-8"
-        )
-        fh.setFormatter(fmt)
-        logger.addHandler(fh)
-        return logger
+        attach_case_log(self.out_dir)
+        return get_logger(f"fimbox.branch_derivation.{self.out_dir.name}")
 
     @staticmethod
     def _announce(message: str) -> None:
-        print(f"[fimbox] {message}")
+        logging.getLogger("fimbox").info(message)
 
     def _localize_vector_override(
         self,
@@ -893,14 +889,19 @@ def _associate_levelpaths_with_levees(
     # geopandas suffixes it _1 (from left/levees) and _2 (from right/leveed_areas).
     if levee_id_attribute not in leveed_areas.columns:
         # look for a plausible candidate: LEVEED_ID, then any *_ID column
-        candidates = [c for c in leveed_areas.columns if c.upper() in ("LEVEED_ID", "SYSTEM_ID")]
+        candidates = [
+            c for c in leveed_areas.columns if c.upper() in ("LEVEED_ID", "SYSTEM_ID")
+        ]
         if not candidates:
             candidates = [c for c in leveed_areas.columns if c.upper().endswith("_ID")]
         if candidates:
-            leveed_areas = leveed_areas.rename(columns={candidates[0]: levee_id_attribute})
+            leveed_areas = leveed_areas.rename(
+                columns={candidates[0]: levee_id_attribute}
+            )
             log.debug(
-                "_associate_levelpaths_with_levees: renamed leveed_areas column %s → %s",
-                candidates[0], levee_id_attribute,
+                "_associate_levelpaths_with_levees: renamed leveed_areas column %s --> %s",
+                candidates[0],
+                levee_id_attribute,
             )
         else:
             log.warning(
@@ -918,28 +919,38 @@ def _associate_levelpaths_with_levees(
 
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        leveed_left = gpd.overlay(levees_buffered_left, leveed_areas, how="intersection")
-        leveed_right = gpd.overlay(levees_buffered_right, leveed_areas, how="intersection")
+        leveed_left = gpd.overlay(
+            levees_buffered_left, leveed_areas, how="intersection"
+        )
+        leveed_right = gpd.overlay(
+            levees_buffered_right, leveed_areas, how="intersection"
+        )
 
     leveed_intersected: list = []
 
     if not leveed_left.empty:
         leveed_intersected.extend(leveed_left[f"{levee_id_attribute}_1"].values)
         matches = np.where(
-            leveed_left[f"{levee_id_attribute}_1"] == leveed_left[f"{levee_id_attribute}_2"]
+            leveed_left[f"{levee_id_attribute}_1"]
+            == leveed_left[f"{levee_id_attribute}_2"]
         )[0]
         leveed_left = leveed_left.loc[matches].copy()
         leveed_left["leveed_area"] = leveed_left.area
-        leveed_left = leveed_left[[f"{levee_id_attribute}_1", "leveed_area", "geometry"]]
+        leveed_left = leveed_left[
+            [f"{levee_id_attribute}_1", "leveed_area", "geometry"]
+        ]
 
     if not leveed_right.empty:
         leveed_intersected.extend(leveed_right[f"{levee_id_attribute}_1"].values)
         matches = np.where(
-            leveed_right[f"{levee_id_attribute}_1"] == leveed_right[f"{levee_id_attribute}_2"]
+            leveed_right[f"{levee_id_attribute}_1"]
+            == leveed_right[f"{levee_id_attribute}_2"]
         )[0]
         leveed_right = leveed_right.loc[matches].copy()
         leveed_right["leveed_area"] = leveed_right.area
-        leveed_right = leveed_right[[f"{levee_id_attribute}_1", "leveed_area", "geometry"]]
+        leveed_right = leveed_right[
+            [f"{levee_id_attribute}_1", "leveed_area", "geometry"]
+        ]
 
     levees_not_found = gpd.GeoDataFrame()
     if leveed_intersected:
@@ -975,10 +986,18 @@ def _associate_levelpaths_with_levees(
     levee_levelpaths_left = gpd.sjoin(levees_buffered_left, levelpaths)
     levee_levelpaths_right = gpd.sjoin(levees_buffered_right, levelpaths)
     # geopandas appends _left/_1 suffix when both frames share a column name; normalise back
-    levee_levelpaths_left = _normalise_sjoin_col(levee_levelpaths_left, levee_id_attribute)
-    levee_levelpaths_right = _normalise_sjoin_col(levee_levelpaths_right, levee_id_attribute)
-    levee_levelpaths_left = levee_levelpaths_left[[levee_id_attribute, branch_id_attribute]]
-    levee_levelpaths_right = levee_levelpaths_right[[levee_id_attribute, branch_id_attribute]]
+    levee_levelpaths_left = _normalise_sjoin_col(
+        levee_levelpaths_left, levee_id_attribute
+    )
+    levee_levelpaths_right = _normalise_sjoin_col(
+        levee_levelpaths_right, levee_id_attribute
+    )
+    levee_levelpaths_left = levee_levelpaths_left[
+        [levee_id_attribute, branch_id_attribute]
+    ]
+    levee_levelpaths_right = levee_levelpaths_right[
+        [levee_id_attribute, branch_id_attribute]
+    ]
     levee_levelpaths_left = levee_levelpaths_left[
         levee_levelpaths_left[levee_id_attribute].isin(left_ids)
     ]
@@ -1018,7 +1037,9 @@ def _associate_levelpaths_with_levees(
     drop_indices = []
     for j, row in out_df.iterrows():
         levee_geom = levees[levees[levee_id_attribute] == row[levee_id_attribute]]
-        lp_geom = levelpaths[levelpaths[branch_id_attribute] == row[branch_id_attribute]]
+        lp_geom = levelpaths[
+            levelpaths[branch_id_attribute] == row[branch_id_attribute]
+        ]
         intersections = gpd.overlay(
             levee_geom, lp_geom, how="intersection", keep_geom_type=False
         ).explode(index_parts=True)
@@ -1028,7 +1049,9 @@ def _associate_levelpaths_with_levees(
         elif intersections.empty:
             leveed_area_check = gpd.overlay(
                 lp_geom,
-                leveed_areas[leveed_areas[levee_id_attribute] == row[levee_id_attribute]],
+                leveed_areas[
+                    leveed_areas[levee_id_attribute] == row[levee_id_attribute]
+                ],
                 how="intersection",
                 keep_geom_type=False,
             )
@@ -1039,7 +1062,9 @@ def _associate_levelpaths_with_levees(
     if out_df.empty:
         return False
 
-    out_df.to_csv(out_path, columns=[levee_id_attribute, branch_id_attribute], index=False)
+    out_df.to_csv(
+        out_path, columns=[levee_id_attribute, branch_id_attribute], index=False
+    )
     return True
 
 

@@ -147,7 +147,7 @@ class BridgeDEMDiff:
         with rasterio.open(out_path, "w", **dem_meta) as dst:
             dst.write(diff_array, 1)
 
-        log.info(f"Saved bridge_elev_diff raster → {out_path}")
+        log.info(f"Saved bridge_elev_diff raster --> {out_path}")
         return out_path
 
     def _load_bridges(self) -> gpd.GeoDataFrame:
@@ -259,7 +259,9 @@ def _tif_to_points(tif_path: str, target_crs: str):
 if __name__ == "__main__":
     import argparse
 
-    logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
+    from ...logging_utils import configure_cli_logging
+
+    configure_cli_logging()
 
     p = argparse.ArgumentParser(
         description=(
@@ -289,4 +291,4 @@ if __name__ == "__main__":
         kwargs["n_workers"] = args.n_workers
 
     out_path = BridgeDEMDiff(**kwargs).run()
-    print(f"Bridge diff raster saved to: {out_path}")
+    log.info(f"Bridge diff raster --> {out_path}")

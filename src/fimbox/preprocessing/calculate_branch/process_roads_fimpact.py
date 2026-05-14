@@ -56,7 +56,11 @@ def process_roads_fimpact(
     out_csv = Path(out_csv)
     out_csv.parent.mkdir(parents=True, exist_ok=True)
 
-    if not hand_raster.exists() or not roads_gpkg.exists() or not catchments_gpkg.exists():
+    if (
+        not hand_raster.exists()
+        or not roads_gpkg.exists()
+        or not catchments_gpkg.exists()
+    ):
         log.info("process_roads_fimpact: missing input(s), skipping")
         return None
 
@@ -88,11 +92,16 @@ def process_roads_fimpact(
     if "feature_id" in catchments.columns:
         catchments["feature_id"] = catchments["feature_id"].astype(int).astype(str)
 
-    split = gpd.overlay(roads, catchments, how="intersection").explode(
-        index_parts=True
-    ).reset_index(drop=True)
+    split = (
+        gpd.overlay(roads, catchments, how="intersection")
+        .explode(index_parts=True)
+        .reset_index(drop=True)
+    )
     if split.empty:
-        log.info("process_roads_fimpact: no road–catchment intersections for branch %s", branch_id)
+        log.info(
+            "process_roads_fimpact: no road–catchment intersections for branch %s",
+            branch_id,
+        )
         return None
 
     split["branch"] = branch_id
@@ -127,14 +136,15 @@ def process_roads_fimpact(
     # ``huc8`` / ``aoi_code`` may or may not be present depending on the input
     # OSM roads source; we coerce whichever IDs exist to string for the CSV.
     str_cols = [
-        c for c in ("osmid", "huc8", "aoi_code", "HydroID", "feature_id", "branch")
+        c
+        for c in ("osmid", "huc8", "aoi_code", "HydroID", "feature_id", "branch")
         if c in split.columns
     ]
     split[str_cols] = split[str_cols].astype(str)
 
     split = split.drop(columns="geometry")
     split.to_csv(str(out_csv), index=False)
-    log.info("process_roads_fimpact: wrote %d rows → %s", len(split), out_csv.name)
+    log.info("process_roads_fimpact: wrote %d rows --> %s", len(split), out_csv.name)
     return out_csv
 
 

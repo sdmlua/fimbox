@@ -272,15 +272,14 @@ class generateBridgeRaster:
         done_ids = [b for b in all_ids if b in existing]
         pending_ids = [b for b in all_ids if b not in existing]
 
-        print(f"\nBridge raster status: {self._tif_dir}")
-        print(f"  Total   : {len(all_ids)}")
-        print(f"  Done    : {len(done_ids)}  (will be skipped on re-run)")
-        print(f"  Pending : {len(pending_ids)}  (will be processed)")
+        log.info(f"Bridge raster status: {self._tif_dir}")
+        log.info(f"  total   : {len(all_ids)}")
+        log.info(f"  done    : {len(done_ids)} (will be skipped on re-run)")
+        log.info(f"  pending : {len(pending_ids)} (will be processed)")
         if pending_ids:
             preview = pending_ids[:5]
-            more = f" … +{len(pending_ids)-5} more" if len(pending_ids) > 5 else ""
-            print(f"  Pending IDs: {preview}{more}")
-        print()
+            more = f" +{len(pending_ids)-5} more" if len(pending_ids) > 5 else ""
+            log.info(f"  pending IDs: {preview}{more}")
         return {
             "total": len(all_ids),
             "done": len(done_ids),
@@ -290,33 +289,23 @@ class generateBridgeRaster:
         }
 
     def run(self) -> Path:
-        log_path = self._log_dir / "preprocess.log"
-        fh = logging.FileHandler(log_path, mode="a", encoding="utf-8")
-        fh.setLevel(logging.DEBUG)
-        fh.setFormatter(
-            logging.Formatter(
-                "%(asctime)s  %(levelname)-8s  %(message)s", datefmt="%Y-%m-%d %H:%M:%S"
-            )
+        from ...logging_utils import attach_case_log
+
+        attach_case_log(self._log_dir)
+        bridges = self._load_bridges()
+        footprints = self._make_footprints(bridges)
+        index = self._load_entwine_index()
+        footprints = self._assign_lidar_urls(footprints, index)
+        log.info(
+            f"Processing {len(footprints)} bridges: {self.n_workers} workers, "
+            f"{self.tile_workers} tile-threads, min_tile_depth={self.min_tile_depth}, "
+            f"skip_existing={self.skip_existing}"
         )
-        log.addHandler(fh)
-        try:
-            bridges = self._load_bridges()
-            footprints = self._make_footprints(bridges)
-            index = self._load_entwine_index()
-            footprints = self._assign_lidar_urls(footprints, index)
-            log.info(
-                f"Processing {len(footprints)} bridges — {self.n_workers} workers, "
-                f"{self.tile_workers} tile-threads, min_tile_depth={self.min_tile_depth}, "
-                f"skip_existing={self.skip_existing}"
-            )
-            self._process_parallel(footprints)
-            shutil.rmtree(self._point_dir, ignore_errors=True)
-            log.info(f"Removed temporary point_files: {self._point_dir}")
-            n_out = len(list(self._tif_dir.glob("*.tif")))
-            log.info(f"Done — {n_out} rasters written to {self._tif_dir}")
-        finally:
-            log.removeHandler(fh)
-            fh.close()
+        self._process_parallel(footprints)
+        shutil.rmtree(self._point_dir, ignore_errors=True)
+        log.info(f"Removed temporary point_files: {self._point_dir}")
+        n_out = len(list(self._tif_dir.glob("*.tif")))
+        log.info(f"Bridge rasters complete: {n_out} files --> {self._tif_dir.name}")
         return self._tif_dir
 
     def _load_bridges(self) -> gpd.GeoDataFrame:
@@ -455,7 +444,7 @@ def _process_one_bridge(
                 k = min(2, n_bridge)
                 tree = KDTree(xy[bridge_mask])
                 _, idx = tree.query(xy[~bridge_mask], k=k)
-                # k=1 → idx shape (N,); k=2 → (N,2). Normalise to (N,k) for mean(axis=1)
+                # k=1 --> idx shape (N,); k=2 --> (N,2). Normalise to (N,k) for mean(axis=1)
                 if k == 1:
                     idx = idx.reshape(-1, 1)
                 z[~bridge_mask] = z[bridge_mask][idx].mean(axis=1)
@@ -523,7 +512,9 @@ def _process_one_bridge(
 if __name__ == "__main__":
     import argparse
 
-    logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
+    from ...logging_utils import configure_cli_logging
+
+    configure_cli_logging()
 
     p = argparse.ArgumentParser(
         description=(
@@ -558,4 +549,5 @@ if __name__ == "__main__":
     if args.n_workers is not None:
         kwargs["n_workers"] = args.n_workers
 
-    print(f"Per-bridge LiDAR tifs saved to: {generateBridgeRaster(**kwargs).run()}")
+    out = generateBridgeRaster(**kwargs).run()
+    log.info(f"Per-bridge LiDAR tifs --> {out}")

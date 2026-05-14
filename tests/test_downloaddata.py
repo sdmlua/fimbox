@@ -1,4 +1,5 @@
 # Example Usage:
+import logging
 import fimbox
 
 NHDboundary = "/Users/Supath/Downloads/SDML/FIMBOX/data_s3/BoundaryUnit.shp"  # will go to the AWS S3 later [for new nhddownload-no need]
@@ -102,4 +103,4 @@ def test_get_huc8_info():
         save=True,
         out_dir="../out",
     )
-    print(huc8_info)
+    logging.getLogger(__name__).info(f"HUC8 info:\n{huc8_info}")

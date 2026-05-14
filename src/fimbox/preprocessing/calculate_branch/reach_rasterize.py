@@ -26,9 +26,7 @@ def _rasterize_boolean_grid(gpkg: Path, out_path: Path, dem_path: Path) -> int:
         gdf = gdf.to_crs(crs)
 
     shapes = (
-        (geom, 1)
-        for geom in gdf.geometry
-        if geom is not None and not geom.is_empty
+        (geom, 1) for geom in gdf.geometry if geom is not None and not geom.is_empty
     )
     grid = rasterio.features.rasterize(
         shapes=shapes,
@@ -39,12 +37,19 @@ def _rasterize_boolean_grid(gpkg: Path, out_path: Path, dem_path: Path) -> int:
     )
 
     with rasterio.open(
-        str(out_path), "w",
-        driver="GTiff", dtype="int32",
-        width=ncols, height=nrows,
-        count=1, crs=crs, transform=transform,
-        compress="lzw", tiled=True,
-        blockxsize=512, blockysize=512,
+        str(out_path),
+        "w",
+        driver="GTiff",
+        dtype="int32",
+        width=ncols,
+        height=nrows,
+        count=1,
+        crs=crs,
+        transform=transform,
+        compress="lzw",
+        tiled=True,
+        blockxsize=512,
+        blockysize=512,
         BIGTIFF="YES",
     ) as dst:
         dst.write(grid, 1)
@@ -63,9 +68,15 @@ class StreamBooleanRasterizer:
         log.info("Rasterizing NWM streams: %s", Path(self.streams_gpkg).name)
         try:
             n = _rasterize_boolean_grid(self.streams_gpkg, self.out_path, self.dem_path)
-            log.info("Stream boolean grid written → %s  (%d stream pixels)", self.out_path.name, n)
+            log.info(
+                "Stream boolean grid written --> %s  (%d stream pixels)",
+                self.out_path.name,
+                n,
+            )
             if n == 0:
-                log.warning("Stream boolean grid has 0 stream pixels — check CRS alignment")
+                log.warning(
+                    "Stream boolean grid has 0 stream pixels — check CRS alignment"
+                )
         except Exception:
             log.exception("StreamBooleanRasterizer FAILED: gpkg=%s", self.streams_gpkg)
             raise
@@ -82,12 +93,22 @@ class LevelPathBooleanRasterizer:
     def run(self) -> Path:
         log.info("Rasterizing level paths: %s", Path(self.levelpaths_gpkg).name)
         try:
-            n = _rasterize_boolean_grid(self.levelpaths_gpkg, self.out_path, self.dem_path)
-            log.info("Level path boolean grid written → %s  (%d pixels)", self.out_path.name, n)
+            n = _rasterize_boolean_grid(
+                self.levelpaths_gpkg, self.out_path, self.dem_path
+            )
+            log.info(
+                "Level path boolean grid written --> %s  (%d pixels)",
+                self.out_path.name,
+                n,
+            )
             if n == 0:
-                log.warning("Level path boolean grid has 0 pixels — check CRS alignment")
+                log.warning(
+                    "Level path boolean grid has 0 pixels — check CRS alignment"
+                )
         except Exception:
-            log.exception("LevelPathBooleanRasterizer FAILED: gpkg=%s", self.levelpaths_gpkg)
+            log.exception(
+                "LevelPathBooleanRasterizer FAILED: gpkg=%s", self.levelpaths_gpkg
+            )
             raise
         return self.out_path
 
@@ -102,8 +123,14 @@ class HeadwaterRasterizer:
     def run(self) -> Path:
         log.info("Rasterizing headwaters: %s", Path(self.headwaters_gpkg).name)
         try:
-            n = _rasterize_boolean_grid(self.headwaters_gpkg, self.out_path, self.dem_path)
-            log.info("Headwater boolean grid written → %s  (%d pixels)", self.out_path.name, n)
+            n = _rasterize_boolean_grid(
+                self.headwaters_gpkg, self.out_path, self.dem_path
+            )
+            log.info(
+                "Headwater boolean grid written --> %s  (%d pixels)",
+                self.out_path.name,
+                n,
+            )
             if n == 0:
                 log.warning("Headwater boolean grid has 0 pixels — check CRS alignment")
         except Exception:

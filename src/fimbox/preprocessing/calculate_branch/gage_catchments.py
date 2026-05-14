@@ -10,9 +10,9 @@ Steps:
   3. OutletBackpoolMitigate   Detect and trim oversized outlet catchment (non-branch-zero only).
 
 Inputs / outputs follow the inundation-mapping convention:
-  demDerived_streamPixels_{id}.tif           → flows_points_pixels_{id}.gpkg
-  demDerived_reaches_split_points_{id}.gpkg  → gw_catchments_reaches_{id}.tif
-  flows_points_pixels_{id}.gpkg              → gw_catchments_pixels_{id}.tif
+  demDerived_streamPixels_{id}.tif           --> flows_points_pixels_{id}.gpkg
+  demDerived_reaches_split_points_{id}.gpkg  --> gw_catchments_reaches_{id}.tif
+  flows_points_pixels_{id}.gpkg              --> gw_catchments_pixels_{id}.tif
 """
 
 from __future__ import annotations
@@ -33,17 +33,18 @@ from shapely import ops as shapely_ops
 
 log = logging.getLogger(__name__)
 
-# WBT D8 pointer: power-of-2 code → (row_offset, col_offset)
+# WBT D8 pointer: power-of-2 code --> (row_offset, col_offset)
 _D8_OFFSETS: dict[int, tuple[int, int]] = {
-    1:   (0,  1),
-    2:   (1,  1),
-    4:   (1,  0),
-    8:   (1, -1),
-    16:  (0, -1),
-    32:  (-1, -1),
-    64:  (-1,  0),
-    128: (-1,  1),
+    1: (0, 1),
+    2: (1, 1),
+    4: (1, 0),
+    8: (1, -1),
+    16: (0, -1),
+    32: (-1, -1),
+    64: (-1, 0),
+    128: (-1, 1),
 }
+
 
 # Stream pixel centroids
 def stream_pixel_points(
@@ -77,7 +78,7 @@ def stream_pixel_points(
     out_gpkg.parent.mkdir(parents=True, exist_ok=True)
     gdf.to_file(str(out_gpkg), driver="GPKG", index=False, engine="fiona")
 
-    log.info("stream_pixel_points: %d points → %s", len(gdf), out_gpkg.name)
+    log.info("stream_pixel_points: %d points --> %s", len(gdf), out_gpkg.name)
     return out_gpkg
 
 
@@ -128,23 +129,31 @@ class GageCatchments:
                 outlet_rc_ids.append((r, c, int(row_data["id"])))
 
         log.info(
-            "GageCatchments: %d outlet points, propagating → %s",
-            len(outlet_rc_ids), self.out_path.name,
+            "GageCatchments: %d outlet points, propagating --> %s",
+            len(outlet_rc_ids),
+            self.out_path.name,
         )
 
-        result = _gage_watershed(d8, outlet_rc_ids, nodata_d8=nodata_d8, max_iter=self.max_iter)
+        result = _gage_watershed(
+            d8, outlet_rc_ids, nodata_d8=nodata_d8, max_iter=self.max_iter
+        )
 
         # int32 matches FIM output and is supported by all GIS tools.
         # HydroIDs using fimid prefix (4 digits + 4 seq = 8 digits) fit in int32.
         profile.update(
-            dtype="int32", nodata=0,
-            compress="lzw", tiled=True, blockxsize=512, blockysize=512, BIGTIFF="YES",
+            dtype="int32",
+            nodata=0,
+            compress="lzw",
+            tiled=True,
+            blockxsize=512,
+            blockysize=512,
+            BIGTIFF="YES",
         )
         self.out_path.parent.mkdir(parents=True, exist_ok=True)
         with rasterio.open(str(self.out_path), "w", **profile) as dst:
             dst.write(result.astype(np.int32), 1)
 
-        log.info("GageCatchments: written → %s", self.out_path.name)
+        log.info("GageCatchments: written --> %s", self.out_path.name)
         return self.out_path
 
 
@@ -158,7 +167,7 @@ def _gage_watershed(
     Assign each cell to its nearest downstream outlet — equivalent to
     TauDEM gagewatershed.
 
-    Algorithm: label propagation in topological downstream→upstream order.
+    Algorithm: label propagation in topological downstream-->upstream order.
     Each cell inherits the label of its downstream neighbor.  We process
     cells in the order they are visited during a BFS seeded from the outlet
     points — a cell is only enqueued once its downstream neighbor is already
@@ -191,26 +200,25 @@ def _gage_watershed(
     idx_all = np.arange(n, dtype=np.int64)
     non_self = ds != idx_all
     src_cells = idx_all[non_self]
-    dst_cells  = ds[non_self]
-    sort_order  = np.argsort(dst_cells, kind="stable")
-    dst_sorted  = dst_cells[sort_order]
-    src_sorted  = src_cells[sort_order]
-    split_pts   = np.flatnonzero(np.diff(dst_sorted)) + 1
-    boundaries  = np.concatenate([[0], split_pts, [len(dst_sorted)]])
-    groups      = np.split(src_sorted, split_pts)
+    dst_cells = ds[non_self]
+    sort_order = np.argsort(dst_cells, kind="stable")
+    dst_sorted = dst_cells[sort_order]
+    src_sorted = src_cells[sort_order]
+    split_pts = np.flatnonzero(np.diff(dst_sorted)) + 1
+    boundaries = np.concatenate([[0], split_pts, [len(dst_sorted)]])
+    groups = np.split(src_sorted, split_pts)
     us: dict[int, np.ndarray] = {
-        int(dst_sorted[boundaries[k]]): groups[k]
-        for k in range(len(groups))
+        int(dst_sorted[boundaries[k]]): groups[k] for k in range(len(groups))
     }
 
-    result  = np.zeros(n, dtype=np.int32)
+    result = np.zeros(n, dtype=np.int32)
     visited = np.zeros(n, dtype=bool)
 
     # Seed: label each outlet cell and enqueue its upstream neighbors
     queue: deque[int] = deque()
     for r, c, hid in outlet_rc_ids:
         idx = int(r) * cols + int(c)
-        result[idx]  = hid
+        result[idx] = hid
         visited[idx] = True
         for upstream_cell in us.get(idx, []):
             if not visited[int(upstream_cell)]:
@@ -238,9 +246,11 @@ def _gage_watershed(
 
     log.debug(
         "gage_watershed: %d/%d cells labeled",
-        int((result > 0).sum()), n,
+        int((result > 0).sum()),
+        n,
     )
     return result.reshape(rows, cols)
+
 
 # Outlet backpool mitigation
 @dataclass
@@ -282,8 +292,13 @@ class OutletBackpoolMitigate:
 
     def __post_init__(self):
         for attr in (
-            "branch_dir", "catchment_pixels_path", "catchment_reaches_path",
-            "split_flows_gpkg", "split_points_gpkg", "nwm_streams_gpkg", "dem_path",
+            "branch_dir",
+            "catchment_pixels_path",
+            "catchment_reaches_path",
+            "split_flows_gpkg",
+            "split_points_gpkg",
+            "nwm_streams_gpkg",
+            "dem_path",
         ):
             setattr(self, attr, Path(getattr(self, attr)))
 
@@ -336,7 +351,9 @@ class OutletBackpoolMitigate:
             outlet_catch_id = int(catch_data[int(row_f), int(col_f)])
 
         if outlet_catch_id not in outlier_ids:
-            log.info("OutletBackpoolMitigate: outlier catchment not at outlet — skipping")
+            log.info(
+                "OutletBackpoolMitigate: outlier catchment not at outlet — skipping"
+            )
             return False
 
         log.info(
@@ -353,16 +370,18 @@ class OutletBackpoolMitigate:
             node_2tl = outlet_row["From_Node"]
             seg_2tl = split_flows[split_flows["To_Node"] == node_2tl]
             if seg_2tl.empty:
-                log.warning("OutletBackpoolMitigate: cannot find second-to-last segment — skipping")
+                log.warning(
+                    "OutletBackpoolMitigate: cannot find second-to-last segment — skipping"
+                )
                 return False
             trim_pt = Point(list(seg_2tl.iloc[0].geometry.coords)[-1])
         else:
-            log.warning("OutletBackpoolMitigate: outlet reach too short to trim — skipping")
+            log.warning(
+                "OutletBackpoolMitigate: outlet reach too short to trim — skipping"
+            )
             return False
 
-        trim_pt_gdf = gpd.GeoDataFrame(
-            [{"geometry": trim_pt}], crs=split_flows.crs
-        )
+        trim_pt_gdf = gpd.GeoDataFrame([{"geometry": trim_pt}], crs=split_flows.crs)
         trim_pt_snapped = split_flows.iloc[[outlet_segs.index[0]]].interpolate(
             split_flows.iloc[[outlet_segs.index[0]]].project(trim_pt_gdf.geometry)
         )
@@ -380,8 +399,12 @@ class OutletBackpoolMitigate:
                 p0 = seg_geom.coords[0]
                 p1 = seg_geom.coords[-1]
                 try:
-                    e0, e1 = [v[0] for v in rasterio.sample.sample_gen(dem_ds, [p0, p1])]
-                    slope = max(abs(e0 - e1) / max(seg_geom.length, 1e-9), self.slope_min)
+                    e0, e1 = [
+                        v[0] for v in rasterio.sample.sample_gen(dem_ds, [p0, p1])
+                    ]
+                    slope = max(
+                        abs(e0 - e1) / max(seg_geom.length, 1e-9), self.slope_min
+                    )
                 except Exception:
                     slope = self.slope_min
             split_flows.loc[outlet_segs.index[0], "S0"] = slope
@@ -399,18 +422,27 @@ class OutletBackpoolMitigate:
                 new_boundary = filtered.dissolve()
                 boundary_json = [new_boundary.iloc[0].geometry.__geo_interface__]
                 _mask_raster_to_boundary(
-                    self.catchment_reaches_path, boundary_json, self.catchment_reaches_path
+                    self.catchment_reaches_path,
+                    boundary_json,
+                    self.catchment_reaches_path,
                 )
                 _mask_raster_to_boundary(
-                    self.catchment_pixels_path, boundary_json, self.catchment_pixels_path
+                    self.catchment_pixels_path,
+                    boundary_json,
+                    self.catchment_pixels_path,
                 )
 
         # Save updated vectors
-        split_flows.to_file(str(self.split_flows_gpkg), driver="GPKG", index=False, engine="fiona")
-        split_points.to_file(str(self.split_points_gpkg), driver="GPKG", index=False, engine="fiona")
+        split_flows.to_file(
+            str(self.split_flows_gpkg), driver="GPKG", index=False, engine="fiona"
+        )
+        split_points.to_file(
+            str(self.split_points_gpkg), driver="GPKG", index=False, engine="fiona"
+        )
 
         log.info("OutletBackpoolMitigate: mitigation applied — files updated")
         return True
+
 
 # Internal utilis
 def _catch_size_outliers(
@@ -434,7 +466,9 @@ def _catch_size_outliers(
     if outlier_ids:
         log.info(
             "  catchment size outliers: %d found (mean=%.0f, std=%.0f)",
-            len(outlier_ids), mean_c, std_c,
+            len(outlier_ids),
+            mean_c,
+            std_c,
         )
         return True, outlier_ids
     return False, []
@@ -456,6 +490,7 @@ def _polygonize_catchments(raster_path: Path) -> Optional[gpd.GeoDataFrame]:
         vals = []
         for geom, val in shapes:
             from shapely.geometry import shape
+
             geoms.append(shape(geom))
             vals.append(int(val))
 
@@ -465,7 +500,9 @@ def _polygonize_catchments(raster_path: Path) -> Optional[gpd.GeoDataFrame]:
         return None
 
 
-def _mask_raster_to_boundary(raster_path: Path, boundary_json: list, save_path: Path) -> None:
+def _mask_raster_to_boundary(
+    raster_path: Path, boundary_json: list, save_path: Path
+) -> None:
     """Mask a raster to a geometry boundary and save in-place."""
     from rasterio.mask import mask as rio_mask
     import shutil
@@ -474,7 +511,13 @@ def _mask_raster_to_boundary(raster_path: Path, boundary_json: list, save_path: 
     try:
         with rasterio.open(str(raster_path)) as src:
             profile = src.profile.copy()
-            profile.update(compress="lzw", tiled=True, blockxsize=512, blockysize=512, BIGTIFF="YES")
+            profile.update(
+                compress="lzw",
+                tiled=True,
+                blockxsize=512,
+                blockysize=512,
+                BIGTIFF="YES",
+            )
             masked, _ = rio_mask(src, boundary_json, crop=False)
         with rasterio.open(str(tmp), "w", **profile) as dst:
             dst.write(masked[0], 1)

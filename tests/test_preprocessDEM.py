@@ -1,6 +1,8 @@
 # Example Usage:
+import logging
 import fimbox
 
+log = logging.getLogger(__name__)
 boundary = "/Users/supath/Downloads/MSResearch/FIMBOX/03020202/wbd.gpkg"
 
 
@@ -13,4 +15,4 @@ def test_process_dem():
         # dem_file: Optional[str] = None,  #path to local DEM file if available or outside CONUS
         # epsg: Optional[int] = None       #desired output CRS EPSG code for projection, if None auto-detects UTM zone
     )
-    print(f"3DEP DEM saved at: {output_path}")
+    log.info(f"3DEP DEM --> {output_path}")

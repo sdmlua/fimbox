@@ -45,6 +45,7 @@ log = logging.getLogger(__name__)
 
 _TO_KM = 1e-3
 
+
 def split_derived_reaches(
     reaches_gpkg: Path,
     dem_thalweg_cond: Path,
@@ -110,10 +111,13 @@ def split_derived_reaches(
         lakes_gdf = gpd.read_file(str(lakes_gpkg), engine="fiona").to_crs(dem_crs)
         if len(lakes_gdf) > 0:
             lake_id_col = next(
-                (c for c in ("newID", "wb_id", "LakeID") if c in lakes_gdf.columns), None
+                (c for c in ("newID", "wb_id", "LakeID") if c in lakes_gdf.columns),
+                None,
             )
             if lake_id_col:
-                log.info("SplitReaches: splitting at %d lake boundaries", len(lakes_gdf))
+                log.info(
+                    "SplitReaches: splitting at %d lake boundaries", len(lakes_gdf)
+                )
                 lakes_gdf = lakes_gdf[[lake_id_col, "geometry"]].set_index(lake_id_col)
                 flows = (
                     gpd.overlay(flows, lakes_gdf, how="union", keep_geom_type=True)
@@ -128,7 +132,9 @@ def split_derived_reaches(
         return out_split_gpkg, out_points_gpkg
 
     # split long segments & compute slope — geometries are in dem_crs (metres)
-    log.info("SplitReaches: splitting %d segments (max_length=%.0fm)", len(flows), max_length)
+    log.info(
+        "SplitReaches: splitting %d segments (max_length=%.0fm)", len(flows), max_length
+    )
     split_lines: list[LineString] = []
     slopes: list[float] = []
 
@@ -136,7 +142,7 @@ def split_derived_reaches(
         for geom in flows.geometry:
             if geom is None or geom.is_empty or geom.length == 0:
                 continue
-            # TauDEM streamnet outputs reaches upstream-first (headwater → confluence).
+            # TauDEM streamnet outputs reaches upstream-first (headwater --> confluence).
             # Do NOT reverse — coords[0] = headwater, coords[-1] = outlet/confluence.
             line = LineString(geom.coords)
             _split_one_line(line, dem_ds, max_length, slope_min, split_lines, slopes)
@@ -145,9 +151,7 @@ def split_derived_reaches(
         log.warning("SplitReaches: no segments produced after splitting")
         return out_split_gpkg, out_points_gpkg
 
-    split_gdf = gpd.GeoDataFrame(
-        {"S0": slopes, "geometry": split_lines}, crs=dem_crs
-    )
+    split_gdf = gpd.GeoDataFrame({"S0": slopes, "geometry": split_lines}, crs=dem_crs)
     split_gdf["LengthKm"] = split_gdf.geometry.length * _TO_KM
 
     # Assign LakeID
@@ -156,7 +160,12 @@ def split_derived_reaches(
         lakes_buf.index.name = lake_id_col
         lakes_buf = lakes_buf.reset_index()
         lakes_buf["geometry"] = lakes_buf.buffer(lakes_buffer_dist)
-        split_gdf = gpd.sjoin(split_gdf, lakes_buf[[lake_id_col, "geometry"]], how="left", predicate="within")
+        split_gdf = gpd.sjoin(
+            split_gdf,
+            lakes_buf[[lake_id_col, "geometry"]],
+            how="left",
+            predicate="within",
+        )
         split_gdf = split_gdf.rename(columns={lake_id_col: "LakeID"}).fillna(-999)
         split_gdf = split_gdf.drop(columns=["index_right"], errors="ignore")
     else:
@@ -188,15 +197,15 @@ def split_derived_reaches(
 
     hydro_ids_pts = list(split_points_od.values())
     points = [Point(*pt) for pt in split_points_od]
-    pts_gdf = gpd.GeoDataFrame(
-        {"id": hydro_ids_pts, "geometry": points}, crs=dem_crs
-    )
+    pts_gdf = gpd.GeoDataFrame({"id": hydro_ids_pts, "geometry": points}, crs=dem_crs)
 
     # write outputs (remove any 0-byte leftovers from prior failed runs)
     for _p in (out_split_gpkg, out_points_gpkg):
         if _p.exists():
             _p.unlink()
-    log.info("SplitReaches: writing %d segments → %s", len(split_gdf), out_split_gpkg.name)
+    log.info(
+        "SplitReaches: writing %d segments --> %s", len(split_gdf), out_split_gpkg.name
+    )
     split_gdf.to_file(str(out_split_gpkg), driver="GPKG", index=False, engine="fiona")
     pts_gdf.to_file(str(out_points_gpkg), driver="GPKG", index=False, engine="fiona")
 
@@ -263,7 +272,9 @@ def _line_slope(line: LineString, dem_ds, slope_min: float) -> float:
 def _snap_and_trim(flows: gpd.GeoDataFrame, nwm_streams_gpkg: Path) -> gpd.GeoDataFrame:
     """Trim DEM-derived flows to NWM branch terminus (matching split_flows.py logic)."""
     try:
-        nwm = gpd.read_file(str(nwm_streams_gpkg), engine="fiona").explode(index_parts=True)
+        nwm = gpd.read_file(str(nwm_streams_gpkg), engine="fiona").explode(
+            index_parts=True
+        )
         if flows.crs is None:
             log.warning("snap-and-trim skipped: reaches have no CRS")
             return flows
@@ -272,6 +283,7 @@ def _snap_and_trim(flows: gpd.GeoDataFrame, nwm_streams_gpkg: Path) -> gpd.GeoDa
         if "levpa_id" in nwm.columns:
             # Non-zero branch: single level path
             from shapely.ops import linemerge
+
             dissolved = nwm.dissolve(by="levpa_id").iloc[0]["geometry"]
             merged = linemerge(dissolved)
             if merged.geom_type == "MultiLineString":
@@ -282,7 +294,9 @@ def _snap_and_trim(flows: gpd.GeoDataFrame, nwm_streams_gpkg: Path) -> gpd.GeoDa
             flows = _snap_trim_single(terminal_pt, flows)
         else:
             # Branch zero: loop over NWM terminal segments (to == 0)
-            terminals = nwm[nwm.get("to", None) == 0] if "to" in nwm.columns else nwm.iloc[:0]
+            terminals = (
+                nwm[nwm.get("to", None) == 0] if "to" in nwm.columns else nwm.iloc[:0]
+            )
             for _, row in terminals.iterrows():
                 pt = gpd.GeoDataFrame(
                     [{"geometry": Point(list(row.geometry.coords)[-1])}], crs=flows.crs
@@ -293,7 +307,9 @@ def _snap_and_trim(flows: gpd.GeoDataFrame, nwm_streams_gpkg: Path) -> gpd.GeoDa
     return flows
 
 
-def _snap_trim_single(snapped_pt: gpd.GeoDataFrame, flows: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
+def _snap_trim_single(
+    snapped_pt: gpd.GeoDataFrame, flows: gpd.GeoDataFrame
+) -> gpd.GeoDataFrame:
     """Snap a point to the nearest flow and trim the flow at that point."""
     try:
         if len(flows) > 1:
@@ -331,7 +347,11 @@ def _assign_hydro_ids(
     # HydroID from area boundary midpoint join
     if wbd8 is not None and hydro_id not in split_gdf.columns:
         midpoints = gpd.GeoDataFrame(
-            {"geometry": [g.interpolate(0.5, normalized=True) for g in split_gdf.geometry]},
+            {
+                "geometry": [
+                    g.interpolate(0.5, normalized=True) for g in split_gdf.geometry
+                ]
+            },
             crs=split_gdf.crs,
         )
         # fimid is the 4-digit node ID FIM uses as the HydroID prefix (e.g. "1864").
@@ -345,16 +365,25 @@ def _assign_hydro_ids(
         )
 
         if boundary_id_col:
-            joined = gpd.sjoin(midpoints, wbd8[[boundary_id_col, "geometry"]], how="left", predicate="within")
+            joined = gpd.sjoin(
+                midpoints,
+                wbd8[[boundary_id_col, "geometry"]],
+                how="left",
+                predicate="within",
+            )
             split_gdf["boundary_id"] = joined[boundary_id_col].values
             split_gdf["seqID"] = (
-                split_gdf.groupby("boundary_id", dropna=False).cumcount() + 1
-            ).astype(str).str.zfill(4)
+                (split_gdf.groupby("boundary_id", dropna=False).cumcount() + 1)
+                .astype(str)
+                .str.zfill(4)
+            )
             split_gdf = split_gdf.loc[split_gdf["boundary_id"].notna(), :]
             split_gdf[hydro_id] = (
                 split_gdf["boundary_id"].astype(str) + split_gdf["seqID"]
             ).astype(np.int64, errors="ignore")
-            split_gdf = split_gdf.drop(columns=["boundary_id", "seqID"], errors="ignore")
+            split_gdf = split_gdf.drop(
+                columns=["boundary_id", "seqID"], errors="ignore"
+            )
         else:
             split_gdf[hydro_id] = np.arange(1, len(split_gdf) + 1, dtype=np.int64)
     else:
@@ -388,12 +417,14 @@ def _assign_hydro_ids(
     split_gdf["To_Node"] = to_nodes
 
     # NextDownID: find the HydroID of the segment whose From_Node == our To_Node.
-    # FIM uses a From_Node → [list of HydroIDs] dict (multiple segments can start
+    # FIM uses a From_Node --> [list of HydroIDs] dict (multiple segments can start
     # from the same node at confluences). We replicate that: when multiple segments
     # share a From_Node, take the one with the smallest HydroID (first in sort order,
     # matching FIM's behaviour of taking next_down_ids[0]).
     dnodes: dict[int, list[int]] = {}
-    for fn, hid_val in zip(split_gdf["From_Node"].tolist(), split_gdf[hydro_id].tolist()):
+    for fn, hid_val in zip(
+        split_gdf["From_Node"].tolist(), split_gdf[hydro_id].tolist()
+    ):
         if fn in dnodes:
             dnodes[fn].append(int(hid_val))
         else:

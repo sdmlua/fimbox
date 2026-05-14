@@ -6,6 +6,7 @@ Description: This contains small utilities modules for the NHDPlus data preproce
 """
 
 import json
+import logging
 import geopandas as gpd
 import pandas as pd
 import requests
@@ -15,6 +16,8 @@ from typing import Optional, Union, List
 from shapely.geometry import Point, box
 from shapely.ops import unary_union
 import argparse
+
+log = logging.getLogger(__name__)
 
 
 class NHDBoundaryFinder:
@@ -128,8 +131,8 @@ def find_headwater_points(flowlines_gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
 class HUC8Finder:
     """
     Two-way HUC8 utility:
-      - boundary path/GDF  → list of intersecting HUC8 IDs (+ optional overlap %)
-      - single HUC8 string → GeoDataFrame of that watershed boundary
+      - boundary path/GDF  --> list of intersecting HUC8 IDs (+ optional overlap %)
+      - single HUC8 string --> GeoDataFrame of that watershed boundary
 
     Parameters
     ----------
@@ -158,7 +161,7 @@ class HUC8Finder:
 
     def _log(self, msg):
         if self.debug:
-            print(f"[HUC8] {msg}")
+            log.info(f"[HUC8] {msg}")
 
     def _load_boundary(self, boundary, layer=None) -> gpd.GeoDataFrame:
         if isinstance(boundary, gpd.GeoDataFrame):
@@ -222,7 +225,7 @@ class HUC8Finder:
         }
         result = self._post_geojson(params)
         if result.empty:
-            print("No intersecting HUC8 regions found.")
+            log.warning("No intersecting HUC8 regions found.")
             return result
 
         if calc_overlap:
@@ -239,7 +242,7 @@ class HUC8Finder:
             self.out_dir.mkdir(parents=True, exist_ok=True)
             out_path = self.out_dir / "intersecting_huc8.gpkg"
             result.to_file(out_path, driver="GPKG", index=False)
-            print(f"Saved → {out_path}")
+            log.info(f"Intersecting HUC8s --> {out_path.name}")
 
         return result
 
@@ -265,7 +268,7 @@ class HUC8Finder:
             self.out_dir.mkdir(parents=True, exist_ok=True)
             out_path = self.out_dir / f"HUC{huc8}_boundary.gpkg"
             result.to_file(out_path, driver="GPKG", index=False)
-            print(f"Saved → {out_path}")
+            log.info(f"HUC{huc8} boundary --> {out_path.name}")
 
         return result
 
@@ -281,10 +284,10 @@ def getHUC8Info(
     """
     Convenience wrapper around HUC8Finder.
 
-    Pass boundary  → returns intersecting HUC8 polygons.
-    Pass huc8      → returns that watershed's boundary polygon.
-    calc_overlap   → adds overlap_pct column (only with boundary mode).
-    save / out_dir → write result to disk.
+    Pass boundary  --> returns intersecting HUC8 polygons.
+    Pass huc8      --> returns that watershed's boundary polygon.
+    calc_overlap   --> adds overlap_pct column (only with boundary mode).
+    save / out_dir --> write result to disk.
     """
     if boundary is None and huc8 is None:
         raise ValueError("Provide either boundary or huc8.")
@@ -294,8 +297,11 @@ def getHUC8Info(
     return finder.from_boundary(boundary, layer=layer, calc_overlap=calc_overlap)
 
 
-# CLI support for standalone testing
+# CLI
 if __name__ == "__main__":
+    from ...logging_utils import configure_cli_logging
+
+    configure_cli_logging()
     parser = argparse.ArgumentParser(
         description="Derive headwater points from flowlines."
     )
@@ -313,4 +319,4 @@ if __name__ == "__main__":
     result = find_headwater_points(input_gdf)
 
     result.to_file(args.output)
-    print(f"Successfully derived {len(result)} headwater points to {args.output}")
+    log.info(f"Headwater points ({len(result)} features) --> {args.output}")

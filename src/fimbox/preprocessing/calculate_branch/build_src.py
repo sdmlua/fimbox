@@ -69,16 +69,18 @@ def build_src_base(
     out_csv.parent.mkdir(parents=True, exist_ok=True)
 
     if out_csv.exists() and out_csv.stat().st_size > 0:
-        log.info("build_src: output exists, skipping → %s", out_csv.name)
+        log.info("build_src: output exists, skipping --> %s", out_csv.name)
         return out_csv
 
     stages = _read_stages(stages_txt)
-    catch_meta = _read_catchlist(catchlist_txt)  # HydroID → (S0, LengthKm, areasqkm)
+    catch_meta = _read_catchlist(catchlist_txt)  # HydroID --> (S0, LengthKm, areasqkm)
     hydro_ids = list(catch_meta.keys())
 
     log.info(
         "build_src: %d hydroIDs × %d stages = %d SRC rows",
-        len(hydro_ids), len(stages), len(hydro_ids) * len(stages),
+        len(hydro_ids),
+        len(stages),
+        len(hydro_ids) * len(stages),
     )
 
     with rasterio.open(str(hand_raster)) as hand_ds:
@@ -155,16 +157,18 @@ def build_src_base(
             # No raster pixels for this catchment — emit zero-volume rows so
             # the downstream merge still produces a stage ladder for this HydroID.
             for h in stages:
-                rows.append({
-                    "CatchId": int(hid),
-                    "Number of Cells": 0,
-                    "SurfaceArea (m2)": 0.0,
-                    "BedArea (m2)": 0.0,
-                    "Volume (m3)": 0.0,
-                    "Stage": float(h),
-                    " SLOPE": float(s0),
-                    "LENGTHKM": float(length_km),
-                })
+                rows.append(
+                    {
+                        "CatchId": int(hid),
+                        "Number of Cells": 0,
+                        "SurfaceArea (m2)": 0.0,
+                        "BedArea (m2)": 0.0,
+                        "Volume (m3)": 0.0,
+                        "Stage": float(h),
+                        " SLOPE": float(s0),
+                        "LENGTHKM": float(length_km),
+                    }
+                )
             continue
 
         s, e = starts[k], starts[k + 1]
@@ -179,16 +183,18 @@ def build_src_base(
 
         for h, n_le in zip(stages, idx):
             if n_le == 0:
-                rows.append({
-                    "CatchId": int(hid),
-                    "Number of Cells": 0,
-                    "SurfaceArea (m2)": 0.0,
-                    "BedArea (m2)": 0.0,
-                    "Volume (m3)": 0.0,
-                    "Stage": float(h),
-                    " SLOPE": float(s0),
-                    "LENGTHKM": float(length_km),
-                })
+                rows.append(
+                    {
+                        "CatchId": int(hid),
+                        "Number of Cells": 0,
+                        "SurfaceArea (m2)": 0.0,
+                        "BedArea (m2)": 0.0,
+                        "Volume (m3)": 0.0,
+                        "Stage": float(h),
+                        " SLOPE": float(s0),
+                        "LENGTHKM": float(length_km),
+                    }
+                )
                 continue
             n_int = int(n_le)
             sum_hand_le = float(catch_cum_hand[n_int - 1])
@@ -196,21 +202,23 @@ def build_src_base(
             surface_area = n_int * pixel_area
             # Volume = Σ (h - HAND_i) * pixel_area = h*N*A - A*Σ HAND_i
             volume = (float(h) * n_int * pixel_area) - (sum_hand_le * pixel_area)
-            rows.append({
-                "CatchId": int(hid),
-                "Number of Cells": n_int,
-                "SurfaceArea (m2)": surface_area,
-                "BedArea (m2)": sum_bed_le,
-                "Volume (m3)": max(volume, 0.0),
-                "Stage": float(h),
-                " SLOPE": float(s0),
-                "LENGTHKM": float(length_km),
-            })
+            rows.append(
+                {
+                    "CatchId": int(hid),
+                    "Number of Cells": n_int,
+                    "SurfaceArea (m2)": surface_area,
+                    "BedArea (m2)": sum_bed_le,
+                    "Volume (m3)": max(volume, 0.0),
+                    "Stage": float(h),
+                    " SLOPE": float(s0),
+                    "LENGTHKM": float(length_km),
+                }
+            )
 
     df = pd.DataFrame.from_records(rows)
     df.to_csv(str(out_csv), index=False)
 
-    log.info("build_src: written %d rows → %s", len(df), out_csv.name)
+    log.info("build_src: written %d rows --> %s", len(df), out_csv.name)
     return out_csv
 
 

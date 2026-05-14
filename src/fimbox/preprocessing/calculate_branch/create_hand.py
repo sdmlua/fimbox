@@ -49,6 +49,7 @@ from typing import Optional
 
 log = logging.getLogger(__name__)
 
+
 @dataclass
 class CreateHAND:
     aoi_dir: Path
@@ -56,20 +57,20 @@ class CreateHAND:
     branch_id: str
 
     # paths
-    dem_path: Optional[Path] = None            # dem_{id}.tif
-    flowdir_path: Optional[Path] = None        # flowdir_d8_burned_filled_{id}.tif
-    headwaters_path: Optional[Path] = None     # headwaters_{id}.tif
-    streams_gpkg: Optional[Path] = None        # nwm_subset_streams.gpkg
-    catchments_gpkg: Optional[Path] = None     # nwm_catchments_proj_subset.gpkg
+    dem_path: Optional[Path] = None  # dem_{id}.tif
+    flowdir_path: Optional[Path] = None  # flowdir_d8_burned_filled_{id}.tif
+    headwaters_path: Optional[Path] = None  # headwaters_{id}.tif
+    streams_gpkg: Optional[Path] = None  # nwm_subset_streams.gpkg
+    catchments_gpkg: Optional[Path] = None  # nwm_catchments_proj_subset.gpkg
 
     # optional files
     levee_protected_areas_gpkg: Optional[Path] = None
     levee_levelpaths_csv: Optional[Path] = None
     lakes_gpkg: Optional[Path] = None
-    boundary_gpkg: Optional[Path] = None          # AOI boundary file (e.g. wbd8_clp.gpkg)
-    osm_bridges_gpkg: Optional[Path] = None       # osm_bridges_subset.gpkg
-    osm_roads_gpkg: Optional[Path] = None         # osm_roads_subset.gpkg
-    bridge_diff_raster: Optional[Path] = None     # bridge_elev_diff_meters_{id}.tif
+    boundary_gpkg: Optional[Path] = None  # AOI boundary file (e.g. wbd8_clp.gpkg)
+    osm_bridges_gpkg: Optional[Path] = None  # osm_bridges_subset.gpkg
+    osm_roads_gpkg: Optional[Path] = None  # osm_roads_subset.gpkg
+    bridge_diff_raster: Optional[Path] = None  # bridge_elev_diff_meters_{id}.tif
 
     # AOI identifier. When unset, derived from the aoi_dir name as a fallback.
     aoi_code: Optional[str] = None
@@ -111,17 +112,27 @@ class CreateHAND:
         if self.catchments_gpkg is None:
             self.catchments_gpkg = self.aoi_dir / "nwm_catchments_proj_subset.gpkg"
 
-        for attr in ("dem_path", "flowdir_path", "headwaters_path",
-                     "streams_gpkg", "catchments_gpkg"):
+        for attr in (
+            "dem_path",
+            "flowdir_path",
+            "headwaters_path",
+            "streams_gpkg",
+            "catchments_gpkg",
+        ):
             setattr(self, attr, Path(getattr(self, attr)))
         # Resolve back-compat alias: if a caller still passes ``wbd8_clp_gpkg``
         # but not ``boundary_gpkg``, lift the value to the generic field.
         if self.boundary_gpkg is None and self.wbd8_clp_gpkg is not None:
             self.boundary_gpkg = self.wbd8_clp_gpkg
         for attr in (
-            "levee_protected_areas_gpkg", "levee_levelpaths_csv",
-            "lakes_gpkg", "boundary_gpkg", "wbd8_clp_gpkg",
-            "osm_bridges_gpkg", "osm_roads_gpkg", "bridge_diff_raster",
+            "levee_protected_areas_gpkg",
+            "levee_levelpaths_csv",
+            "lakes_gpkg",
+            "boundary_gpkg",
+            "wbd8_clp_gpkg",
+            "osm_bridges_gpkg",
+            "osm_roads_gpkg",
+            "bridge_diff_raster",
         ):
             val = getattr(self, attr)
             if val is not None:
@@ -140,35 +151,18 @@ class CreateHAND:
 
     def run(self) -> dict[str, Path]:
         """Execute all HAND preprocessing steps and return output paths."""
-        log_path = self.aoi_dir / "preprocess.log"
-        fh = logging.FileHandler(str(log_path), mode="a", encoding="utf-8")
-        fh.setLevel(logging.DEBUG)
-        fh.setFormatter(
-            logging.Formatter(
-                "%(asctime)s  %(levelname)-8s  %(name)s  %(message)s",
-                datefmt="%Y-%m-%d %H:%M:%S",
-            )
-        )
-        fimbox_log = logging.getLogger("fimbox")
-        fimbox_log.setLevel(logging.DEBUG)
-        fimbox_log.addHandler(fh)
+        from ...logging_utils import attach_case_log
 
+        attach_case_log(self.aoi_dir)
         try:
-            log.info("=" * 60)
-            log.info(
-                "CreateHAND START  branch_id=%s  branch_dir=%s",
-                self.branch_id, self.branch_dir,
-            )
+            log.info(f"--- CreateHAND: branch_id={self.branch_id} ---")
+            log.info(f"branch_dir: {self.branch_dir}")
             result = self._run()
-            log.info("CreateHAND DONE -- %d outputs", len(result))
-            log.info("=" * 60)
+            log.info(f"CreateHAND complete: {len(result)} outputs")
             return result
         except Exception:
-            log.exception("CreateHAND FAILED for branch %s", self.branch_id)
+            log.exception(f"CreateHAND failed for branch {self.branch_id}")
             raise
-        finally:
-            fimbox_log.removeHandler(fh)
-            fh.close()
 
     def _run(self) -> dict[str, Path]:
         from .add_crosswalk import add_crosswalk, NoCrosswalkError
@@ -176,7 +170,11 @@ class CreateHAND:
         from .filter_catchments import FilterCatchments, NoFlowlinesError
         from .flowacc_dem import FlowAccDEM
         from .flowdir_dem import D8SlopeDEM
-        from .gage_catchments import GageCatchments, OutletBackpoolMitigate, stream_pixel_points
+        from .gage_catchments import (
+            GageCatchments,
+            OutletBackpoolMitigate,
+            stream_pixel_points,
+        )
         from .heal_bridges_osm import heal_bridges_osm
         from .levee_rasterize import mask_levee_dem
         from .make_rem import MakeREM
@@ -188,13 +186,15 @@ class CreateHAND:
         from .thalweg_adjustment import ThalwegAdjustment
 
         bid = self.branch_id
-        bd  = self.branch_dir
+        bd = self.branch_dir
         outputs: dict[str, Path] = {}
         _TOTAL = 22
 
         def _progress(n: int, label: str, skipped: bool = False) -> None:
-            tag = "skip" if skipped else "run "
-            print(f"  [{n}/{_TOTAL}] {tag}  {label}", flush=True)
+            # Per-step progress goes to the case log via the shared logger,
+            # not to stdout (keeps the log readable and consistent).
+            tag = "SKIP" if skipped else "RUN "
+            log.info(f"[{n}/{_TOTAL}] {tag} {label}")
 
         # Levee mask
         _progress(1, "levee mask")
@@ -202,6 +202,7 @@ class CreateHAND:
         _exists_warn(self.dem_path, "dem_path")
         if not dem_working.exists():
             import shutil
+
             shutil.copy2(self.dem_path, dem_working)
         if self.levee_protected_areas_gpkg and self.levee_protected_areas_gpkg.exists():
             log.info("Masking levee-protected areas from DEM")
@@ -217,12 +218,12 @@ class CreateHAND:
         outputs["dem"] = dem_working
 
         # Flow accumulation
-        flowaccum     = bd / f"flowaccum_d8_burned_filled_{bid}.tif"
+        flowaccum = bd / f"flowaccum_d8_burned_filled_{bid}.tif"
         stream_pixels = bd / f"demDerived_streamPixels_{bid}.tif"
         if flowaccum.exists() and stream_pixels.exists():
             _progress(2, "flow accumulation", skipped=True)
             log.info("Flow accumulation: outputs exist, skipping")
-            outputs["flowaccum"]     = flowaccum
+            outputs["flowaccum"] = flowaccum
             outputs["stream_pixels"] = stream_pixels
         elif self.headwaters_path and self.headwaters_path.exists():
             _progress(2, "flow accumulation")
@@ -233,21 +234,21 @@ class CreateHAND:
                 out_flowaccum=flowaccum,
                 out_stream_pixels=stream_pixels,
             ).run()
-            outputs["flowaccum"]     = flowaccum
+            outputs["flowaccum"] = flowaccum
             outputs["stream_pixels"] = stream_pixels
         else:
             log.warning("headwaters raster not found -- skipping flow accumulation")
 
         # Thalweg adjustment
-        thalweg_adj    = bd / f"dem_lateral_thalweg_adj_{bid}.tif"
+        thalweg_adj = bd / f"dem_lateral_thalweg_adj_{bid}.tif"
         flowdir_streams = bd / f"flowdir_d8_burned_filled_flows_{bid}.tif"
-        thalweg_cond   = bd / f"dem_thalwegCond_{bid}.tif"
+        thalweg_cond = bd / f"dem_thalwegCond_{bid}.tif"
         if thalweg_adj.exists() and flowdir_streams.exists() and thalweg_cond.exists():
             _progress(3, "thalweg adjustment", skipped=True)
             log.info("Thalweg adjustment: outputs exist, skipping")
-            outputs["thalweg_adj"]     = thalweg_adj
+            outputs["thalweg_adj"] = thalweg_adj
             outputs["flowdir_streams"] = flowdir_streams
-            outputs["thalweg_cond"]    = thalweg_cond
+            outputs["thalweg_cond"] = thalweg_cond
         elif stream_pixels.exists():
             _progress(3, "thalweg adjustment")
             log.info("Thalweg adjustment + flow conditioning")
@@ -262,9 +263,9 @@ class CreateHAND:
                 lateral_elevation_threshold=self.lateral_elevation_threshold,
                 wbt_path=self.wbt_path,
             ).run()
-            outputs["thalweg_adj"]     = thalweg_adj
+            outputs["thalweg_adj"] = thalweg_adj
             outputs["flowdir_streams"] = flowdir_streams
-            outputs["thalweg_cond"]    = thalweg_cond
+            outputs["thalweg_cond"] = thalweg_cond
         else:
             log.warning("stream_pixels not found -- skipping thalweg adjustment")
 
@@ -288,17 +289,19 @@ class CreateHAND:
             log.warning("thalweg_adj not found -- skipping D8 slopes")
 
         # Stream network
-        reaches_gpkg  = bd / f"demDerived_reaches_{bid}.gpkg"
-        stream_order  = bd / f"streamOrder_{bid}.tif"
+        reaches_gpkg = bd / f"demDerived_reaches_{bid}.gpkg"
+        stream_order = bd / f"streamOrder_{bid}.tif"
         sn_catchments = bd / f"sn_catchments_reaches_{bid}.tif"
         if stream_order.exists() and sn_catchments.exists() and reaches_gpkg.exists():
             _progress(5, "stream network", skipped=True)
             log.info("Stream network: outputs exist, skipping")
-            outputs.update({
-                "stream_order": stream_order,
-                "sn_catchments_reaches": sn_catchments,
-                "demDerived_reaches": reaches_gpkg,
-            })
+            outputs.update(
+                {
+                    "stream_order": stream_order,
+                    "sn_catchments_reaches": sn_catchments,
+                    "demDerived_reaches": reaches_gpkg,
+                }
+            )
         elif stream_pixels.exists() and thalweg_cond.exists() and flowaccum.exists():
             _progress(5, "stream network")
             log.info("Stream network delineation")
@@ -313,16 +316,18 @@ class CreateHAND:
             ).run()
             outputs.update(sn_out)
         else:
-            log.warning("Skipping streamnet -- missing stream_pixels / thalweg_cond / flowaccum")
+            log.warning(
+                "Skipping streamnet -- missing stream_pixels / thalweg_cond / flowaccum"
+            )
 
         # Split reaches
         out_split = bd / f"demDerived_reaches_split_{bid}.gpkg"
-        out_pts   = bd / f"demDerived_reaches_split_points_{bid}.gpkg"
+        out_pts = bd / f"demDerived_reaches_split_points_{bid}.gpkg"
         if out_split.exists() and out_pts.exists():
             _progress(6, "split reaches", skipped=True)
             log.info("Split reaches: outputs exist, skipping")
             outputs["split_reaches"] = out_split
-            outputs["split_points"]  = out_pts
+            outputs["split_points"] = out_pts
         elif reaches_gpkg.exists() and thalweg_cond.exists():
             _progress(6, "split reaches")
             log.info("Split derived reaches")
@@ -343,9 +348,11 @@ class CreateHAND:
                 lakes_buffer_dist=self.lakes_buffer_dist_m,
             )
             outputs["split_reaches"] = out_split
-            outputs["split_points"]  = out_pts
+            outputs["split_points"] = out_pts
         else:
-            log.warning("Skipping split_reaches -- missing demDerived_reaches or thalweg_cond")
+            log.warning(
+                "Skipping split_reaches -- missing demDerived_reaches or thalweg_cond"
+            )
 
         # Gage watershed for reaches
         gw_reaches = bd / f"gw_catchments_reaches_{bid}.tif"
@@ -432,7 +439,9 @@ class CreateHAND:
             ).run()
             outputs["rem"] = rem_path
         else:
-            log.warning("Skipping REM -- missing thalweg_cond / gw_catchments_pixels / stream_pixels")
+            log.warning(
+                "Skipping REM -- missing thalweg_cond / gw_catchments_pixels / stream_pixels"
+            )
 
         # Zero/mask REM  (REM * (REM>=0) * (gw_catchments_reaches>0))
         rem_zeroed = bd / f"rem_zeroed_masked_{bid}.tif"
@@ -446,7 +455,9 @@ class CreateHAND:
             rem_zeroed_masked(rem_path, gw_reaches, rem_zeroed)
             outputs["rem_zeroed_masked"] = rem_zeroed
         else:
-            log.warning("Skipping REM zeroed+masked -- missing rem / gw_catchments_reaches")
+            log.warning(
+                "Skipping REM zeroed+masked -- missing rem / gw_catchments_reaches"
+            )
 
         # Polygonize gw_catchments_reaches raster --> GeoPackage
         catch_poly_gpkg = bd / f"gw_catchments_reaches_{bid}.gpkg"
@@ -463,16 +474,20 @@ class CreateHAND:
             log.warning("Skipping polygonize -- missing gw_catchments_reaches")
 
         # Filter catchments + add flow attributes
-        filtered_catchments = bd / f"gw_catchments_reaches_filtered_addedAttributes_{bid}.gpkg"
-        filtered_flows      = bd / f"demDerived_reaches_split_filtered_{bid}.gpkg"
+        filtered_catchments = (
+            bd / f"gw_catchments_reaches_filtered_addedAttributes_{bid}.gpkg"
+        )
+        filtered_flows = bd / f"demDerived_reaches_split_filtered_{bid}.gpkg"
         if (
-            filtered_catchments.exists() and filtered_catchments.stat().st_size > 0
-            and filtered_flows.exists()  and filtered_flows.stat().st_size > 0
+            filtered_catchments.exists()
+            and filtered_catchments.stat().st_size > 0
+            and filtered_flows.exists()
+            and filtered_flows.stat().st_size > 0
         ):
             _progress(14, "filter catchments", skipped=True)
             log.info("Filter catchments: outputs exist, skipping")
             outputs["filtered_catchments"] = filtered_catchments
-            outputs["filtered_flows"]      = filtered_flows
+            outputs["filtered_flows"] = filtered_flows
         elif catch_poly_gpkg.exists() and out_split.exists():
             _progress(14, "filter catchments")
             log.info("Filter catchments and add attributes")
@@ -486,14 +501,18 @@ class CreateHAND:
                     boundary_gpkg=self.boundary_gpkg,
                 ).run()
                 outputs["filtered_catchments"] = filtered_catchments
-                outputs["filtered_flows"]      = filtered_flows
+                outputs["filtered_flows"] = filtered_flows
             except NoFlowlinesError as exc:
                 log.warning("FilterCatchments: %s", exc)
         else:
-            log.warning("Skipping filter catchments -- missing polygonized catchments or split reaches")
+            log.warning(
+                "Skipping filter catchments -- missing polygonized catchments or split reaches"
+            )
 
-        # Rasterize filtered catchments → GeoTIFF (HydroID burn)
-        filtered_catch_tif = bd / f"gw_catchments_reaches_filtered_addedAttributes_{bid}.tif"
+        # Rasterize filtered catchments --> GeoTIFF (HydroID burn)
+        filtered_catch_tif = (
+            bd / f"gw_catchments_reaches_filtered_addedAttributes_{bid}.tif"
+        )
         if filtered_catch_tif.exists() and filtered_catch_tif.stat().st_size > 0:
             _progress(15, "rasterize filtered catchments", skipped=True)
             log.info("Rasterize filtered catchments: output exists, skipping")
@@ -517,7 +536,9 @@ class CreateHAND:
             mask_slopes_to_catchments(slopes_d8, filtered_catch_tif, slopes_masked)
             outputs["slopes_masked"] = slopes_masked
         else:
-            log.warning("Skipping slopes mask -- missing slopes or filtered catchments raster")
+            log.warning(
+                "Skipping slopes mask -- missing slopes or filtered catchments raster"
+            )
 
         # Stage ladder + catchment list (inputs to the SRC builder)
         stages_txt = bd / f"stage_{bid}.txt"
@@ -541,7 +562,9 @@ class CreateHAND:
             outputs["stages_txt"] = stages_txt
             outputs["catchlist_txt"] = catchlist_txt
         else:
-            log.warning("Skipping stages_catchlist -- missing filtered flows or catchments")
+            log.warning(
+                "Skipping stages_catchlist -- missing filtered flows or catchments"
+            )
 
         # SRC base (Python port of TauDEM catchhydrogeo)
         src_base_csv = bd / f"src_base_{bid}.csv"
@@ -567,11 +590,19 @@ class CreateHAND:
             )
             outputs["src_base_csv"] = src_base_csv
         else:
-            log.warning("Skipping SRC base -- missing HAND / catchments raster / slopes / stage files")
+            log.warning(
+                "Skipping SRC base -- missing HAND / catchments raster / slopes / stage files"
+            )
 
         # Crosswalk to NWM feature_ids + hydroTable
-        xwalk_catch = bd / f"gw_catchments_reaches_filtered_addedAttributes_crosswalked_{bid}.gpkg"
-        xwalk_flows = bd / f"demDerived_reaches_split_filtered_addedAttributes_crosswalked_{bid}.gpkg"
+        xwalk_catch = (
+            bd
+            / f"gw_catchments_reaches_filtered_addedAttributes_crosswalked_{bid}.gpkg"
+        )
+        xwalk_flows = (
+            bd
+            / f"demDerived_reaches_split_filtered_addedAttributes_crosswalked_{bid}.gpkg"
+        )
         src_full_csv = bd / f"src_full_crosswalked_{bid}.csv"
         src_json = bd / f"src_{bid}.json"
         crosswalk_csv = bd / f"crosswalk_table_{bid}.csv"
@@ -615,7 +646,9 @@ class CreateHAND:
             except NoCrosswalkError as exc:
                 log.warning("add_crosswalk: %s", exc)
         else:
-            log.warning("Skipping crosswalk -- missing filtered catchments, SRC base, or NWM streams")
+            log.warning(
+                "Skipping crosswalk -- missing filtered catchments, SRC base, or NWM streams"
+            )
 
         # Heal HAND for OSM bridges (in-place update of rem_zeroed_masked)
         bridges_gpkg = self.osm_bridges_gpkg
@@ -644,7 +677,9 @@ class CreateHAND:
             except ModuleNotFoundError as exc:
                 log.warning("Bridge healing skipped: %s", exc)
         else:
-            log.info("Skipping bridge healing -- no OSM bridges or crosswalked catchments")
+            log.info(
+                "Skipping bridge healing -- no OSM bridges or crosswalked catchments"
+            )
 
         # OSM road FIMpact
         roads_gpkg = self.osm_roads_gpkg
@@ -733,8 +768,10 @@ def _polygonize_catchments(catchments_raster: Path, out_gpkg: Path) -> None:
         values.append(int(val))
 
     gdf = gpd.GeoDataFrame({"HydroID": values}, geometry=geoms, crs=crs)
-    gdf.to_file(str(out_gpkg), driver="GPKG", layer="catchments", index=False, engine="fiona")
-    log.info("Polygonize: %d catchment polygons → %s", len(gdf), out_gpkg.name)
+    gdf.to_file(
+        str(out_gpkg), driver="GPKG", layer="catchments", index=False, engine="fiona"
+    )
+    log.info("Polygonize: %d catchment polygons --> %s", len(gdf), out_gpkg.name)
 
 
 def _rasterize_catchments(
@@ -759,7 +796,7 @@ def _rasterize_catchments(
         meta = ref.meta.copy()
         transform = ref.transform
         height = ref.height
-        width  = ref.width
+        width = ref.width
 
     meta.update(
         dtype="int32",
@@ -792,4 +829,6 @@ def _rasterize_catchments(
     with rasterio.open(str(out_tif), "w", **meta) as dst:
         dst.write(burned, 1)
 
-    log.info("Rasterize filtered catchments → %s  (%d features)", out_tif.name, len(gdf))
+    log.info(
+        "Rasterize filtered catchments --> %s  (%d features)", out_tif.name, len(gdf)
+    )

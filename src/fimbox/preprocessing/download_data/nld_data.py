@@ -18,6 +18,8 @@ import pandas as pd
 from shapely.geometry import Polygon, MultiPolygon, LineString, MultiLineString
 from tqdm import tqdm
 
+log = logging.getLogger(__name__)
+
 
 class ESRI_REST:
     """
@@ -58,8 +60,7 @@ class ESRI_REST:
         limit_reached = True
 
         if self.verbose and total_features > 0:
-            print(f"--- ESRI Query Started ---")
-            print(f"Total features to download: {total_features}")
+            log.info(f"ESRI query: {total_features} features to download")
 
         if total_features == 0:
             return gpd.GeoDataFrame()
@@ -109,8 +110,7 @@ class ESRI_REST:
 
         base_params = {**params, "f": "json", "returnZ": "true"}
         if self.verbose:
-            print(f"--- ESRI Query (with Z) Started ---")
-            print(f"Total features to download: {total_features}")
+            log.info(f"ESRI query (with Z): {total_features} features to download")
 
         results = []
         offset = 0
@@ -187,8 +187,7 @@ class DownloadNLD:
         self.lines_name = lines_name or "NLD_Lines.gpkg"
         self.polys_name = polys_name or "NLD_Polygons.gpkg"
 
-        logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
-        self.logger = logging.getLogger(__name__)
+        self.logger = log
 
         self.output_dir = Path(out_dir) if out_dir else Path.cwd() / "nld_data"
         self.output_dir.mkdir(parents=True, exist_ok=True)
@@ -231,8 +230,8 @@ class DownloadNLD:
         }
 
         try:
-            print(
-                f"Downloading full NLD {layer_type} dataset (spatial filter unsupported by service)..."
+            log.info(
+                f"Downloading NLD {layer_type} (spatial filter unsupported, clipping locally)"
             )
             rest = ESRI_REST(url)
             if is_poly:
@@ -241,7 +240,7 @@ class DownloadNLD:
                 gdf_raw = rest._execute_query_with_z(base_params)
 
             if gdf_raw.empty:
-                print(f"  [{layer_type}]: Service returned no features.")
+                log.warning(f"NLD {layer_type}: service returned no features.")
                 return gdf_raw
 
             if gdf_raw.crs is None:
@@ -251,7 +250,7 @@ class DownloadNLD:
             clipped = gpd.clip(gdf_raw, boundary_4269)
 
             if clipped.empty:
-                print(f"  [{layer_type}]: No features intersect the boundary.")
+                log.warning(f"NLD {layer_type}: no features intersect boundary.")
                 return clipped
 
             # Lines: reproject XY but preserve Z — use set_crs + manual reproject
@@ -259,23 +258,48 @@ class DownloadNLD:
             return clipped.to_crs(epsg=self.epsg)
 
         except Exception as e:
-            self.logger.error(f"Failed to query {layer_type}: {e}", exc_info=True)
-            print(f"  [{layer_type}] ERROR: {e}")
+            log.error(f"NLD {layer_type} failed: {e}", exc_info=True)
             return gpd.GeoDataFrame()
 
     def run(self):
-        print("\n" + "-" * 50)
-        print(f"NLD DOWNLOAD AUDIT - {datetime.now().strftime('%H:%M:%S')}")
-        print("-" * 50)
+        log.info("--- NLD download ---")
 
         lines = self._query_nld(self.LINE_URL, is_poly=False)
         if not lines.empty:
             lines.to_file(self.output_dir / self.lines_name, driver="GPKG")
-            print(f"Saved {len(lines)} levee lines.")
+            log.info(f"NLD levee lines ({len(lines)} features) --> {self.lines_name}")
 
         polys = self._query_nld(self.POLY_URL, is_poly=True)
         if not polys.empty:
             polys.to_file(self.output_dir / self.polys_name, driver="GPKG")
-            print(f"Saved {len(polys)} leveed area polygons.")
+            log.info(
+                f"NLD leveed-area polygons ({len(polys)} features) --> {self.polys_name}"
+            )
 
-        print("Process complete.")
+        log.info("NLD download complete.")
+
+
+# CLI
+if __name__ == "__main__":
+    import argparse
+    from ...logging_utils import configure_cli_logging
+
+    configure_cli_logging()
+    parser = argparse.ArgumentParser(
+        description="Download NLD levees within a boundary."
+    )
+    parser.add_argument("--boundary", required=True, help="Path to boundary file")
+    parser.add_argument("--layer-name", default=None)
+    parser.add_argument("--out-dir", default="nld_data")
+    parser.add_argument("--epsg", type=int, default=5070)
+    parser.add_argument("--lines-name", default=None)
+    parser.add_argument("--polys-name", default=None)
+    args = parser.parse_args()
+    DownloadNLD(
+        boundary=args.boundary,
+        layer_name=args.layer_name,
+        epsg=args.epsg,
+        out_dir=args.out_dir,
+        lines_name=args.lines_name,
+        polys_name=args.polys_name,
+    )

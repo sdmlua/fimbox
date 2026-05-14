@@ -89,7 +89,7 @@ def rem_zeroed_masked(
             result[rem_blk == nodata_rem] = nodata_rem
             out_ds.write(result, window=window, indexes=1)
 
-    log.info("rem_zeroed_masked → %s", out_path.name)
+    log.info("rem_zeroed_masked --> %s", out_path.name)
     return out_path
 
 
@@ -143,5 +143,5 @@ def mask_slopes_to_catchments(
             result = np.where(cat_blk > 0, slp_blk, np.float32(nodata_slp))
             out_ds.write(result.astype(np.float32), window=window, indexes=1)
 
-    log.info("mask_slopes_to_catchments → %s", out_path.name)
+    log.info("mask_slopes_to_catchments --> %s", out_path.name)
     return out_path

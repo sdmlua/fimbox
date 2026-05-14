@@ -43,8 +43,8 @@ import numpy as np
 
 log = logging.getLogger(__name__)
 
-_MIN_LENGTH_TINY_KM = 0.02    # tiny isolated outlet stub threshold
-_MIN_LENGTH_KM      = 0.001   # absolute minimum reach length (sub-metre)
+_MIN_LENGTH_TINY_KM = 0.02  # tiny isolated outlet stub threshold
+_MIN_LENGTH_KM = 0.001  # absolute minimum reach length (sub-metre)
 
 
 @dataclass
@@ -89,15 +89,17 @@ class FilterCatchments:
         Raises NoFlowlinesError when no reaches survive filtering.
         """
         if (
-            self.out_catchments.exists() and self.out_catchments.stat().st_size > 0
-            and self.out_flows.exists()  and self.out_flows.stat().st_size > 0
+            self.out_catchments.exists()
+            and self.out_catchments.stat().st_size > 0
+            and self.out_flows.exists()
+            and self.out_flows.stat().st_size > 0
         ):
             log.info("FilterCatchments: outputs exist, skipping")
             return self.out_catchments, self.out_flows
 
         log.info("FilterCatchments: reading inputs")
         catchments = gpd.read_file(str(self.catchments_gpkg), engine="fiona")
-        flows      = gpd.read_file(str(self.flows_gpkg),      engine="fiona")
+        flows = gpd.read_file(str(self.flows_gpkg), engine="fiona")
 
         flows = _filter_by_aoi(flows, self.boundary_gpkg, self.aoi_code)
         flows = _drop_tiny_outlet_stubs(flows, self.min_tiny_stub_km)
@@ -129,7 +131,8 @@ class FilterCatchments:
 
         log.info(
             "FilterCatchments: writing %d catchments, %d reaches",
-            len(out_catchments), len(flows),
+            len(out_catchments),
+            len(flows),
         )
 
         for p in (self.out_catchments, self.out_flows):
@@ -139,9 +142,7 @@ class FilterCatchments:
         out_catchments.to_file(
             str(self.out_catchments), driver="GPKG", index=False, engine="fiona"
         )
-        flows.to_file(
-            str(self.out_flows), driver="GPKG", index=False, engine="fiona"
-        )
+        flows.to_file(str(self.out_flows), driver="GPKG", index=False, engine="fiona")
 
         return self.out_catchments, self.out_flows
 
@@ -168,7 +169,9 @@ def _filter_by_aoi(
     are returned unchanged.
     """
     if boundary_path is None or not boundary_path.exists():
-        log.debug("FilterCatchments: no boundary file — keeping all %d reaches", len(flows))
+        log.debug(
+            "FilterCatchments: no boundary file — keeping all %d reaches", len(flows)
+        )
         return flows.copy()
     if not aoi_code:
         log.debug("FilterCatchments: no aoi_code — keeping all reaches")
@@ -178,16 +181,22 @@ def _filter_by_aoi(
 
     code_col = next((c for c in _AOI_CODE_COLUMNS if c in boundary.columns), None)
     if code_col is None:
-        log.warning("FilterCatchments: boundary file has no recognised code column — keeping all reaches")
+        log.warning(
+            "FilterCatchments: boundary file has no recognised code column — keeping all reaches"
+        )
         return flows.copy()
 
     if "HydroID" not in boundary.columns:
-        log.debug("FilterCatchments: boundary file has no HydroID column — keeping all reaches")
+        log.debug(
+            "FilterCatchments: boundary file has no HydroID column — keeping all reaches"
+        )
         return flows.copy()
 
     select_ids = tuple(
         str(int(v))
-        for v in boundary.loc[boundary[code_col].astype(str).str.contains(aoi_code), "HydroID"]
+        for v in boundary.loc[
+            boundary[code_col].astype(str).str.contains(aoi_code), "HydroID"
+        ]
     )
     if not select_ids:
         log.debug("FilterCatchments: AOI filter produced no IDs — keeping all reaches")
@@ -195,7 +204,9 @@ def _filter_by_aoi(
 
     mask = flows["HydroID"].astype(str).str.startswith(select_ids)
     result = flows[mask].copy()
-    log.debug("FilterCatchments: AOI filter kept %d / %d reaches", len(result), len(flows))
+    log.debug(
+        "FilterCatchments: AOI filter kept %d / %d reaches", len(result), len(flows)
+    )
     return result
 
 
@@ -211,7 +222,7 @@ def _drop_tiny_outlet_stubs(
     if "NextDownID" not in flows.columns or "LengthKm" not in flows.columns:
         return flows
 
-    hydro_ids   = flows["HydroID"].astype(int)
+    hydro_ids = flows["HydroID"].astype(int)
     next_dn_ids = flows["NextDownID"].astype(int)
 
     referenced_as_downstream = set(next_dn_ids.values)
@@ -242,7 +253,7 @@ def _drop_smaller_duplicates(gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
     hids = gdf["HydroID"].values
     drop_indices: list[int] = []
     for hid in dup_ids:
-        idx   = np.where(hids == hid)[0]
+        idx = np.where(hids == hid)[0]
         areas = gdf.iloc[idx].geometry.area.values
         drop_indices.extend(idx[areas != areas.max()].tolist())
 
