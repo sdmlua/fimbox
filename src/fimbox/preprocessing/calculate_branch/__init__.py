@@ -59,6 +59,26 @@ from .build_src import build_src_base
 # crosswalk to NWM feature_ids & final hydroTable / SRC
 from .add_crosswalk import NoCrosswalkError, add_crosswalk
 
+# USGS / AHPS / RAS2FIM gage assignment + per-branch DEM crosswalk
+from .gage_crosswalk import (
+    GageBranchAssignment,
+    assign_gages_to_branches,
+    run_branch_crosswalk,
+)
+
+# FEMA NFHL floodplain adjustment for branch-level burned DEMs
+from .adjust_floodplains import adjust_floodplains
+
+# Multi-branch AOI orchestrator (parallel BranchZero + CreateHAND + calibration)
+# HucProcessingConfig is exported as a backwards-compatible alias for callers
+# that still pass huc_dir / huc_id — both names point at the same class.
+from .process_branches import (
+    BranchResult,
+    AOIProcessingConfig,
+    HucProcessingConfig,
+    process_branches,
+)
+
 # OSM bridge healing of HAND
 from .heal_bridges_osm import heal_bridges_osm
 
@@ -118,6 +138,17 @@ __all__ = [
     "build_src_base",
     "add_crosswalk",
     "NoCrosswalkError",
+    # USGS / AHPS / RAS2FIM gage crosswalk
+    "GageBranchAssignment",
+    "assign_gages_to_branches",
+    "run_branch_crosswalk",
+    # FEMA floodplain adjustment
+    "adjust_floodplains",
+    # multi-branch orchestrator
+    "BranchResult",
+    "AOIProcessingConfig",
+    "HucProcessingConfig",
+    "process_branches",
     # bridges + roads
     "heal_bridges_osm",
     "process_roads_fimpact",

@@ -40,6 +40,26 @@ from .preprocessing import build_src_base
 from .preprocessing import NoCrosswalkError, add_crosswalk
 from .preprocessing import heal_bridges_osm
 from .preprocessing import process_roads_fimpact
+from .preprocessing import (
+    GageBranchAssignment,
+    assign_gages_to_branches,
+    run_branch_crosswalk,
+)
+from .preprocessing import adjust_floodplains
+from .preprocessing import (
+    BranchResult,
+    AOIProcessingConfig,
+    HucProcessingConfig,
+    process_branches,
+)
+from .preprocessing import (
+    CalibrationConfig,
+    CalibrationNotImplemented,
+    aggregate_branches,
+    manual_calibration,
+    reset_hydro_and_src,
+    run_calibration,
+)
 
 __all__ = [
     "BranchDerivation",
@@ -75,6 +95,20 @@ __all__ = [
     "NoCrosswalkError",
     "heal_bridges_osm",
     "process_roads_fimpact",
+    "GageBranchAssignment",
+    "assign_gages_to_branches",
+    "run_branch_crosswalk",
+    "adjust_floodplains",
+    "BranchResult",
+    "AOIProcessingConfig",
+    "HucProcessingConfig",
+    "process_branches",
+    "CalibrationConfig",
+    "CalibrationNotImplemented",
+    "aggregate_branches",
+    "manual_calibration",
+    "reset_hydro_and_src",
+    "run_calibration",
 ]
 
 try:

@@ -54,6 +54,28 @@ from .calculate_branch import build_src_base
 from .calculate_branch import NoCrosswalkError, add_crosswalk
 from .calculate_branch import heal_bridges_osm
 from .calculate_branch import process_roads_fimpact
+from .calculate_branch import (
+    GageBranchAssignment,
+    assign_gages_to_branches,
+    run_branch_crosswalk,
+)
+from .calculate_branch import adjust_floodplains
+from .calculate_branch import (
+    BranchResult,
+    AOIProcessingConfig,
+    HucProcessingConfig,
+    process_branches,
+)
+
+# calibrate subpackage: SRC calibration pipeline + per-step entry points
+from .calibrate import (
+    CalibrationConfig,
+    CalibrationNotImplemented,
+    aggregate_branches,
+    manual_calibration,
+    reset_hydro_and_src,
+    run_calibration,
+)
 
 __all__ = [
     "BranchDerivation",
@@ -89,6 +111,20 @@ __all__ = [
     "NoCrosswalkError",
     "heal_bridges_osm",
     "process_roads_fimpact",
+    "GageBranchAssignment",
+    "assign_gages_to_branches",
+    "run_branch_crosswalk",
+    "adjust_floodplains",
+    "BranchResult",
+    "AOIProcessingConfig",
+    "HucProcessingConfig",
+    "process_branches",
+    "CalibrationConfig",
+    "CalibrationNotImplemented",
+    "aggregate_branches",
+    "manual_calibration",
+    "reset_hydro_and_src",
+    "run_calibration",
 ]
 
 # preprocess_area
