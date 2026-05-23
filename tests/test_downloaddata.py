@@ -104,3 +104,32 @@ def test_get_huc8_info():
         out_dir="../out",
     )
     logging.getLogger(__name__).info(f"HUC8 info:\n{huc8_info}")
+
+
+# USGS gauge points — downloads from the ArcGIS Online FeatureServer.
+# Uncomment to run live; the smoke test below always runs.
+
+# def test_download_usgs_gages():
+#     """Download USGS gauges inside the test boundary into ../out/usgs_gages.gpkg."""
+#     gdf = fimbox.DownloadUSGSGages().download(
+#         boundary=test_boundary,
+#         aoi_id="08060202",
+#         out_dir="../out",
+#         out_name="usgs_gages.gpkg",
+#         out_layer="usgs_gages",
+#     )
+#     log = logging.getLogger(__name__)
+#     log.info(f"USGS gauges downloaded: {len(gdf)} features")
+#     assert {"location_id", "feature_id", "aoi_id", "source"}.issubset(gdf.columns)
+
+
+# def test_usgs_gages_signature():
+#     """Smoke test: DownloadUSGSGages is exported and has the documented API."""
+#     import inspect
+
+#     assert hasattr(fimbox, "DownloadUSGSGages")
+#     sig = inspect.signature(fimbox.DownloadUSGSGages.download)
+#     expected = {"boundary", "aoi_id", "out_dir", "out_name", "out_layer"}
+#     assert expected.issubset(sig.parameters.keys()), (
+#         f"DownloadUSGSGages.download missing kwargs: {expected - set(sig.parameters)}"
+#     )

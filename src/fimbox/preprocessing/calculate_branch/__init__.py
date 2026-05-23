@@ -69,6 +69,24 @@ from .gage_crosswalk import (
 # FEMA NFHL floodplain adjustment for branch-level burned DEMs
 from .adjust_floodplains import adjust_floodplains
 
+# Branch-zero crosswalk-accuracy diagnostic (intersections + network checks)
+from .evaluate_crosswalk import evaluate_crosswalk
+
+# Int16 downcast of gw_catchments + REM rasters (storage optimisation)
+from .convert_to_int16 import (
+    CannotConvertHydroIDsToInt16,
+    convert_branch_to_int16,
+)
+
+# Branch-directory deny-list cleanup
+from .outputs_cleanup import remove_deny_list_files
+
+# Full per-AOI branch loop + AOI-level cleanup wrapper
+from .calculate_allbranches import (
+    AllBranchesResult,
+    calculate_allbranches,
+)
+
 # Multi-branch AOI orchestrator (parallel BranchZero + CreateHAND + calibration)
 # HucProcessingConfig is exported as a backwards-compatible alias for callers
 # that still pass huc_dir / huc_id — both names point at the same class.
@@ -144,6 +162,13 @@ __all__ = [
     "run_branch_crosswalk",
     # FEMA floodplain adjustment
     "adjust_floodplains",
+    # diagnostics + storage optimisation
+    "evaluate_crosswalk",
+    "convert_branch_to_int16",
+    "CannotConvertHydroIDsToInt16",
+    "remove_deny_list_files",
+    "AllBranchesResult",
+    "calculate_allbranches",
     # multi-branch orchestrator
     "BranchResult",
     "AOIProcessingConfig",

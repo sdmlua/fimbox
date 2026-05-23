@@ -81,11 +81,22 @@ def rem_zeroed_masked(
             rem_blk = rem_ds.read(1, window=window).astype(np.float32)
             cat_blk = cat_ds.read(1, window=window)
 
+            # The reference formula is (A * (A>=0) * (B>0)) with an explicit
+            # NoDataValue. In gdal_calc, NaN inputs fail the (A>=0) test and
+            # become 0 — NumPy multiplication instead propagates NaN, which
+            # leaks through later assertions. Replace NaN with the nodata
+            # sentinel before the multiply so the formula matches.
+            nan_mask = np.isnan(rem_blk)
+            if nan_mask.any():
+                rem_blk = np.where(nan_mask, nodata_rem, rem_blk)
+
             result = (
                 rem_blk
                 * (rem_blk >= 0).astype(np.float32)
                 * (cat_blk > 0).astype(np.float32)
             )
+            # Tag every pixel that came from a nodata REM cell — including the
+            # rows we just rewrote from NaN — back to the nodata sentinel.
             result[rem_blk == nodata_rem] = nodata_rem
             out_ds.write(result, window=window, indexes=1)
 

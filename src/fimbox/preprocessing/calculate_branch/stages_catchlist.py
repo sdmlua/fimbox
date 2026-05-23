@@ -2,15 +2,15 @@
 Author: Supath Dhital
 Date Updated: May 2026
 
-Build the two text files that ``catchhydrogeo`` (the synthetic rating curve
-generator) reads:
+Build the two text files for the synthetic rating curve
+generator, reads:
 
-* ``stage_{id}.txt``
+- stage_{id}.txt
     A column of stage heights (m). The header is the literal word ``Stage``;
     subsequent rows are stages from ``stages_min`` to ``stages_max`` inclusive
     at ``stages_interval`` spacing. Used as the discretization for the SRC.
 
-* ``catch_list_{id}.txt``
+- catch_list_{id}.txt
     Tabular per-HydroID metadata consumed alongside the stage column. First
     row is the count of HydroIDs. Each remaining row is
     ``HydroID S0 LengthKm areasqkm``, in the same order as the catchments

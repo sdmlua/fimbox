@@ -29,7 +29,7 @@ flows_gpkg      : demDerived_reaches_split_filtered_{id}.gpkg
 src_base_csv    : src_base_{id}.csv     (output of build_src)
 boundary_gpkg   : AOI boundary file (optional metadata lookup, e.g. wbd8_clp.gpkg)
 nwm_streams     : reference flowlines gpkg containing 'ID' / 'feature_id',
-                  optional 'order_', 'Slope'/'So'
+                  optional 'order_'
 aoi_code        : user-defined AOI identifier — recorded on every hydroTable row
 
 Outputs
@@ -57,7 +57,7 @@ log = logging.getLogger(__name__)
 
 PathLike = Union[str, Path]
 
-# Slope sanity bounds — out-of-range values fall back to RISE/RUN.
+# Slope sanity bounds — out-of-range DEM slopes are clipped to SLOPE_MIN.
 SLOPE_MIN = 9.999e-7
 SLOPE_MAX = 0.5
 
@@ -86,7 +86,7 @@ def add_crosswalk(
     small_segments_csv: Optional[PathLike] = None,
 ) -> dict[str, Path]:
     """
-    Run the full crosswalk + hydraulic table build. Returns a dict of output
+    Run the full crosswalk and hydraulic table build. Returns a dict of output
     paths keyed by their role.
     """
     catchments_gpkg = Path(catchments_gpkg)
@@ -217,19 +217,17 @@ def add_crosswalk(
 
 # Internal helpers
 def _prepare_nwm(nwm: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
-    """Normalise the NWM streams gdf to a feature_id-indexed table with order_/Slope."""
+    """Normalise the NWM streams gdf to a feature_id-indexed table with order_.
+
+    SLOPE is always taken from the DEM-derived value carried through src_base
+    (the "SLOPE" column written by build_src). NWM-side slope columns (Slope /
+    So / SLOPE_HFAB / SLOPE_IRIS_SWORD) are ignored so the final SRC uses a
+    single, internally-consistent slope source."""
     if "ID" in nwm.columns:
         nwm = nwm.rename(columns={"ID": "feature_id"})
     if "feature_id" not in nwm.columns:
         raise ValueError("NWM streams file must contain an 'ID' or 'feature_id' column")
     nwm["feature_id"] = nwm["feature_id"].astype(int)
-
-    if "Slope" in nwm.columns:
-        nwm = nwm.rename(columns={"Slope": "SLOPE_HFAB"})
-    elif "So" in nwm.columns:
-        nwm = nwm.rename(columns={"So": "SLOPE_HFAB"})
-    else:
-        nwm["SLOPE_HFAB"] = np.nan
 
     if "order_" not in nwm.columns:
         # Some hydrofabric tiles use 'order' or 'streamOrde' — fall back gracefully.
@@ -268,7 +266,7 @@ def _build_crosswalk(
 
     keep = ["HydroID", "feature_id", "distance"]
     out = joined[keep].merge(
-        nwm_indexed[["order_", "SLOPE_HFAB"]].reset_index(),
+        nwm_indexed[["order_"]].reset_index(),
         on="feature_id",
         how="left",
     )
@@ -323,27 +321,28 @@ def _find_short_segments(
 def _build_src_full(
     src_base_csv: Path, flows: pd.DataFrame, mannings_n: float
 ) -> pd.DataFrame:
-    """Compute per-stage Manning hydraulics from the base SRC table."""
+    """Compute per-stage Manning hydraulics from the base SRC table.
+
+    SLOPE is the DEM-derived value carried through src_base (column ' SLOPE',
+    with the leading space). Clipped to [SLOPE_MIN, SLOPE_MAX] for numerical
+    stability and rounded to 3 sig-fig scientific to avoid spurious precision."""
     base = pd.read_csv(str(src_base_csv))
-    base = base.rename(columns={" SLOPE": "SLOPE_RISE_RUN"})
+    base = base.rename(columns=lambda c: c.strip(" "))
 
     base["CatchId"] = base["CatchId"].astype(int)
     base = base.merge(
-        flows[["HydroID", "NextDownID", "order_", "SLOPE_HFAB"]],
+        flows[["HydroID", "NextDownID", "order_"]],
         left_on="CatchId",
         right_on="HydroID",
     )
     base["ManningN"] = float(mannings_n)
 
-    # SLOPE source: prefer the DEM-derived rise/run (SLOPE_RISE_RUN). Sanity bound
-    # extremely flat or impossibly steep values to the rise/run fallback as well.
-    rise_run = pd.to_numeric(base["SLOPE_RISE_RUN"], errors="coerce")
-    rise_run = rise_run.where(
-        (rise_run >= SLOPE_MIN) & (rise_run <= SLOPE_MAX), other=SLOPE_MIN
+    # Sanity-bound the DEM-derived slope so Manning's equation stays well-defined.
+    dem_slope = pd.to_numeric(base["SLOPE"], errors="coerce")
+    dem_slope = dem_slope.where(
+        (dem_slope >= SLOPE_MIN) & (dem_slope <= SLOPE_MAX), other=SLOPE_MIN
     )
-    base["SLOPE"] = rise_run.apply(lambda x: float(f"{x:.3e}"))
-
-    base = base.rename(columns=lambda c: c.strip(" "))
+    base["SLOPE"] = dem_slope.apply(lambda x: float(f"{x:.3e}"))
 
     # Hydraulic geometry — all per-segment averaged values.
     length_m = base["LENGTHKM"] * 1000.0
@@ -403,8 +402,6 @@ def _build_hydro_table(
         "HydraulicRadius (m)",
         "WetArea (m2)",
         "Volume (m3)",
-        "SLOPE_HFAB",
-        "SLOPE_RISE_RUN",
         "SLOPE",
         "ManningN",
         "Stage",

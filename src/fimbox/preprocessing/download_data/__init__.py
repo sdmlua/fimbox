@@ -24,6 +24,9 @@ from .nld_data import DownloadNLD
 # Get the OSM Roads
 from .osm_data import DownloadOSMRoads, DownloadOSMBridges
 
+# Download USGS gauge points (CONUS) from ArcGIS Online FeatureServer
+from .usgs_gages import DownloadUSGSGages
+
 __all__ = [
     "DEMProcessor",
     "NHDBoundaryFinder",
@@ -39,4 +42,5 @@ __all__ = [
     "DownloadLandSea",
     "DownloadOSMRoads",
     "DownloadOSMBridges",
+    "DownloadUSGSGages",
 ]

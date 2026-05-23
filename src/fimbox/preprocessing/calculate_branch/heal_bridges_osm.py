@@ -26,7 +26,7 @@ threatened-bridge reporting.
 
 Inputs
 ------
-hand_raster        : rem_zeroed_masked_{id}.tif  (overwritten in place)
+hand_raster        : rem_zeroed_masked_{id}.tif
 bridge_diff_raster : bridge_elev_diff_meters_{id}.tif (optional, for LiDAR class)
 bridges_gpkg       : osm_bridges_subset.gpkg
 catchments_gpkg    : gw_catchments_reaches_filtered_addedAttributes_crosswalked_{id}.gpkg

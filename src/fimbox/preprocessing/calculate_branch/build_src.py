@@ -2,13 +2,7 @@
 Author: Supath Dhital
 Date Updated: May 2026
 
-Synthetic Rating Curve (SRC) base-table builder.
-
-Python port of TauDEM ``catchhydrogeo``: for every (HydroID, Stage) pair the
-inundated channel geometry is integrated from the zeroed/masked HAND raster
-within the catchment footprint. The output CSV columns match what FIM's
-``add_crosswalk.py`` expects so the downstream hydraulic-table merge runs
-unmodified.
+Developing the Synthetic Rating Curve (SRC) table.
 
 Algorithm (per catchment, per stage h):
     inundated      = HAND <= h within the catchment
@@ -109,8 +103,7 @@ def build_src_base(
 
     # Per-cell wetted bed factor: sqrt(1 + slope^2) accounts for the terrain
     # tilt of each cell — flat cells contribute pixel_area, steep cells contribute
-    # more bed area than their planar projection. This is the same expression
-    # TauDEM catchhydrogeo uses for the BedArea integral.
+    # more bed area than their planar projection.
     bed_factor = np.sqrt(1.0 + flat_slope.astype(np.float64) ** 2)
     bed_area_per_cell = pixel_area * bed_factor  # m^2
 
@@ -120,12 +113,6 @@ def build_src_base(
 
     # Build pre-summed quantities per catchment that can be combined with
     # any stage h without re-scanning pixels:
-    #   N_le_h    = count of cells with HAND <= h
-    #   sum_hand  = sum of HAND for cells with HAND <= h
-    #   sum_bed   = sum of bed_area for cells with HAND <= h
-    # We achieve this by first sorting pixels by HAND within each catchment,
-    # then for each stage doing a searchsorted lookup. Memory: O(n_pixels);
-    # time: O(n_pixels log n_pixels + n_stages * n_catchments).
     order = np.lexsort((flat_hand, inverse))
     sorted_inv = inverse[order]
     sorted_hand = flat_hand[order]

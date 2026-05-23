@@ -2,23 +2,11 @@
 Author: Supath Dhital
 Date Updated: May 2026
 
-USGS / AHPS / RAS2FIM gage crosswalk to HAND branches.
-
-This module is the fimbox port of inundation-mapping's two-script chain:
-
-    usgs_gage_unit_setup.py   --> assigns gages to NWM feature_id + levpa_id
-    usgs_gage_crosswalk.py    --> snaps each gage to its branch thalweg and
-                                  samples DEM / thalweg-conditioned DEM at the
-                                  snapped point
-
-The output (``usgs_elev_table.csv``) provides the DEM-elevation reference
-that lets the Stage IV calibration / SRC-adjustment step convert observed
-gage stages into HAND stages — i.e. it is the per-branch bridge between
-real-world gage readings and the synthetic rating curve.
+USGS gage crosswalk to HAND branches.
 
 Pipeline
 --------
-Stage 1 -- AOI level (``assign_gages_to_branches``)
+Stage 1 -- AOI level
     1. Read USGS gage points (and optional RAS2FIM cross-sections + AHPS sites)
     2. Filter to this AOI's identifier (default column is ``HUC8`` because
        upstream USGS gage tables ship that schema; override via
@@ -28,7 +16,7 @@ Stage 1 -- AOI level (``assign_gages_to_branches``)
        ``feature_id`` and ``levpa_id`` (level path = branch id)
     5. Write ``usgs_subset_gages.gpkg``  (one row per gage, AOI-wide)
 
-Stage 2 -- branch level (``run_branch_crosswalk``)
+Stage 2 -- branch level
     1. Filter ``usgs_subset_gages.gpkg`` to the rows whose ``levpa_id`` matches
        this branch (branch zero gets a copy with ``levpa_id`` overwritten to "0")
     2. Spatial join to the branch's filtered catchments to attach HydroID
@@ -98,7 +86,7 @@ log = logging.getLogger(__name__)
 PathLike = Union[str, Path]
 
 
-# Stage 1 -- AOI-level gage-to-branch assignment
+# AOI-level gage-to-branch assignment
 @dataclass
 class GageBranchAssignment:
     """Result of ``assign_gages_to_branches``."""
@@ -126,8 +114,8 @@ def assign_gages_to_branches(
     """
     Stage 1: build the AOI-wide gage table with ``feature_id`` and ``levpa_id``.
 
-    Returns ``None`` when no gages fall inside the AOI (in which case neither
-    output file is written -- mirrors the bash short-circuit).
+    Returns ``None`` when no gages fall inside the AOI- in which case neither
+    output file is written.
 
     The AOI identifier may be passed as ``aoi_id``, ``huc_id``, or ``huc8`` —
     they are equivalent. Pass whichever name best matches your data.
@@ -159,9 +147,7 @@ def assign_gages_to_branches(
     gages.to_file(aoi_gages_path, driver="GPKG", index=False)
     log.info(f"AOI gages ({len(gages)} features) --> {aoi_gages_path.name}")
 
-    # Branch-zero copy: every gage points to branch zero regardless of its
-    # derived level path. Used when running the crosswalk against branch 0,
-    # which contains the full NWM network.
+    # Branch-zero copy: every gage points to branch zero regardless of its derived level path. Used when running the crosswalk against branch 0, which contains the full NWM network.
     bzero = gages.copy()
     bzero["levpa_id"] = branch_zero_id
     bzero_path = out_dir / f"{Path(out_name).stem}_{branch_zero_id}.gpkg"
@@ -248,7 +234,11 @@ def _attach_feature_id_and_levelpath(
             lambda pt: _nearest_feature_id(pt, nwm, union)
         )
 
+    # Cast both join keys to the same nullable Int64 type. NWM levelpath
+    # gpkgs sometimes store ``ID`` as text, while DownloadUSGSGages writes
+    # ``feature_id`` as int64 — pandas refuses to merge mixed dtypes.
     gages["feature_id"] = pd.to_numeric(gages["feature_id"], errors="coerce").astype("Int64")
+    nwm["feature_id"] = pd.to_numeric(nwm["feature_id"], errors="coerce").astype("Int64")
     keep = [c for c in ("feature_id", "levpa_id", "order_") if c in nwm.columns]
     gages = gages.merge(nwm[keep], on="feature_id", how="left")
     return gages
@@ -262,7 +252,7 @@ def _nearest_feature_id(pt, nwm: gpd.GeoDataFrame, union):
     return None
 
 
-# Stage 2 -- branch-level crosswalk
+# branch-level crosswalk
 def run_branch_crosswalk(
     aoi_gages_gpkg: Optional[PathLike] = None,
     branch_catchments_gpkg: Optional[PathLike] = None,
@@ -281,8 +271,7 @@ def run_branch_crosswalk(
     the original + thalweg-conditioned DEM to fill ``dem_elevation`` and
     ``dem_adj_elevation``.
 
-    The gage layer may be passed as ``aoi_gages_gpkg`` or ``huc_gages_gpkg``
-    (they are equivalent). CRS likewise: ``target_crs`` or ``huc_crs``.
+    The gage layer may be passed as ``aoi_gages_gpkg`` or ``huc_gages_gpkg``. CRS likewise: ``target_crs`` or ``huc_crs``.
 
     Returns a dict ``{"usgs_elev_table", "ras_elev_table"}`` of output paths
     (entries are ``None`` when the corresponding table is empty).

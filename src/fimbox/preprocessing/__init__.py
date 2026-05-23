@@ -61,6 +61,16 @@ from .calculate_branch import (
 )
 from .calculate_branch import adjust_floodplains
 from .calculate_branch import (
+    CannotConvertHydroIDsToInt16,
+    convert_branch_to_int16,
+    evaluate_crosswalk,
+    remove_deny_list_files,
+)
+from .calculate_branch import (
+    AllBranchesResult,
+    calculate_allbranches,
+)
+from .calculate_branch import (
     BranchResult,
     AOIProcessingConfig,
     HucProcessingConfig,
@@ -115,6 +125,12 @@ __all__ = [
     "assign_gages_to_branches",
     "run_branch_crosswalk",
     "adjust_floodplains",
+    "evaluate_crosswalk",
+    "convert_branch_to_int16",
+    "CannotConvertHydroIDsToInt16",
+    "remove_deny_list_files",
+    "AllBranchesResult",
+    "calculate_allbranches",
     "BranchResult",
     "AOIProcessingConfig",
     "HucProcessingConfig",
@@ -152,6 +168,7 @@ try:
         DownloadNLD,
         DownloadOSMRoads,
         DownloadOSMBridges,
+        DownloadUSGSGages,
     )
 
     __all__ += [
@@ -169,6 +186,7 @@ try:
         "DownloadNLD",
         "DownloadOSMRoads",
         "DownloadOSMBridges",
+        "DownloadUSGSGages",
     ]
 except ImportError:
     pass
