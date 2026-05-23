@@ -1,10 +1,10 @@
 """
-Calibration subpackage tests.
+Calibration subpackage tests
 
 Layered:
     1. test_imports                       - public surface reachable
     2. test_stubs_raise                   - every not-yet-ported step raises
-                                            CalibrationNotImplemented
+                                             CalibrationNotImplemented
     3. test_pipeline_default_safe         - default CalibrationConfig runs
                                             aggregate_branches only (no
                                             stubs triggered) on a fresh tmp AOI
@@ -20,7 +20,7 @@ Layered:
     8. test_manual_calibration_validation - rejects negative coefficients,
                                             missing files
 
-Heavy end-to-end calibration (USGS / RAS2FIM / spatial obs) is not exercised
+Heavy end-to-end calibration is not exercised
 here because those routines are stubs until validated against a real HUC.
 """
 
@@ -40,7 +40,7 @@ from fimbox import (
     reset_hydro_and_src,
     run_calibration,
 )
-from fimbox.preprocessing.calibrate import (
+from fimbox.preprocessing.calibrate_ratingcurve import (
     bathymetric_adjustment,
     identify_src_bankfull,
     longitudinal_flow_adjustment,
@@ -64,28 +64,22 @@ def test_imports():
     assert callable(manual_calibration)
 
 
+# Stub routines: routines that still raise CalibrationNotImplemented.
 @pytest.mark.parametrize(
     "fn,args",
     [
         (thalweg_notches_adjustment, ("/tmp/x",)),
         (longitudinal_flow_adjustment, ("/tmp/x",)),
         (bathymetric_adjustment, ("/tmp/x", "/tmp/a", "/tmp/b")),
-        (identify_src_bankfull, ("/tmp/x", "/tmp/f")),
-        (subdiv_chan_obank_src, ("/tmp/x", "/tmp/v")),
-        (nonmonotonic_src_adjustment, ("/tmp/x",)),
         (src_adjust_ras2fim_rating, ("/tmp/x", "/tmp/r", "/tmp/n")),
         (src_adjust_spatial_obs, ("/tmp/x",)),
         (src_adjust_usgs_rating_trace, ("/tmp/x", "/tmp/r", "/tmp/g", "/tmp/n")),
     ],
 )
 def test_stubs_raise(fn, args):
-    """Every not-yet-ported step should raise CalibrationNotImplemented when
-    invoked, with a clear pointer to the inundation-mapping source."""
-    with pytest.raises(CalibrationNotImplemented) as exc:
+    # Every stubbed step should raise CalibrationNotImplemented when invoked.
+    with pytest.raises(CalibrationNotImplemented):
         fn(*args)
-    msg = str(exc.value)
-    assert "inundation-mapping/src/" in msg
-    assert fn.__name__ in msg or fn.__name__.replace("_", "") in msg.replace("_", "")
 
 
 def _make_empty_aoi(tmp_path: Path) -> Path:

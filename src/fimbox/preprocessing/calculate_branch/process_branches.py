@@ -2,17 +2,14 @@
 Author: Supath Dhital
 Date Updated: May 2026
 
-Multi-branch AOI orchestrator — fimbox port of ``run_huc.sh``'s parallel
-branch loop. **Pure branch calculation only — no calibration runs here.**
-Call ``fimbox.run_calibration`` separately once all branch outputs and
-deny-list cleanups are complete.
+Multi-branch processing.
 
 Pipeline
 --------
 1. Read the AOI's branch list (output of BranchDerivation, at
    ``<aoi_dir>/branch_list.csv``).
 2. AOI-level USGS gage assignment (when ``usgs_gages_gpkg`` is provided).
-3. Branch-zero post-CreateHAND tasks: USGS crosswalk + deny-list cleanup.
+3. Branch-zero post-CreateHAND tasks: USGS crosswalk and deny-list cleanup.
 4. For every non-zero branch in parallel (ProcessPoolExecutor):
        a. BranchZero raster prep for the branch (DEM clip + AGREE)
        b. adjust_floodplains (optional, when FEMA NFHL gpkg is provided)
@@ -59,7 +56,6 @@ import csv
 import logging
 import time
 import traceback
-from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional, Sequence, Union
@@ -85,7 +81,7 @@ EXIT_TOO_MANY_HYDROIDS = 65
 @dataclass
 class BranchResult:
     branch_id: str
-    status: str  # "ok" | "no_flowlines" | "no_crosswalk" | "too_many_hydroids" | "failed"
+    status: str  # "ok" | "no_flowlines" | "no_crosswalk" | "too_many_hydroids" | "failed" | "killed"
     elapsed_s: float
     error: Optional[str] = None
 
@@ -109,18 +105,19 @@ class AOIProcessingConfig:
     def __init__(
         self,
         *,
-        # ID can be huc_id OR aoi_id (positional aliases)
         aoi_dir: Optional[Path] = None,
         huc_dir: Optional[Path] = None,
         aoi_id: Optional[str] = None,
         huc_id: Optional[str] = None,
         branch_list_path: Optional[Path] = None,
+
         # required per-branch inputs
         dem_path: Optional[Path] = None,
         streams_gpkg: Optional[Path] = None,
         boundary_gpkg: Optional[Path] = None,
         catchments_gpkg: Optional[Path] = None,
         levelpaths_gpkg: Optional[Path] = None,
+
         # optional per-branch inputs
         bridge_elev_diff_path: Optional[Path] = None,
         levee_gpkg_path: Optional[Path] = None,
@@ -129,14 +126,17 @@ class AOIProcessingConfig:
         levelpaths_extended_gpkg: Optional[Path] = None,
         fema_nfhl_gpkg: Optional[Path] = None,
         branch_polygons_gpkg: Optional[Path] = None,
+
         # USGS crosswalk inputs
         usgs_gages_gpkg: Optional[Path] = None,
         ahps_gpkg: Optional[Path] = None,
         ras_locs_gpkg: Optional[Path] = None,
+
         # CRS / numeric
-        target_crs: Union[str, int] = 5070,
+        target_crs: Union[str, int] = 5070, 
         branch_zero_id: str = "0",
-        # AGREE + floodplain adjustment defaults match inundation-mapping
+
+        # AGREE and floodplain adjustment defaults match inundation-mapping
         agree_buffer_m: float = 15.0,
         agree_smooth_drop: float = 10.0,
         agree_sharp_drop: float = 1000.0,
@@ -147,32 +147,17 @@ class AOIProcessingConfig:
         # AOI code used by CreateHAND for hydroTable annotation
         aoi_code: Optional[str] = None,
         huc_code: Optional[str] = None,
-        # diagnostic / storage-optimization steps (off by default).
-        # ``evaluate_crosswalk`` is a per-branch-zero CSV diagnostic that
-        # measures how well DEM-derived reaches agree with the NWM network.
-        # ``convert_to_int16`` shrinks gw_catchments + REM rasters on disk
-        # at the cost of a tiny encoding precision loss (1 mm HAND, 4-digit
-        # HydroID prefix split off into ``hydroid_prefix.txt``). Both run
-        # after CreateHAND finishes for the branch.
         evaluate_crosswalk: bool = False,
         convert_to_int16: bool = False,
-        # gage crosswalk schema (column the USGS gpkg uses to tag AOI membership)
+        # gage crosswalk schema 
         gage_aoi_filter_column: str = "HUC8",
-        # branch-zero post-CreateHAND steps (mirror inundation-mapping's
-        # `run_huc.sh` block: USGS crosswalk for branch 0, then deny-list
-        # cleanup).
+
+        # branch-zero post-CreateHAND steps 
         run_branch_zero_usgs_crosswalk: bool = False,
-        # ``delete_deny_list`` controls whether branch-zero intermediates are
-        # deleted at the end of CreateHAND. Default True (match the bash flow
-        # which always runs the cleanup). Set to False to keep every file.
         delete_deny_list: bool = True,
-        # Explicit deny-list path; when None and ``delete_deny_list=True``,
-        # falls back to ``fimbox/config/deny_branch_zero.lst``.
         deny_branch_zero_list: Optional[Path] = None,
-        # Explicit per-branch deny-list path; when None and
-        # ``delete_deny_list=True``, falls back to
-        # ``fimbox/config/deny_branches.lst`` for every non-zero branch.
         deny_branches_list: Optional[Path] = None,
+
         # parallelism
         n_workers: int = 1,
         timeout_seconds: Optional[int] = None,
@@ -286,11 +271,7 @@ def process_branches(cfg: AOIProcessingConfig) -> list[BranchResult]:
         except Exception as exc:
             log.error(f"USGS gage assignment failed: {exc}", exc_info=True)
 
-    # Branch-zero post-CreateHAND tasks (USGS crosswalk + deny-list cleanup).
-    # Branch-zero outputs are produced by `BranchZero` + `CreateHAND` which run
-    # separately (outside this orchestrator, typically via the
-    # test_branchprocessing.py single-step tests or a direct CreateHAND call).
-    # If those outputs already exist, we run the branch-zero post-steps here.
+    # If outputs already exist, we run the branch-zero post-steps here.
     _run_branch_zero_post_steps(cfg)
 
     branch_ids = _read_branch_list(cfg.branch_list_path, cfg.branch_zero_id)
@@ -300,20 +281,57 @@ def process_branches(cfg: AOIProcessingConfig) -> list[BranchResult]:
 
     results: list[BranchResult] = []
     if branch_ids:
-        with ProcessPoolExecutor(max_workers=cfg.n_workers) as pool:
-            futures = {
-                pool.submit(_process_single_branch, cfg, bid): bid
-                for bid in branch_ids
-            }
-            for fut in as_completed(futures, timeout=cfg.timeout_seconds):
-                bid = futures[fut]
-                try:
-                    results.append(fut.result())
-                except Exception as exc:
-                    log.error(f"Branch {bid} crashed in worker: {exc}", exc_info=True)
-                    results.append(
-                        BranchResult(branch_id=bid, status="failed", elapsed_s=0.0, error=str(exc))
-                    )
+        # Dispatch every non-zero branch to the shared Dask LocalCluster.
+        # Worker count comes from FIMBOX_DASK_WORKERS or os.cpu_count();
+        # cfg.n_workers > 1 still acts as an explicit override so old
+        # callers stay reproducible. Each branch runs in its own worker
+        # process (threads_per_worker=1) to keep WBT/TauDEM subprocess
+        # handles and per-branch log files isolated.
+        from ..._dask import get_client
+        from distributed import as_completed as dask_as_completed
+
+        client = get_client(n_workers=cfg.n_workers if cfg.n_workers > 1 else None)
+        log.info(
+            "Dispatching %d branches to Dask (%d workers, dashboard %s)",
+            len(branch_ids),
+            len(client.scheduler_info()["workers"]),
+            client.dashboard_link,
+        )
+        # retries=0 is critical: when a branch OOMs and Dask kills the worker,
+        # the default behaviour retries on 3 more workers and OOMs each in
+        # turn (the KilledWorker storm seen in real-world runs). Setting it
+        # to 0 makes the failure surface immediately so we record one
+        # 'failed' result and move on to siblings.
+        futures = client.map(
+            _process_single_branch,
+            [cfg] * len(branch_ids),
+            branch_ids,
+            pure=False,
+            retries=0,
+        )
+        future_to_bid = {fut.key: bid for fut, bid in zip(futures, branch_ids)}
+        for fut in dask_as_completed(futures):
+            bid = future_to_bid.get(fut.key, "?")
+            try:
+                results.append(fut.result(timeout=cfg.timeout_seconds))
+            except Exception as exc:
+                # KilledWorker / OOM / unhandled exception — record as failed
+                # so the summary reflects it, but never let one branch's
+                # crash abort the whole AOI.
+                exc_text = str(exc)
+                status = (
+                    "killed"
+                    if "KilledWorker" in type(exc).__name__
+                    or "killed" in exc_text.lower()
+                    else "failed"
+                )
+                log.error(
+                    f"Branch {bid} crashed in worker (status={status}): {exc}",
+                    exc_info=True,
+                )
+                results.append(
+                    BranchResult(branch_id=bid, status=status, elapsed_s=0.0, error=exc_text)
+                )
 
     branches_elapsed = time.time() - start
     _log_branch_summary(results, branches_elapsed)
@@ -326,6 +344,19 @@ def process_branches(cfg: AOIProcessingConfig) -> list[BranchResult]:
 def _resolve_paths(cfg: AOIProcessingConfig) -> AOIProcessingConfig:
     """Fill in missing default paths from the case directory."""
     d = cfg.aoi_dir
+    if cfg.branch_list_path is None:
+        # BranchDerivation writes branch_ids.lst (one branch id per line).
+        # Inundation-mapping's branch_ids.csv is only consumed by its
+        # cross-AOI post-processing aggregator (fim_post_processing.sh),
+        # not by the branch loop itself, so fimbox doesn't emit it.
+        # branch_list.csv is kept as a legacy fallback for older AOIs.
+        for candidate in ("branch_ids.lst", "branch_list.csv"):
+            p = d / candidate
+            if p.is_file():
+                cfg.branch_list_path = p
+                break
+        else:
+            cfg.branch_list_path = d / "branch_ids.lst"
     cfg.dem_path = cfg.dem_path or d / "dem.tif"
     cfg.streams_gpkg = cfg.streams_gpkg or d / "nwm_subset_streams.gpkg"
     cfg.boundary_gpkg = cfg.boundary_gpkg or d / "wbd8_clp.gpkg"
@@ -358,8 +389,7 @@ def _read_branch_list(path: Path, branch_zero_id: str) -> list[str]:
 
 
 def _run_branch_zero_post_steps(cfg: AOIProcessingConfig) -> None:
-    """Run the branch-zero USGS crosswalk and deny-list cleanup that
-    inundation-mapping's ``run_huc.sh`` does after the branch-zero CreateHAND.
+    """Run the branch-zero USGS crosswalk and deny-list cleanup.
 
     USGS crosswalk is opt-in (``cfg.run_branch_zero_usgs_crosswalk``).
     Deny-list cleanup runs by default (``cfg.delete_deny_list=True``) and uses
@@ -390,9 +420,6 @@ def _run_branch_zero_post_steps(cfg: AOIProcessingConfig) -> None:
         )
         dem_b = branch_dir / f"dem_meters_{cfg.branch_zero_id}.tif"
         dem_adj = branch_dir / f"dem_thalwegCond_{cfg.branch_zero_id}.tif"
-        # dem_meters_*.tif is the inundation-mapping name; fimbox keeps the same
-        # path inside CreateHAND's branch dir (the levee-masked working DEM gets
-        # named ``dem_<bid>.tif`` — we fall back to it if dem_meters is missing).
         if not dem_b.exists():
             dem_b = branch_dir / f"dem_{cfg.branch_zero_id}.tif"
 
@@ -416,10 +443,7 @@ def _run_branch_zero_post_steps(cfg: AOIProcessingConfig) -> None:
                 "Branch-zero USGS crosswalk: required inputs missing — skipping"
             )
 
-    # Deny-list cleanup for the branch-zero directory. Default behaviour
-    # deletes intermediates (matching the bash flow); ``delete_deny_list=False``
-    # keeps every file. When the path isn't set explicitly, fall back to the
-    # deny list shipped under fimbox/config/.
+    # Deny-list cleanup for the branch-zero directory.
     if not cfg.delete_deny_list:
         log.info("Branch-zero cleanup disabled (delete_deny_list=False)")
         return
@@ -524,7 +548,7 @@ def _process_single_branch(cfg: AOIProcessingConfig, branch_id: str) -> BranchRe
                         f"adjust_floodplains skipped for branch {branch_id}: {exc}"
                     )
 
-        # CreateHAND: 22-step HAND pipeline
+        # CreateHAND: All steps
         CreateHAND(
             aoi_dir=cfg.aoi_dir,
             branch_dir=branch_dir,
@@ -701,12 +725,21 @@ def _wipe_branch_dir(branch_dir: Path) -> None:
 def _log_branch_summary(results: Sequence[BranchResult], elapsed_s: float) -> None:
     n_ok = sum(1 for r in results if r.status == "ok")
     n_fail = sum(1 for r in results if r.status == "failed")
+    n_killed = sum(1 for r in results if r.status == "killed")
     n_no_flow = sum(1 for r in results if r.status == "no_flowlines")
     n_no_xw = sum(1 for r in results if r.status == "no_crosswalk")
     log.info(
         f"--- Branch summary: {n_ok} ok | {n_no_flow} no-flowlines | "
-        f"{n_no_xw} no-crosswalk | {n_fail} failed | total {elapsed_s:.1f}s ---"
+        f"{n_no_xw} no-crosswalk | {n_fail} failed | {n_killed} killed (OOM) "
+        f"| total {elapsed_s:.1f}s ---"
     )
+    if n_killed:
+        killed_ids = [r.branch_id for r in results if r.status == "killed"]
+        log.warning(
+            "Killed branches (rerun individually with FIMBOX_DASK_WORKERS=1 "
+            "for max RAM per worker): %s",
+            ", ".join(killed_ids),
+        )
 
 
 # CLI
@@ -717,7 +750,7 @@ if __name__ == "__main__":
         description=(
             "Run BranchZero + CreateHAND + USGS crosswalk for every branch "
             "in an AOI. Pure branch calculation — run "
-            "``python -m fimbox.preprocessing.calibrate.pipeline`` separately "
+            "``python -m fimbox.preprocessing.calibrate_ratingcurve.pipeline`` separately "
             "for calibration after this finishes."
         )
     )
@@ -771,7 +804,7 @@ if __name__ == "__main__":
     cfg = AOIProcessingConfig(
         aoi_dir=aoi_dir,
         aoi_id=args.aoi_id,
-        branch_list_path=Path(args.branch_list) if args.branch_list else (aoi_dir / "branch_list.csv"),
+        branch_list_path=Path(args.branch_list) if args.branch_list else (aoi_dir / "branch_ids.lst"),
         n_workers=args.workers,
         fema_nfhl_gpkg=Path(args.fema_nfhl) if args.fema_nfhl else None,
         usgs_gages_gpkg=Path(args.usgs_gages) if args.usgs_gages else None,

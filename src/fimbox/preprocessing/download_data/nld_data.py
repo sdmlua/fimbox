@@ -8,6 +8,7 @@ which includes levee lines and protected areas, filtered by a user-provided spat
 
 import os
 import re
+import time
 import logging
 import requests
 from pathlib import Path
@@ -50,53 +51,168 @@ class ESRI_REST:
         response.raise_for_status()
         return response.json().get("count", 0)
 
+    # Page size and retry behaviour for ESRI paginated queries. ESRI servers
+    # often return malformed JSON on huge single-response payloads (we have
+    # observed truncated bodies at ~130 MB on the NLD polygon layer). We cap
+    # the per-page record count well below that and halve it on parse/HTTP
+    # failure, retrying up to MAX_PAGE_RETRIES times per offset before giving
+    # up on the page. MIN_PAGE_SIZE is the smallest we'll shrink to before
+    # bubbling the error.
+    INITIAL_PAGE_SIZE = 1000
+    MIN_PAGE_SIZE = 50
+    MAX_PAGE_RETRIES = 4
+    RETRY_BACKOFF_S = 2.0
+
     def _execute_query(self, params: dict) -> gpd.GeoDataFrame:
-        """Handles the pagination loop and GeoDataFrame concatenation."""
+        """Paginated ESRI Feature Service query with retry-on-truncation.
+
+        Uses ESRI native JSON (``f=json``) and parses ``features[].geometry``
+        directly into shapely instead of round-tripping through GeoJSON. This
+        avoids the brittle ``gpd.read_file(resp.text)`` path that fails on
+        malformed GeoJSON when the server truncates a large response mid-
+        feature.
+
+        Resilience layers, in order:
+          1. Cap each page at ``INITIAL_PAGE_SIZE`` so the server never has
+             to serialize a multi-hundred-MB blob in one shot.
+          2. On HTTP / JSON parse failure, halve the page size and retry the
+             same offset up to ``MAX_PAGE_RETRIES`` times, sleeping
+             ``RETRY_BACKOFF_S * attempt`` seconds between attempts.
+          3. Treat ``returnCountOnly==0`` as an empty result (no boundary
+             intersection) and return immediately.
+        """
         total_features = self._get_metadata(params)
-        params["f"] = "geojson"
-
-        results = []
-        offset = 0
-        limit_reached = True
-
-        if self.verbose and total_features > 0:
-            log.info(f"ESRI query: {total_features} features to download")
-
         if total_features == 0:
             return gpd.GeoDataFrame()
+
+        if self.verbose:
+            log.info(f"ESRI query: {total_features} features to download")
+
+        base_params = {**params, "f": "json"}
+        results: list[gpd.GeoDataFrame] = []
+        offset = 0
+        page_size = self.INITIAL_PAGE_SIZE
 
         with tqdm(
             total=total_features, disable=not self.verbose, desc="Downloading"
         ) as pbar:
-            while limit_reached:
-                current_params = {**params, "resultOffset": offset}
-                resp = requests.get(self.url, params=current_params, timeout=120)
-                resp.raise_for_status()
+            while offset < total_features:
+                page = self._fetch_page(base_params, offset, page_size)
+                # _fetch_page returns the page size it actually used (after
+                # shrink-on-retry) so the outer loop adopts the smaller size
+                # for subsequent pages once the server has shown it can't
+                # handle the larger one.
+                features, used_size = page
 
-                data = resp.json()
-                if "error" in data:
-                    raise Exception(
-                        f"ESRI Error {data['error']['code']}: {data['error']['message']}"
-                    )
-
-                batch_gdf = gpd.read_file(resp.text)
-                if batch_gdf.empty:
+                if not features:
                     break
 
-                results.append(batch_gdf)
-                offset += len(batch_gdf)
-                pbar.update(len(batch_gdf))
+                rows = []
+                for feat in features:
+                    geom = self._esri_geom_to_shapely(feat.get("geometry"))
+                    if geom is None:
+                        continue
+                    attrs = feat.get("attributes", {}) or {}
+                    attrs["geometry"] = geom
+                    rows.append(attrs)
 
-                limit_reached = data.get("exceededTransferLimit", False)
-                if not limit_reached and offset < total_features:
-                    limit_reached = True
-                elif offset >= total_features:
-                    limit_reached = False
+                if rows:
+                    results.append(gpd.GeoDataFrame(rows, geometry="geometry"))
+
+                advanced = len(features)
+                offset += advanced
+                pbar.update(advanced)
+                page_size = used_size  # remember the working size
 
         if not results:
             return gpd.GeoDataFrame()
-
         return pd.concat(results, ignore_index=True)
+
+    def _fetch_page(
+        self, base_params: dict, offset: int, page_size: int
+    ) -> tuple[list, int]:
+        """Fetch one page; on failure halve page_size and retry. Returns
+        (features, page_size_used).
+        """
+        attempt = 0
+        size = page_size
+        last_err: Optional[Exception] = None
+        while attempt < self.MAX_PAGE_RETRIES:
+            current = {
+                **base_params,
+                "resultOffset": offset,
+                "resultRecordCount": size,
+            }
+            try:
+                resp = requests.get(self.url, params=current, timeout=180)
+                resp.raise_for_status()
+                data = resp.json()
+                if "error" in data:
+                    raise RuntimeError(
+                        f"ESRI Error {data['error'].get('code')}: "
+                        f"{data['error'].get('message')}"
+                    )
+                return data.get("features", []) or [], size
+            except (
+                requests.exceptions.RequestException,
+                ValueError,  # json.JSONDecodeError subclass
+                RuntimeError,
+            ) as exc:
+                last_err = exc
+                attempt += 1
+                new_size = max(self.MIN_PAGE_SIZE, size // 2)
+                log.warning(
+                    "ESRI page failed (offset=%d, size=%d, attempt=%d/%d): %s. "
+                    "Retrying with size=%d after %.1fs.",
+                    offset, size, attempt, self.MAX_PAGE_RETRIES, exc,
+                    new_size, self.RETRY_BACKOFF_S * attempt,
+                )
+                if new_size == size and attempt >= self.MAX_PAGE_RETRIES:
+                    break
+                size = new_size
+                time.sleep(self.RETRY_BACKOFF_S * attempt)
+        raise RuntimeError(
+            f"ESRI page failed after {self.MAX_PAGE_RETRIES} retries "
+            f"(offset={offset}): {last_err}"
+        )
+
+    @staticmethod
+    def _esri_geom_to_shapely(geom: Optional[dict]):
+        """Translate an ESRI JSON geometry into a shapely object.
+
+        Handles the four shapes ESRI Feature Services return for the layers
+        this module queries: point, polyline (``paths``), polygon (``rings``),
+        and multipoint. Returns ``None`` for empty or unsupported geometries
+        so the caller can drop the row without crashing the whole page.
+        """
+        if not geom:
+            return None
+        # Polygon: ESRI uses 'rings' (outer + holes, by orientation)
+        if "rings" in geom:
+            rings = geom["rings"]
+            if not rings:
+                return None
+            try:
+                # First ring is exterior; remaining rings of opposite winding
+                # are holes. shapely handles orientation normalization.
+                exterior = rings[0]
+                holes = rings[1:] if len(rings) > 1 else None
+                poly = Polygon(exterior, holes=holes)
+                return poly if poly.is_valid else poly.buffer(0)
+            except Exception:
+                return None
+        # Polyline: 'paths' is a list of coordinate sequences
+        if "paths" in geom:
+            paths = geom["paths"]
+            lines = [LineString(p) for p in paths if len(p) >= 2]
+            if not lines:
+                return None
+            return lines[0] if len(lines) == 1 else MultiLineString(lines)
+        # Point
+        if "x" in geom and "y" in geom:
+            from shapely.geometry import Point
+            return Point(geom["x"], geom["y"])
+        return None
 
     def _execute_query_with_z(self, params: dict) -> gpd.GeoDataFrame:
         """

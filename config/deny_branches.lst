@@ -3,6 +3,8 @@
 # Use curly braces to denote branch_id
 backpool_stats.csv
 bridge_elev_diff_meters_{}.tif
+# fimbox spelling (no "_meters_")
+bridge_elev_diff_{}.tif
 catch_list_{}.txt
 coordFile_{}.txt
 crosswalk_table_{}.csv
@@ -10,14 +12,25 @@ demDerived_reaches_{}.dbf
 demDerived_reaches_{}.prj
 demDerived_reaches_{}.shp
 demDerived_reaches_{}.shx
+# fimbox writes a single GPKG of demDerived_reaches; split/filtered variants
+# downstream are the hydroTable inputs so the base file is safe to delete.
+demDerived_reaches_{}.gpkg
 demDerived_reaches_split_{}.gpkg
 demDerived_reaches_split_filtered_{}.gpkg
 # demDerived_reaches_split_filtered_addedAttributes_crosswalked_{}.gpkg
 demDerived_reaches_split_points_{}.gpkg
 demDerived_streamPixels_{}.tif
+# Both id-suffix spellings (inundation-mapping put bid AFTER "ids", fimbox
+# puts bid BEFORE "ids") — catch all four variants.
 demDerived_streamPixels_ids_{}.tif
 demDerived_streamPixels_ids_{}_allo.tif
 demDerived_streamPixels_ids_{}_dist.tif
+demDerived_streamPixels_{}_ids.tif
+demDerived_streamPixels_{}_ids_allo.tif
+demDerived_streamPixels_{}_ids_dist.tif
+# fimbox per-branch working DEM is dem_{bid}.tif (inundation-mapping called
+# it dem_meters_{}); both are listed.
+dem_{}.tif
 dem_adjusted_{}.tif
 dem_burned_{}.tif
 dem_burned_adjusted_{}.tif
@@ -51,12 +64,17 @@ nwm_subset_streams_levelPaths_dissolved_extended_{}.gpkg
 nwm_subset_streams_levelPaths_dissolved_headwaters_{}.gpkg
 nwm_subset_streams_levelPaths_extended_{}.gpkg
 #osm_bridge_centroids_{}.gpkg
+# fimbox-only output (road FIMpact diagnostic CSV); not part of the kept set
+# in the reference inundation-mapping pipeline.
+osm_roads_fimpact_{}.csv
 #ras_elev_table.csv
 rem_{}.tif
 # rem_zeroed_masked_{}.tif
 rem_zeroed_masked_{}_float32.tif
 slopes_d8_dem_meters_{}.tif
 slopes_d8_dem_meters_masked_{}.tif
+# fimbox spelling (no "_meters_") for the unmasked slope raster.
+slopes_d8_dem_{}.tif
 sn_catchments_reaches_{}.tif
 src_{}.json
 # src_base_{}.csv

@@ -115,29 +115,41 @@ def calculate_allbranches(
 
     log.info(f"=== calculate_allbranches: {cfg.aoi_id} ===")
 
-    # register branch zero in the success CSV before launching the
-    # parallel loop. Branch zero's outputs are assumed to be produced by an
-    # earlier ``BranchZero`` + ``CreateHAND`` pass (test_branchprocessing's Z1
-    # step or the same modules called directly).
-    n_b0_recorded = _append_branch_id(
-        branch_ids_csv, aoi_id=cfg.aoi_id, branch_id=cfg.branch_zero_id
+    # Pre-populate branch_ids.csv with the full inventory of branches the AOI
+    # contains: branch zero first, then every id from branch_ids.lst (in the
+    # order it was written by BranchDerivation). This matches what users
+    # expect — the file describes the AOI's branches, not which ones happened
+    # to succeed. Inspecting the file mid-run or post-failure still shows
+    # the complete branch list.
+    branch_list_path = cfg.branch_list_path or (aoi_dir / "branch_ids.lst")
+    all_ids = [cfg.branch_zero_id]
+    if Path(branch_list_path).is_file():
+        with open(branch_list_path) as fh:
+            for line in fh:
+                # accept 1-col (just branch id) or legacy 2-col (aoi_id,branch_id)
+                token = line.strip().split(",")[-1].strip()
+                if token and token != cfg.branch_zero_id:
+                    all_ids.append(token)
+    branch_ids_csv.parent.mkdir(parents=True, exist_ok=True)
+    with open(branch_ids_csv, "w") as fh:
+        for bid in all_ids:
+            fh.write(f"{bid}\n")
+    n_b0_recorded = 1
+    log.info(
+        f"branch_ids.csv pre-populated with {len(all_ids)} branch ids "
+        f"(0 + {len(all_ids) - 1} from {Path(branch_list_path).name})"
     )
 
-    # parallel non-zero branch loop. process_branches runs them
-    # through ProcessPoolExecutor and returns one BranchResult per branch.
+    # parallel non-zero branch loop. process_branches runs them through the
+    # Dask LocalCluster and returns one BranchResult per branch.
     # Calibration is NOT invoked here — call ``fimbox.run_calibration``
     # separately after this function (and any deny-list cleanups) finish.
     results = process_branches(cfg)
 
-    # Per-branch success registry. The shell wraps each parallel worker with
-    # process_branch.sh which only appends on err_exists==0; the equivalent
-    # here is "status == ok" (61/64/65 codes are mapped by _classify_branch_error).
-    n_non_zero_recorded = 0
-    for r in results:
-        if r.status == "ok":
-            n_non_zero_recorded += _append_branch_id(
-                branch_ids_csv, aoi_id=cfg.aoi_id, branch_id=r.branch_id
-            )
+    # Count non-zero successes for the AllBranchesResult summary. The CSV
+    # already contains every id from the inventory above, so nothing to
+    # append here.
+    n_non_zero_recorded = sum(1 for r in results if r.status == "ok")
 
     # AOI-level deny-list cleanup. Default behaviour deletes the AOI
     # intermediates listed in ``deny_unit.lst``; pass ``delete_deny_list=False``
@@ -188,16 +200,6 @@ def calculate_allbranches(
     )
 
 
-def _append_branch_id(csv_path: Path, *, aoi_id: str, branch_id: str) -> int:
-    """Append a ``<aoi_id>,<branch_id>`` row to ``csv_path``. Creates the file
-    when it doesn't exist. Returns 1 on success (matches the shell's
-    generate_branch_list_csv.py semantics)."""
-    csv_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(csv_path, "a") as fh:
-        fh.write(f"{aoi_id},{branch_id}\n")
-    return 1
-
-
 # CLI
 if __name__ == "__main__":
     import argparse
@@ -209,7 +211,7 @@ if __name__ == "__main__":
             "Run the per-AOI branch loop + AOI-level deny-list cleanup. "
             "Wraps process_branches and adds the branch_ids.csv success "
             "registry. Calibration is NOT invoked — run "
-            "``python -m fimbox.preprocessing.calibrate.pipeline`` separately."
+            "``python -m fimbox.preprocessing.calibrate_ratingcurve.pipeline`` separately."
         )
     )
     parser.add_argument("--aoi-dir", required=True)
@@ -237,7 +239,7 @@ if __name__ == "__main__":
         aoi_dir=aoi_dir,
         aoi_id=args.aoi_id,
         branch_list_path=(
-            Path(args.branch_list) if args.branch_list else aoi_dir / "branch_list.csv"
+            Path(args.branch_list) if args.branch_list else aoi_dir / "branch_ids.lst"
         ),
         n_workers=args.workers,
     )

@@ -10,10 +10,10 @@ import fimbox
 log = logging.getLogger(__name__)
 
 bridge_gpkg = (
-    "/Users/Supath/Downloads/SDML/FIMBOX/out/HUC08060202/osm_bridges_subset.gpkg"
+    "/Users/Supath/Downloads/SDML/FIMBOX/out/test_smallB/osm_bridges_subset.gpkg"
 )
-dem_path = "/Users/Supath/Downloads/SDML/FIMBOX/out/HUC08060202/dem.tif"
-out_dir = "/Users/Supath/Downloads/SDML/FIMBOX/out/HUC08060202"
+dem_path = "/Users/Supath/Downloads/SDML/FIMBOX/out/test_smallB/dem.tif"
+out_dir = "/Users/Supath/Downloads/SDML/FIMBOX/out/test_smallB"
 
 
 # check which bridges already have rasters vs still pending (safe to run anytime)

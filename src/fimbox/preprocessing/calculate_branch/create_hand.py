@@ -165,6 +165,7 @@ class CreateHAND:
             raise
 
     def _run(self) -> dict[str, Path]:
+        from ..._skip_if_valid import should_skip
         from .add_crosswalk import add_crosswalk, NoCrosswalkError
         from .build_src import build_src_base
         from .filter_catchments import FilterCatchments, NoFlowlinesError
@@ -220,7 +221,7 @@ class CreateHAND:
         # Flow accumulation
         flowaccum = bd / f"flowaccum_d8_burned_filled_{bid}.tif"
         stream_pixels = bd / f"demDerived_streamPixels_{bid}.tif"
-        if flowaccum.exists() and stream_pixels.exists():
+        if should_skip(flowaccum, stream_pixels):
             _progress(2, "flow accumulation", skipped=True)
             log.info("Flow accumulation: outputs exist, skipping")
             outputs["flowaccum"] = flowaccum
@@ -243,7 +244,7 @@ class CreateHAND:
         thalweg_adj = bd / f"dem_lateral_thalweg_adj_{bid}.tif"
         flowdir_streams = bd / f"flowdir_d8_burned_filled_flows_{bid}.tif"
         thalweg_cond = bd / f"dem_thalwegCond_{bid}.tif"
-        if thalweg_adj.exists() and flowdir_streams.exists() and thalweg_cond.exists():
+        if should_skip(thalweg_adj, flowdir_streams, thalweg_cond):
             _progress(3, "thalweg adjustment", skipped=True)
             log.info("Thalweg adjustment: outputs exist, skipping")
             outputs["thalweg_adj"] = thalweg_adj
@@ -271,7 +272,7 @@ class CreateHAND:
 
         # D8 slopes
         slopes_d8 = bd / f"slopes_d8_dem_{bid}.tif"
-        if slopes_d8.exists():
+        if should_skip(slopes_d8):
             _progress(4, "D8 slopes", skipped=True)
             log.info("D8 slopes: output exists, skipping")
             outputs["slopes_d8"] = slopes_d8
@@ -292,7 +293,7 @@ class CreateHAND:
         reaches_gpkg = bd / f"demDerived_reaches_{bid}.gpkg"
         stream_order = bd / f"streamOrder_{bid}.tif"
         sn_catchments = bd / f"sn_catchments_reaches_{bid}.tif"
-        if stream_order.exists() and sn_catchments.exists() and reaches_gpkg.exists():
+        if should_skip(stream_order, sn_catchments, reaches_gpkg):
             _progress(5, "stream network", skipped=True)
             log.info("Stream network: outputs exist, skipping")
             outputs.update(
@@ -323,7 +324,7 @@ class CreateHAND:
         # Split reaches
         out_split = bd / f"demDerived_reaches_split_{bid}.gpkg"
         out_pts = bd / f"demDerived_reaches_split_points_{bid}.gpkg"
-        if out_split.exists() and out_pts.exists():
+        if should_skip(out_split, out_pts):
             _progress(6, "split reaches", skipped=True)
             log.info("Split reaches: outputs exist, skipping")
             outputs["split_reaches"] = out_split
@@ -357,7 +358,7 @@ class CreateHAND:
         # Gage watershed for reaches
         gw_reaches = bd / f"gw_catchments_reaches_{bid}.tif"
         split_pts_gpkg = bd / f"demDerived_reaches_split_points_{bid}.gpkg"
-        if gw_reaches.exists():
+        if should_skip(gw_reaches):
             _progress(7, "gage watershed (reaches)", skipped=True)
             log.info("Gage watershed reaches: output exists, skipping")
             outputs["gw_catchments_reaches"] = gw_reaches
@@ -375,7 +376,7 @@ class CreateHAND:
 
         # Vectorize stream pixel centroids
         pixel_pts_gpkg = bd / f"flows_points_pixels_{bid}.gpkg"
-        if pixel_pts_gpkg.exists():
+        if should_skip(pixel_pts_gpkg):
             _progress(8, "stream pixel points", skipped=True)
             log.info("Stream pixel points: output exists, skipping")
             outputs["flows_points_pixels"] = pixel_pts_gpkg
@@ -389,7 +390,7 @@ class CreateHAND:
 
         # Gage watershed for pixels
         gw_pixels = bd / f"gw_catchments_pixels_{bid}.tif"
-        if gw_pixels.exists():
+        if should_skip(gw_pixels):
             _progress(9, "gage watershed (pixels)", skipped=True)
             log.info("Gage watershed pixels: output exists, skipping")
             outputs["gw_catchments_pixels"] = gw_pixels
@@ -424,7 +425,7 @@ class CreateHAND:
 
         # REM (Height Above Nearest Drainage)
         rem_path = bd / f"rem_{bid}.tif"
-        if rem_path.exists() and rem_path.stat().st_size > 0:
+        if should_skip(rem_path):
             _progress(11, "REM", skipped=True)
             log.info("REM: output exists, skipping")
             outputs["rem"] = rem_path
@@ -445,7 +446,7 @@ class CreateHAND:
 
         # Zero/mask REM  (REM * (REM>=0) * (gw_catchments_reaches>0))
         rem_zeroed = bd / f"rem_zeroed_masked_{bid}.tif"
-        if rem_zeroed.exists() and rem_zeroed.stat().st_size > 0:
+        if should_skip(rem_zeroed):
             _progress(12, "REM zeroed+masked", skipped=True)
             log.info("REM zeroed+masked: output exists, skipping")
             outputs["rem_zeroed_masked"] = rem_zeroed
@@ -461,7 +462,7 @@ class CreateHAND:
 
         # Polygonize gw_catchments_reaches raster --> GeoPackage
         catch_poly_gpkg = bd / f"gw_catchments_reaches_{bid}.gpkg"
-        if catch_poly_gpkg.exists() and catch_poly_gpkg.stat().st_size > 0:
+        if should_skip(catch_poly_gpkg):
             _progress(13, "polygonize catchments", skipped=True)
             log.info("Polygonize catchments: output exists, skipping")
             outputs["gw_catchments_reaches_gpkg"] = catch_poly_gpkg
@@ -478,12 +479,7 @@ class CreateHAND:
             bd / f"gw_catchments_reaches_filtered_addedAttributes_{bid}.gpkg"
         )
         filtered_flows = bd / f"demDerived_reaches_split_filtered_{bid}.gpkg"
-        if (
-            filtered_catchments.exists()
-            and filtered_catchments.stat().st_size > 0
-            and filtered_flows.exists()
-            and filtered_flows.stat().st_size > 0
-        ):
+        if should_skip(filtered_catchments, filtered_flows):
             _progress(14, "filter catchments", skipped=True)
             log.info("Filter catchments: outputs exist, skipping")
             outputs["filtered_catchments"] = filtered_catchments
@@ -513,7 +509,7 @@ class CreateHAND:
         filtered_catch_tif = (
             bd / f"gw_catchments_reaches_filtered_addedAttributes_{bid}.tif"
         )
-        if filtered_catch_tif.exists() and filtered_catch_tif.stat().st_size > 0:
+        if should_skip(filtered_catch_tif):
             _progress(15, "rasterize filtered catchments", skipped=True)
             log.info("Rasterize filtered catchments: output exists, skipping")
             outputs["filtered_catchments_tif"] = filtered_catch_tif
@@ -527,7 +523,7 @@ class CreateHAND:
 
         # Mask slopes to filtered catchments
         slopes_masked = bd / f"slopes_d8_dem_meters_masked_{bid}.tif"
-        if slopes_masked.exists() and slopes_masked.stat().st_size > 0:
+        if should_skip(slopes_masked):
             _progress(16, "mask slopes to catchments", skipped=True)
             log.info("Slopes mask: output exists, skipping")
             outputs["slopes_masked"] = slopes_masked
@@ -543,7 +539,7 @@ class CreateHAND:
         # Stage ladder + catchment list (inputs to the SRC builder)
         stages_txt = bd / f"stage_{bid}.txt"
         catchlist_txt = bd / f"catch_list_{bid}.txt"
-        if stages_txt.exists() and catchlist_txt.exists():
+        if should_skip(stages_txt, catchlist_txt):
             _progress(17, "stages + catchlist", skipped=True)
             log.info("stages_catchlist: outputs exist, skipping")
             outputs["stages_txt"] = stages_txt
@@ -568,7 +564,7 @@ class CreateHAND:
 
         # SRC base (Python port of TauDEM catchhydrogeo)
         src_base_csv = bd / f"src_base_{bid}.csv"
-        if src_base_csv.exists() and src_base_csv.stat().st_size > 0:
+        if should_skip(src_base_csv):
             _progress(18, "synthetic rating curve base", skipped=True)
             log.info("build_src: output exists, skipping")
             outputs["src_base_csv"] = src_base_csv
@@ -609,7 +605,7 @@ class CreateHAND:
         hydro_table_csv = bd / f"hydroTable_{bid}.csv"
         sml_seg_csv = bd / f"small_segments_{bid}.csv"
 
-        if hydro_table_csv.exists() and hydro_table_csv.stat().st_size > 0:
+        if should_skip(hydro_table_csv):
             _progress(19, "crosswalk + hydroTable", skipped=True)
             log.info("add_crosswalk: outputs exist, skipping")
             outputs["hydro_table"] = hydro_table_csv
@@ -653,7 +649,7 @@ class CreateHAND:
         # Heal HAND for OSM bridges (in-place update of rem_zeroed_masked)
         bridges_gpkg = self.osm_bridges_gpkg
         bridge_centroids = bd / f"osm_bridge_centroids_{bid}.gpkg"
-        if bridge_centroids.exists() and bridge_centroids.stat().st_size > 0:
+        if should_skip(bridge_centroids):
             _progress(20, "heal HAND bridges", skipped=True)
             log.info("heal_bridges_osm: output exists, skipping")
             outputs["osm_bridge_centroids"] = bridge_centroids
@@ -684,7 +680,7 @@ class CreateHAND:
         # OSM road FIMpact
         roads_gpkg = self.osm_roads_gpkg
         roads_fimpact_csv = bd / f"osm_roads_fimpact_{bid}.csv"
-        if roads_fimpact_csv.exists() and roads_fimpact_csv.stat().st_size > 0:
+        if should_skip(roads_fimpact_csv):
             _progress(21, "OSM road FIMpact", skipped=True)
             log.info("process_roads_fimpact: output exists, skipping")
             outputs["osm_roads_fimpact_csv"] = roads_fimpact_csv

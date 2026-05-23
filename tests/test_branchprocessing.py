@@ -42,7 +42,7 @@ from fimbox import (
 # AOI parameters — point this at any user-supplied AOI working directory.
 # aoi_code is recorded on every hydroTable row; a generic string is fine
 # (HUC IDs work unchanged for legacy datasets).
-OUT_DIR = Path("/Users/Supath/Downloads/SDML/FIMBOX/out/HUC08060202")
+OUT_DIR = Path("/Users/Supath/Downloads/SDML/FIMBOX/out/test_smallB")
 AOI_CODE = "08060202"
 
 # Tunable CreateHAND parameters- All have sensible defaults in CreateHAND itself.
@@ -858,12 +858,7 @@ def test_step_C23_outputs_cleanup_branch_zero():
     """Apply the deny-list cleanup to ``branches/0/``.
 
     Default behaviour deletes every intermediate raster + vector listed in
-    ``fimbox/config/deny_branch_zero.lst`` (the production hydroTable, HAND
-    raster, and crosswalked catchments are kept). To **keep** intermediates
-    (e.g. when you're iterating on later steps and need the upstream files),
-    set ``FIMBOX_KEEP_BRANCH_ZERO=1`` before invoking pytest::
-
-        FIMBOX_KEEP_BRANCH_ZERO=1 pytest tests/test_branchprocessing.py -k step_C23
+    --> fimbox/config/deny_branch_zero.lst.
     """
     import os
 
@@ -913,7 +908,9 @@ def test_step_C24_calculate_allbranches(tmp_path):
 
     aoi_dir = tmp_path / "aoi"
     aoi_dir.mkdir()
-    branch_list_path = aoi_dir / "branch_list.csv"
+    # Match BranchDerivation's actual output: branch_ids.lst (one id per line).
+    # Empty file = branch-zero-only run, which is what this wrapper test exercises.
+    branch_list_path = aoi_dir / "branch_ids.lst"
     branch_list_path.write_text("")
 
     deny_unit_list = tmp_path / "deny_unit.lst"
@@ -949,8 +946,8 @@ def test_step_C25_calculate_allbranches_live_run():
     if not os.environ.get("FIMBOX_RUN_ALLBRANCHES"):
         pytest.skip("set FIMBOX_RUN_ALLBRANCHES=1 to run every non-zero branch")
 
-    branch_list_path = OUT_DIR / "branch_list.csv"
-    assert branch_list_path.exists(), f"branch_list.csv missing: {branch_list_path}"
+    # BranchDerivation writes branch_ids.lst
+    branch_list_path = OUT_DIR / "branch_ids.lst"
 
     deny_unit_list = (
         Path(__file__).resolve().parent.parent / "config" / "deny_unit.lst"

@@ -127,6 +127,28 @@ __all__ = [
     "run_calibration",
 ]
 
+# FIM generation: forecast -> per-branch inundation -> AOI mosaic
+from .fimgeneration import (
+    FimGenerator,
+    FimGenerationResult,
+    Inundator,
+    InundationResult,
+    BranchMosaic,
+    MosaicResult,
+    NoForecastMatch,
+    extract_feature_ids,
+)
+__all__ += [
+    "FimGenerator",
+    "FimGenerationResult",
+    "Inundator",
+    "InundationResult",
+    "BranchMosaic",
+    "MosaicResult",
+    "NoForecastMatch",
+    "extract_feature_ids",
+]
+
 try:
     from .preprocessing import getAllInputData, preprocess_nld_lines
 

@@ -57,11 +57,18 @@ def rem_zeroed_masked(
 
     with rasterio.open(str(rem_path)) as rem_ds:
         meta = rem_ds.meta.copy()
-        nodata_rem = rem_ds.nodata if rem_ds.nodata is not None else float(nodata)
+        src_nodata = rem_ds.nodata
+        # If the source's declared nodata is NaN (common for GDAL-written
+        # float rasters), we cannot use it as a finite sentinel in the
+        # output — multiply propagates NaN. Force a finite output sentinel.
+        if src_nodata is None or (isinstance(src_nodata, float) and np.isnan(src_nodata)):
+            nodata_out = float(nodata)
+        else:
+            nodata_out = float(src_nodata)
 
     meta.update(
         dtype="float32",
-        nodata=float(nodata_rem),
+        nodata=nodata_out,
         compress="lzw",
         tiled=True,
         blockxsize=512,
@@ -77,27 +84,54 @@ def rem_zeroed_masked(
         rasterio.open(str(catchments_path)) as cat_ds,
         rasterio.open(str(out_path), "w", **meta) as out_ds,
     ):
+        # Verify aligned grids — same shape, transform, CRS — otherwise
+        # window-paired reads would mix unrelated pixels and silently corrupt
+        # the result. Both rasters are produced by the same branch pipeline,
+        # so a mismatch indicates an upstream bug worth surfacing immediately.
+        if (rem_ds.width, rem_ds.height) != (cat_ds.width, cat_ds.height):
+            raise ValueError(
+                f"REM ({rem_ds.width}x{rem_ds.height}) and catchments "
+                f"({cat_ds.width}x{cat_ds.height}) raster shapes differ"
+            )
+
         for _, window in rem_ds.block_windows(1):
             rem_blk = rem_ds.read(1, window=window).astype(np.float32)
             cat_blk = cat_ds.read(1, window=window)
 
-            # The reference formula is (A * (A>=0) * (B>0)) with an explicit
-            # NoDataValue. In gdal_calc, NaN inputs fail the (A>=0) test and
-            # become 0 — NumPy multiplication instead propagates NaN, which
-            # leaks through later assertions. Replace NaN with the nodata
-            # sentinel before the multiply so the formula matches.
-            nan_mask = np.isnan(rem_blk)
-            if nan_mask.any():
-                rem_blk = np.where(nan_mask, nodata_rem, rem_blk)
+            # Reference formula: (A * (A>=0) * (B>0)) with an explicit
+            # NoDataValue. gdal_calc treats NaN as failing (A>=0) and writes
+            # 0; NumPy multiply propagates NaN instead. We handle every way
+            # NaN can enter the pipeline:
+            #   1. Source REM has explicit NaN pixels (declared nodata or
+            #      stray) — rewrite to the finite sentinel before the multiply.
+            #   2. Source REM nodata sentinel survives the multiply when the
+            #      sentinel is < 0 (e.g. -999999.0 fails (A>=0)) — result is
+            #      0 in that cell, which we then overwrite back to nodata
+            #      below.
+            #   3. Anything still NaN at the end (catchment-NaN edge cases,
+            #      partial blocks at grid boundaries, etc.) is unconditionally
+            #      forced to the output sentinel — defense in depth so the
+            #      downstream non-negativity invariant always holds.
+            src_nan_mask = np.isnan(rem_blk)
+            if src_nan_mask.any():
+                rem_blk = np.where(src_nan_mask, nodata_out, rem_blk)
 
-            result = (
-                rem_blk
-                * (rem_blk >= 0).astype(np.float32)
-                * (cat_blk > 0).astype(np.float32)
-            )
-            # Tag every pixel that came from a nodata REM cell — including the
-            # rows we just rewrote from NaN — back to the nodata sentinel.
-            result[rem_blk == nodata_rem] = nodata_rem
+            ge_zero = (rem_blk >= 0).astype(np.float32)
+            cat_mask = (cat_blk > 0).astype(np.float32)
+            result = rem_blk * ge_zero * cat_mask
+
+            # Restore the nodata sentinel onto every pixel that started as
+            # nodata or NaN in the source REM.
+            result[rem_blk == nodata_out] = nodata_out
+            result[src_nan_mask] = nodata_out
+
+            # Defense-in-depth: clamp any remaining NaN (e.g. introduced by
+            # float ops at block boundaries) to the sentinel. The
+            # non-negativity test downstream is a hard invariant.
+            still_nan = np.isnan(result)
+            if still_nan.any():
+                result[still_nan] = nodata_out
+
             out_ds.write(result, window=window, indexes=1)
 
     log.info("rem_zeroed_masked --> %s", out_path.name)

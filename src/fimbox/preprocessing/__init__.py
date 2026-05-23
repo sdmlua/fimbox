@@ -77,8 +77,8 @@ from .calculate_branch import (
     process_branches,
 )
 
-# calibrate subpackage: SRC calibration pipeline + per-step entry points
-from .calibrate import (
+# calibrate_ratingcurve subpackage: SRC calibration pipeline + entry points
+from .calibrate_ratingcurve import (
     CalibrationConfig,
     CalibrationNotImplemented,
     aggregate_branches,
