@@ -47,17 +47,24 @@ class FlowdirDEM:
     def run(self) -> Path:
         log.info("D8 flow direction start: %s", self.dem.name)
         try:
-            import whitebox
+            # Invoke WBT D8Pointer via the concurrency-safe runner. WBT's own
+            # run_tool() does a process-global os.chdir and returns 0 even when
+            # it wrote nothing, which under parallel branches left flowdir
+            # silently absent ("No such file or directory") for one branch per
+            # run. run_wbt_tool calls the binary by absolute path and verifies
+            # the output exists before returning. Paths are absolute so the
+            # WBT-install cwd doesn't matter.
+            from ._wbt_safe import run_wbt_tool
 
-            wbt = whitebox.WhiteboxTools()
-            wbt.verbose = False
-            wbt_dir = self.wbt_path or os.environ.get("WBT_PATH")
-            if wbt_dir:
-                wbt.set_whitebox_dir(wbt_dir)
-            # Scope WBT's working dir to the output's parent so parallel
-            # branches don't race on shared temp files.
-            wbt.set_working_dir(str(self.out_path.parent))
-            wbt.d8_pointer(str(self.dem), str(self.out_path))
+            run_wbt_tool(
+                "D8Pointer",
+                [
+                    f"--dem={self.dem.resolve()}",
+                    f"--output={self.out_path.resolve()}",
+                ],
+                out_path=self.out_path,
+                wbt_path=self.wbt_path,
+            )
             log.info("D8 flow direction written --> %s", self.out_path.name)
             return self.out_path
         except Exception:

@@ -354,18 +354,11 @@ def _fill_depressions(dem: Path, out: Path, wbt_path: Optional[str] = None) -> N
     processes the DEM preserves the gradients so d8_pointer assigns valid D8 codes
     to every stream cell.
     """
-    import whitebox
-    import os
     import shutil
     import rasterio
     import numpy as np
 
-    wbt = whitebox.WhiteboxTools()
-    wbt.set_verbose_mode(False)
-    wbt_dir = wbt_path or os.environ.get("WBT_PATH")
-    if wbt_dir:
-        wbt.set_whitebox_dir(wbt_dir)
-    wbt.set_working_dir(str(Path(out).parent))
+    from ._wbt_safe import run_wbt_tool
 
     # Write a float64 copy so WBT's flat-routing increments are representable
     dem_f64 = dem.with_suffix(".f64_tmp.tif")
@@ -377,7 +370,21 @@ def _fill_depressions(dem: Path, out: Path, wbt_path: Optional[str] = None) -> N
         with rasterio.open(str(dem_f64), "w", **prof64) as dst:
             dst.write(data.astype(np.float64), 1)
 
-        wbt.fill_depressions(str(dem_f64), str(out), fix_flats=True)
+        # Use the concurrency-safe WBT runner (see _wbt_safe). WBT's own
+        # fill_depressions goes through run_tool, which does a process-global
+        # os.chdir and reports success even when it wrote nothing — under
+        # parallel branches that left dem_burned_filled silently absent and
+        # the next step crashed reading the missing flowdir/fill output.
+        run_wbt_tool(
+            "FillDepressions",
+            [
+                f"--dem={Path(dem_f64).resolve()}",
+                f"--output={Path(out).resolve()}",
+                "--fix_flats",
+            ],
+            out_path=Path(out),
+            wbt_path=wbt_path,
+        )
     finally:
         if dem_f64.exists():
             dem_f64.unlink()

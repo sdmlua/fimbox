@@ -329,14 +329,20 @@ class StreamNetReaches:
             dst.write(reach_of.reshape(rows, cols).astype(np.int32), 1)
         log.info("StreamNet: reach ID raster --> %s", sn_catchments.name)
 
-        # ── Strahler stream order via WBT ───────────────────────────────────────
+        # ── Strahler stream order via WBT (concurrency-safe runner) ─────────────
         log.info("StreamNet: Strahler order --> %s", stream_order_path.name)
         try:
-            wbt = self._wbt()
-            wbt.strahler_stream_order(
-                str(self.flowdir),
-                str(self.stream_pixels),
-                str(stream_order_path),
+            from ._wbt_safe import run_wbt_tool
+
+            run_wbt_tool(
+                "StrahlerStreamOrder",
+                [
+                    f"--d8_pntr={Path(self.flowdir).resolve()}",
+                    f"--streams={Path(self.stream_pixels).resolve()}",
+                    f"--output={Path(stream_order_path).resolve()}",
+                ],
+                out_path=stream_order_path,
+                wbt_path=self.wbt_path,
             )
             _recompress_lzw(stream_order_path)
         except Exception as exc:

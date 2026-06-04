@@ -89,13 +89,10 @@ def adjust_floodplains(
     ``None`` when there is no area to adjust (e.g. all branch overlaps a
     mapped FEMA flood zone)."""
 
-    # WhiteboxTools is only needed for the Euclidean distance pass — import
-    # lazily so the rest of fimbox does not require it.
-    import whitebox
-
-    wbt = whitebox.WhiteboxTools()
-    wbt.set_verbose_mode(False)
-    wbt.set_whitebox_dir(wbt_path or os.environ.get("WBT_PATH", ""))
+    # WhiteboxTools is only needed for the Euclidean distance pass. Route it
+    # through the concurrency-safe runner (see _wbt_safe) so parallel branches
+    # don't corrupt WBT's shared config / race its output.
+    from ._wbt_safe import run_wbt_tool
 
     input_file = str(input_file)
     dem_file = str(dem_file)
@@ -103,8 +100,15 @@ def adjust_floodplains(
     output_file = Path(output_file)
     branch_id = str(branch_id)
 
-    wbt.set_working_dir(str(distance_file.parent))
-    wbt.euclidean_distance(input_file, str(distance_file))
+    run_wbt_tool(
+        "EuclideanDistance",
+        [
+            f"--input={Path(input_file).resolve()}",
+            f"--output={distance_file.resolve()}",
+        ],
+        out_path=distance_file,
+        wbt_path=wbt_path or os.environ.get("WBT_PATH") or None,
+    )
 
     catchments = gpd.read_file(nwm_catchments)
     streams = gpd.read_file(nwm_streams)

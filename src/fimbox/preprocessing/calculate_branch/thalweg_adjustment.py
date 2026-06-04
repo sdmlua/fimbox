@@ -142,7 +142,8 @@ class ThalwegAdjustment:
         Port of unique_pixel_and_allocation.py.
         Returns (unique_ids_path, dist_path, allo_path).
         """
-        wbt = self._wbt()
+        from ._wbt_safe import run_wbt_tool
+
         out_dir = self.out_thalweg_adj.parent
         base = self.stream_pixels.stem  # demDerived_streamPixels_{id}
 
@@ -174,12 +175,28 @@ class ThalwegAdjustment:
         with rasterio.open(str(pixel_ids), "w", **uid_profile) as dst:
             dst.write(pixel_values, 1)
 
-        # WBT euclidean_distance on stream_pixels
-        wbt.euclidean_distance(str(self.stream_pixels), str(dist_grid))
+        # WBT euclidean_distance on stream_pixels (concurrency-safe runner)
+        run_wbt_tool(
+            "EuclideanDistance",
+            [
+                f"--input={Path(self.stream_pixels).resolve()}",
+                f"--output={Path(dist_grid).resolve()}",
+            ],
+            out_path=dist_grid,
+            wbt_path=self.wbt_path,
+        )
         _recompress_lzw(dist_grid)
 
-        # WBT euclidean_allocation on unique values
-        wbt.euclidean_allocation(str(pixel_ids), str(allo_grid))
+        # WBT euclidean_allocation on unique values (concurrency-safe runner)
+        run_wbt_tool(
+            "EuclideanAllocation",
+            [
+                f"--input={Path(pixel_ids).resolve()}",
+                f"--output={Path(allo_grid).resolve()}",
+            ],
+            out_path=allo_grid,
+            wbt_path=self.wbt_path,
+        )
 
         # Post-process allocation: fill stream cells with their own ID
         with rasterio.open(str(allo_grid)) as src:
