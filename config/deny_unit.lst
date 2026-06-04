@@ -11,7 +11,7 @@ agree_smogrid_dist.tif
 agree_smogrid_zerod.tif
 # 3d_nld_subset_levees_burned.gpkg
 # branch_id.lst
-branch_polygons.gpkg
+# branch_polygons.gpkg  (kept; needed at FIM generation time and for diagnostics)
 bridge_elev_diff_meters.tif
 dem_burned.tif
 dem_burned_filled.tif
@@ -30,7 +30,7 @@ nwm_headwater_points_subset.gpkg
 # nwm_subset_streams_levelPaths.gpkg
 nwm_subset_streams_levelPaths_dissolved.gpkg
 # nwm_subset_streams_levelPaths_dissolved_extended.gpkg
-nwm_subset_streams_levelPaths_dissolved_headwaters.gpkg
+# nwm_subset_streams_levelPaths_dissolved_headwaters.gpkg
 # ras_elev_table.csv
 # usgs_elev_table.csv
 # usgs_subset_gages.gpkg

@@ -359,6 +359,7 @@ class StreamNetReaches:
         wbt_dir = self.wbt_path or os.environ.get("WBT_PATH")
         if wbt_dir:
             wbt.set_whitebox_dir(wbt_dir)
+        wbt.set_working_dir(str(Path(self.out_dir)))
         return wbt
 
 

@@ -134,6 +134,7 @@ class ThalwegAdjustment:
         wbt_dir = self.wbt_path or os.environ.get("WBT_PATH")
         if wbt_dir:
             wbt.set_whitebox_dir(wbt_dir)
+        wbt.set_working_dir(str(self.out_thalweg_adj.parent))
         return wbt
 
     def _stream_pixel_zones(self) -> tuple[Path, Path, Path]:

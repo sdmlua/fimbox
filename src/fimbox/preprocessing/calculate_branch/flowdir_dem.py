@@ -54,6 +54,9 @@ class FlowdirDEM:
             wbt_dir = self.wbt_path or os.environ.get("WBT_PATH")
             if wbt_dir:
                 wbt.set_whitebox_dir(wbt_dir)
+            # Scope WBT's working dir to the output's parent so parallel
+            # branches don't race on shared temp files.
+            wbt.set_working_dir(str(self.out_path.parent))
             wbt.d8_pointer(str(self.dem), str(self.out_path))
             log.info("D8 flow direction written --> %s", self.out_path.name)
             return self.out_path

@@ -67,7 +67,11 @@ DEM = OUT_DIR / "dem.tif"
 STREAMS = OUT_DIR / "nwm_subset_streams.gpkg"
 BOUNDARY_BUF = OUT_DIR / "wbd_buffered.gpkg"
 CATCHMENTS = OUT_DIR / "nwm_catchments_proj_subset.gpkg"
-HEADWATERS = OUT_DIR / "nwm_headwater_points_subset.gpkg"
+HEADWATERS = (
+    OUT_DIR / "nwm_headwater_points_subset.gpkg"
+    if (OUT_DIR / "nwm_headwater_points_subset.gpkg").is_file()
+    else OUT_DIR / "nwm_headwaters.gpkg"
+)
 LEVELPATH_EXT = OUT_DIR / "nwm_subset_streams_levelPaths_extended.gpkg"
 BRIDGE_DIFF = OUT_DIR / "bridge_elev_diff.tif"
 NLD_LEVEES = OUT_DIR / "3d_nld_subset_levees_burned.gpkg"
@@ -329,7 +333,6 @@ def test_step_Z1_branch_zero_full():
 
 
 # Stage B — CreateHAND steps 2..21, one isolated test each.
-# Step 1 (levee mask) is folded into Z1 when levee_gpkg_path is provided.
 def test_step_B02_flow_accumulation():
     """CreateHAND step 2: D8 flow accumulation + stream-pixel mask."""
     assert FLOWDIR.exists(), "FLOWDIR missing — run step_A6 first"
@@ -937,14 +940,16 @@ def test_step_C24_calculate_allbranches(tmp_path):
 
 
 def test_step_C25_calculate_allbranches_live_run():
-    """Opt-in live run for the real non-zero branch loop.
+    """Live run for the real non-zero branch loop.
 
     Set FIMBOX_KEEP_UNIT=1 to skip AOI-level cleanup.
+    Set FIMBOX_SKIP_ALLBRANCHES=1 to skip this test (e.g. during quick CI
+    smoke runs); by default it always runs.
     """
     from fimbox import AOIProcessingConfig, calculate_allbranches
 
-    if not os.environ.get("FIMBOX_RUN_ALLBRANCHES"):
-        pytest.skip("set FIMBOX_RUN_ALLBRANCHES=1 to run every non-zero branch")
+    if os.environ.get("FIMBOX_SKIP_ALLBRANCHES"):
+        pytest.skip("FIMBOX_SKIP_ALLBRANCHES set — skipping live branch loop")
 
     # BranchDerivation writes branch_ids.lst
     branch_list_path = OUT_DIR / "branch_ids.lst"
@@ -959,9 +964,10 @@ def test_step_C25_calculate_allbranches_live_run():
         aoi_id=AOI_CODE,
         branch_list_path=branch_list_path,
         n_workers=int(os.environ.get("FIMBOX_BRANCH_WORKERS", "1")),
+        delete_deny_list=True,
     )
 
-    delete_deny_list = not bool(os.environ.get("FIMBOX_KEEP_UNIT"))
+    delete_deny_list = True
     result = calculate_allbranches(
         cfg,
         delete_deny_list=delete_deny_list,
@@ -974,5 +980,3 @@ def test_step_C25_calculate_allbranches_live_run():
     assert result.n_non_zero_recorded == sum(
         1 for r in result.branch_results if r.status == "ok"
     )
-    if not delete_deny_list:
-        assert result.n_unit_files_removed == 0

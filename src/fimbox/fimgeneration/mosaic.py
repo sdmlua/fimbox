@@ -4,21 +4,15 @@ Date Updated: May 2026
 
 Combine per-branch inundation rasters into AOI-level depth and extent
 rasters. Non-zero branches take precedence over branch 0 where they
-exist — the same priority rule used by the production NOAA pipeline.
+exist
 
 Strategy
 --------
-1. Lay down branch 0 as the base (it covers the whole AOI but at coarser
-   main-stem accuracy).
+1. Lay down branch 0 as the base
 2. For every non-zero branch, overlay its wet pixels (depth > 0) on top
    of the base. Where the non-zero branch has data, it wins. Where it
-   has no data (outside its level path), the branch 0 value remains.
+   has no data, the branch 0 value remains.
 3. Write the result as a single AOI-wide GeoTIFF.
-
-The implementation streams windows, not whole rasters, so very large
-AOIs don't blow up memory. All inputs must share the AOI grid (they do
-by construction — CreateHAND writes every branch off the same boundary
-DEM).
 """
 
 from __future__ import annotations
@@ -147,97 +141,47 @@ class BranchMosaic:
     def _mosaic(
         self, sources: list[Path], out_path: Path, method: str
     ) -> None:
-        # method='max_positive': pick the largest positive value per pixel
-        #     (used for depth — overlapping flood predictions take the
-        #     deepest, dry values lose to wet).
-        # method='last_wins': later source overrides earlier (used for
-        #     the signed-HydroID extent raster — the non-zero branch's
-        #     HydroID wins over branch 0's where both are wet).
+        # method = "max_positive": pick deepest depth per pixel. Source
+        #     rasters have dry = 0, wet > 0, nodata = sentinel. Built-in
+        #     "max" picks the largest value across overlapping sources,
+        #     ignoring nodata pixels — which gives the correct deepest-wins
+        #     behaviour.
+        # method = "last_wins": signed HydroIDs. Built-in "max" works here
+        #     too because wet pixels are positive and dry pixels are
+        #     negative; the max is always the wet one when any source has
+        #     coverage.
         if not sources:
             return
         if out_path.exists():
             out_path.unlink()
 
-        if method == "max_positive":
-            self._merge_max(sources, out_path)
-        elif method == "last_wins":
-            self._merge_last(sources, out_path)
+        if method in ("max_positive", "last_wins"):
+            rasterio_merge(
+                [str(p) for p in sources],
+                method="max",
+                dst_path=str(out_path),
+            )
         else:
             raise ValueError(method)
-
-    def _merge_max(self, sources: list[Path], out_path: Path) -> None:
-        # rasterio.merge supports a "max" method already, but it doesn't
-        # ignore zero/nodata cleanly. Custom callable picks the max where
-        # new pixels are positive, else keeps the existing value.
-        def _max_positive(old_data, new_data, old_nodata, new_nodata, **_):
-            new_arr = new_data
-            new_valid = new_arr > 0
-            new_valid &= _not_nodata_mask(new_arr, new_nodata)
-            np.copyto(
-                old_data,
-                np.maximum(old_data, new_arr),
-                where=new_valid & (new_arr > old_data),
-            )
-
-        rasterio_merge(
-            [str(p) for p in sources],
-            method=_max_positive,
-            dst_path=str(out_path),
-        )
-
-    def _merge_last(self, sources: list[Path], out_path: Path) -> None:
-        # Signed HydroIDs. Any non-zero value from a later source
-        # overwrites the earlier mosaic.
-        def _last_wins(old_data, new_data, old_nodata, new_nodata, **_):
-            new_arr = new_data
-            new_valid = new_arr != 0
-            new_valid &= _not_nodata_mask(new_arr, new_nodata)
-            np.copyto(old_data, new_arr, where=new_valid)
-
-        rasterio_merge(
-            [str(p) for p in sources],
-            method=_last_wins,
-            dst_path=str(out_path),
-        )
 
     @staticmethod
     def _summarise(depth_path: Path) -> tuple[int, float]:  # noqa: D401
         return _summarise_depth(depth_path)
 
 
-def _not_nodata_mask(arr: np.ndarray, nodata) -> np.ndarray:
-    # Build a "this pixel is real data" mask. nodata can come in as a
-    # scalar, a per-band sequence, or None. NaN is also treated as nodata.
-    mask = ~np.isnan(arr) if np.issubdtype(arr.dtype, np.floating) else np.ones_like(arr, dtype=bool)
-    if nodata is None:
-        return mask
-    # Reduce per-band nodata down to a single scalar — rasterio sometimes
-    # hands us a 1-element sequence even for single-band rasters.
-    nd_values = np.atleast_1d(nodata).ravel()
-    for nd in nd_values:
-        if nd is None:
-            continue
-        try:
-            nd_f = float(nd)
-        except (TypeError, ValueError):
-            continue
-        if np.isnan(nd_f):
-            continue  # NaN handled by the isnan mask above
-        mask &= (arr != nd_f)
-    return mask
-
-
 def _summarise_depth(depth_path: Path) -> tuple[int, float]:
-    # Quick block-wise scan for wet pixel count and max depth.
+    # Quick block-wise scan for wet pixel count and max depth. When the raster dtype is int16 the values are in millimetres and
     n_wet = 0
     max_d = 0.0
     with rasterio.open(depth_path) as ds:
+        scale = 1.0 / 1000.0 if np.issubdtype(np.dtype(ds.dtypes[0]), np.integer) else 1.0
         for _, w in ds.block_windows(1):
             arr = ds.read(1, window=w)
             wet = arr > 0
             if wet.any():
                 n_wet += int(wet.sum())
-                block_max = float(arr[wet].max())
+                block_max = float(arr[wet].max()) * scale
                 if block_max > max_d:
                     max_d = block_max
     return n_wet, max_d
+

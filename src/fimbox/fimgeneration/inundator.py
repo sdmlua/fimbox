@@ -51,32 +51,24 @@ class InundationResult:
 
 @dataclass
 class Inundator:
-    # Per-branch inundator. Defaults match fimbox's standard branch layout.
-
     branch_dir: PathLike
     branch_id: str
     forecast: Union[PathLike, pd.DataFrame]
-
-    # File paths inside branch_dir. If left as None, the standard fimbox
-    # naming convention is used.
     hand_raster: Optional[PathLike] = None
     catchments_raster: Optional[PathLike] = None
     hydrotable_csv: Optional[PathLike] = None
-
-    # Where to write the per-branch extent + depth rasters. By default
-    # they land next to the source files inside branch_dir. Pass out_dir
-    # to redirect both to a separate folder (used by FimGenerator so
-    # intermediates don't pollute the AOI's branches/ tree).
     out_dir: Optional[PathLike] = None
     extent_out: Optional[PathLike] = None
     depth_out: Optional[PathLike] = None
 
-    # Smallest depth (m) that counts as wet. ~30 mm matches NOAA's default of
-    # "approximately 1/10th of a foot".
+    # Smallest depth (m) that counts as wet. ~30 mm 
     min_depth_m: float = 0.03
 
+    #When true, written as a millimeter
+    int16_mode: bool = False
+
     # When True, skip lake reaches (LakeID != -999). Set to False to include
-    # lakes in the inundation map (rare).
+    # lakes in the inundation map.
     drop_lakes: bool = True
 
     def __post_init__(self) -> None:
@@ -92,8 +84,7 @@ class Inundator:
         if self.hydrotable_csv is None:
             self.hydrotable_csv = self.branch_dir / f"hydroTable_{bid}.csv"
 
-        # Output directory: explicit out_dir wins; otherwise outputs go
-        # alongside the input rasters in branch_dir.
+        # Output directory: explicit out_dir wins; otherwise outputs go alongside the input rasters in branch_dir.
         write_dir = Path(self.out_dir) if self.out_dir is not None else self.branch_dir
         write_dir.mkdir(parents=True, exist_ok=True)
         if self.extent_out is None:
@@ -109,8 +100,7 @@ class Inundator:
 
     def run(self) -> InundationResult:
         bid = self.branch_id
-        # Quietly skip when a branch never produced HAND outputs (e.g.
-        # killed during BranchZero). The caller mosaicker treats this
+        # Quietly skip when a branch never produced HAND outputs (e.g. killed during BranchZero). The caller mosaicker treats this
         # as an absent branch, not a fatal error.
         for p in (self.hand_raster, self.catchments_raster, self.hydrotable_csv):
             if not p.is_file():
@@ -142,8 +132,6 @@ class Inundator:
         return self._write_rasters(stage_by_hydroid)
 
     def _load_forecast(self) -> pd.DataFrame:
-        # Accept either a CSV path or a pre-loaded DataFrame. Normalise to
-        # a frame keyed by feature_id with one float column 'discharge_cms'.
         f = self.forecast
         if isinstance(f, (str, Path)):
             df = pd.read_csv(f)
@@ -167,20 +155,14 @@ class Inundator:
 
         df["feature_id"] = df["feature_id"].astype(np.int64)
         df["discharge_cms"] = df["discharge_cms"].astype(np.float64)
-        # If the same feature shows up multiple times (e.g. an ensemble),
-        # take the max so the resulting extent is the conservative envelope.
         df = df.groupby("feature_id", as_index=False)["discharge_cms"].max()
         return df
 
     def _build_stage_lookup(
         self, forecast: pd.DataFrame
     ) -> dict[int, float]:
-        # Read the hydroTable, drop lakes, inner-join with the forecast,
-        # then per-HydroID interpolate stage from discharge_cms.
         ht_cols_needed = ["feature_id", "HydroID", "stage", "discharge_cms"]
-        # LakeID is optional — some legacy hydroTables don't have it
         ht_optional = ["LakeID"]
-        # First peek the column header to know what to ask for.
         header = pd.read_csv(self.hydrotable_csv, nrows=0).columns
         usecols = [c for c in ht_cols_needed + ht_optional if c in header]
         ht = pd.read_csv(
@@ -201,9 +183,6 @@ class Inundator:
         if self.drop_lakes and "LakeID" in ht.columns:
             ht = ht[ht["LakeID"] == -999]
 
-        # Rename forecast discharge column to avoid the post-merge
-        # _x/_y suffix collision. After this, the rating curve is in
-        # 'discharge_cms' and the forecast value is in 'forecast_q'.
         forecast_local = forecast.rename(columns={"discharge_cms": "forecast_q"})
         merged = ht.merge(forecast_local, on="feature_id", how="inner")
         if merged.empty:
@@ -223,10 +202,6 @@ class Inundator:
     def _write_rasters(
         self, stage_by_hydroid: dict[int, float]
     ) -> InundationResult:
-        # Stream the input rasters block-by-block, compute depth and extent,
-        # write outputs. Both inputs share the same grid by construction
-        # (CreateHAND wrote them off the same reference raster) so the same
-        # window works for both.
         bid = self.branch_id
 
         with (
@@ -240,11 +215,19 @@ class Inundator:
                 )
 
             depth_meta = hand_ds.meta.copy()
-            depth_meta.update(
-                dtype="float32", count=1, nodata=-9999.0,
-                compress="lzw", tiled=True, blockxsize=512, blockysize=512,
-                BIGTIFF="YES",
-            )
+            if self.int16_mode:
+                # Depth in millimetres as int16.
+                depth_meta.update(
+                    dtype="int16", count=1, nodata=0,
+                    compress="lzw", tiled=True, blockxsize=512, blockysize=512,
+                    BIGTIFF="YES",
+                )
+            else:
+                depth_meta.update(
+                    dtype="float32", count=1, nodata=-9999.0,
+                    compress="lzw", tiled=True, blockxsize=512, blockysize=512,
+                    BIGTIFF="YES",
+                )
             ext_meta = hand_ds.meta.copy()
             ext_meta.update(
                 dtype="int32", count=1, nodata=0,
@@ -279,8 +262,7 @@ class Inundator:
                     hand = hand_ds.read(1, window=window).astype(np.float32)
                     cat = cat_ds.read(1, window=window).astype(np.int32)
 
-                    # Pixels with valid catchment + non-negative HAND can be
-                    # tested. Everything else is dry.
+                    # Pixels with valid catchment + non-negative HAND can be tested. Everything else is dry.
                     valid = (cat > 0) & (cat <= max_hid) & (hand >= 0)
                     if hand_nodata is not None and not np.isnan(hand_nodata):
                         valid &= (hand != hand_nodata)
@@ -292,7 +274,12 @@ class Inundator:
                     depth = stage - hand
                     wet = valid & (depth > self.min_depth_m)
 
-                    out_depth = np.where(wet, depth, 0.0).astype(np.float32)
+                    if self.int16_mode:
+                        depth_mm = np.round(depth * 1000.0)
+                        depth_mm = np.clip(depth_mm, 0, 32767)
+                        out_depth = np.where(wet, depth_mm, 0).astype(np.int16)
+                    else:
+                        out_depth = np.where(wet, depth, 0.0).astype(np.float32)
                     out_ext = np.where(wet, cat, -cat).astype(np.int32)
                     # cells that are entirely outside any catchment stay 0
                     out_ext = np.where(cat <= 0, 0, out_ext)
@@ -302,15 +289,21 @@ class Inundator:
 
                     if wet.any():
                         n_wet_pixels += int(wet.sum())
-                        block_max = float(out_depth.max())
-                        if block_max > max_depth:
-                            max_depth = block_max
+                        # Convert mm back to m for the summary stat so max_depth_m is comparable between modes.
+                        block_max_m = (
+                            float(out_depth.max()) / 1000.0
+                            if self.int16_mode
+                            else float(out_depth.max())
+                        )
+                        if block_max_m > max_depth:
+                            max_depth = block_max_m
                         for hid in np.unique(cat[wet]):
                             n_wet_hydroids.add(int(hid))
 
         log.info(
             f"Inundator branch {bid}: {n_wet_pixels} wet pixels, "
             f"{len(n_wet_hydroids)} HydroIDs, max depth {max_depth:.2f} m"
+            f"{' (int16/mm storage)' if self.int16_mode else ''}"
         )
         return InundationResult(
             branch_id=bid,
@@ -320,3 +313,4 @@ class Inundator:
             n_pixels_wet=n_wet_pixels,
             max_depth_m=max_depth,
         )
+

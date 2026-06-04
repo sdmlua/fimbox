@@ -4,25 +4,10 @@ Date Updated: May 2026
 
 Top-level FIM generation pipeline.
 
-Given an AOI directory plus a forecast file or DataFrame of (feature_id, discharge_cms), walk
-every branch and produce per-branch inundation extent + depth rasters, then mosaic them into AOI-wide outputs.
-
-Usage
+Outcomes
 -----
-    from fimbox.fimgeneration import FimGenerator
-    result = FimGenerator(aoi_dir=Path("out/HUC08060202"),
-                          forecast="forecasts/nwm_2025_03_15.csv").run()
-    print(result.depth_path)   # /out/HUC08060202/inundation_depth.tif
-    print(result.extent_path)  # /out/HUC08060202/inundation_extent.tif
-
-Forecast file format
---------------------
-CSV with at minimum two columns:
-    feature_id     int  (NWM reach id)
-    discharge_cms  float (cubic meters per second)
-
-The column 'discharge' or 'flow_cms' is also accepted and renamed
-automatically.
+    print(result.depth_path)   # /out/AOI/inundation_depth.tif
+    print(result.extent_path)  # /out/AOI/inundation_extent.tif
 """
 
 from __future__ import annotations
@@ -41,6 +26,18 @@ from .mosaic import BranchMosaic, MosaicResult
 PathLike = Union[str, Path]
 
 log = logging.getLogger(__name__)
+
+
+# Dask is optional. When available the branch loop dispatches to the
+# shared LocalCluster from fimbox._dask, which auto-sizes to the
+# machine's CPU/RAM and reuses the same worker pool the preprocessing
+# pipeline uses. When unavailable we fall back to ProcessPoolExecutor.
+try:
+    from .._dask import get_client as _get_dask_client
+    from distributed import as_completed as _dask_as_completed
+    _DASK_AVAILABLE = True
+except ImportError:
+    _DASK_AVAILABLE = False
 
 
 @dataclass
@@ -71,30 +68,34 @@ class FimGenerator:
     aoi_dir: PathLike
     forecast: Union[PathLike, pd.DataFrame]
 
-    # If set, limit generation to these branches. Otherwise walk every
-    # subdirectory of <aoi_dir>/branches.
+    # If set, limit generation to these branches. Otherwise walk every subdirectory of <aoi_dir>/branches.
     branch_ids: Optional[Sequence[str]] = None
 
-    # Whether to mosaic per-branch outputs into AOI-level rasters at the
-    # end. Default True.
+    # Whether to mosaic per-branch outputs into AOI-level rasters at the end. Default True.
     mosaic: bool = True
 
-    # Parallel workers for the per-branch loop. 1 = serial.
+    # Parallel workers for the per-branch loop. 1 = serial. When use_dask
+    # is enabled n_workers is ignored — the shared Dask LocalCluster sizes
+    # itself from the machine.
     n_workers: int = 1
+
+    # When True, dispatch the branch loop through the process-wide Dask
+    # LocalCluster (auto-sized to the machine). When None, Dask is used
+    # whenever it's installed. Set False to force ProcessPoolExecutor.
+    use_dask: Optional[bool] = None
 
     # Tunable forwarded to Inundator.
     min_depth_m: float = 0.03
     drop_lakes: bool = True
 
-    # AOI-level mosaic output paths. When None, default to
-    # <aoi_dir>/inundation_depth.tif and inundation_extent.tif.
+    # When True, depth rasters are written as int16 millimetres instead of
+    # float32 metres. Halves disk footprint and matches NOAA's int16 mode.
+    int16_mode: bool = False
+
     depth_out: Optional[PathLike] = None
     extent_out: Optional[PathLike] = None
 
-    # Directory where per-branch intermediates are written before
-    # mosaicking. Default = <aoi_dir>/fimbox_output/tmp. When
-    # cleanup_intermediates=True (the default) this directory is wiped
-    # after the mosaic succeeds so it doesn't pollute the AOI tree.
+    # Directory where per-branch intermediates are written before mosaicking.
     intermediate_dir: Optional[PathLike] = None
     cleanup_intermediates: bool = True
 
@@ -118,7 +119,7 @@ class FimGenerator:
         # Normalise the forecast once so each worker doesn't re-read it.
         forecast_df = _load_forecast(self.forecast)
 
-        # Per-branch intermediates land here. Default: <aoi_dir>/fimbox_output/tmp.
+        # Per-branch intermediates land here. 
         tmp_dir = (
             Path(self.intermediate_dir)
             if self.intermediate_dir is not None
@@ -126,17 +127,33 @@ class FimGenerator:
         )
         tmp_dir.mkdir(parents=True, exist_ok=True)
 
+        # Pick the dispatch backend. Dask is preferred when available
+        # because the shared LocalCluster is sized to the machine and
+        # reuses the worker pool the preprocessing pipeline already
+        # warmed up. Fall back to ProcessPoolExecutor otherwise.
+        use_dask = self.use_dask
+        if use_dask is None:
+            use_dask = _DASK_AVAILABLE and len(bids) > 1
+        if use_dask and not _DASK_AVAILABLE:
+            log.warning(
+                "use_dask=True but distributed is not installed — "
+                "falling back to ProcessPoolExecutor"
+            )
+            use_dask = False
+
         log.info(
             f"FimGenerator: AOI={self.aoi_dir.name} branches={len(bids)} "
-            f"workers={self.n_workers} mosaic={self.mosaic} "
-            f"intermediate_dir={tmp_dir}"
+            f"backend={'dask' if use_dask else ('serial' if self.n_workers <= 1 else 'process_pool')} "
+            f"mosaic={self.mosaic} intermediate_dir={tmp_dir}"
         )
 
-        if self.n_workers <= 1:
+        if use_dask:
+            results = self._run_with_dask(bids, branch_root, forecast_df, tmp_dir)
+        elif self.n_workers <= 1:
             results = [
                 _run_one_branch(
                     branch_root / bid, bid, forecast_df,
-                    self.min_depth_m, self.drop_lakes, tmp_dir,
+                    self.min_depth_m, self.drop_lakes, self.int16_mode, tmp_dir,
                 )
                 for bid in bids
             ]
@@ -147,7 +164,7 @@ class FimGenerator:
                     pool.submit(
                         _run_one_branch,
                         branch_root / bid, bid, forecast_df,
-                        self.min_depth_m, self.drop_lakes, tmp_dir,
+                        self.min_depth_m, self.drop_lakes, self.int16_mode, tmp_dir,
                     ): bid
                     for bid in bids
                 }
@@ -201,6 +218,56 @@ class FimGenerator:
             mosaic=mosaic_result,
         )
 
+    def _run_with_dask(
+        self,
+        bids: Sequence[str],
+        branch_root: Path,
+        forecast_df: pd.DataFrame,
+        tmp_dir: Path,
+    ) -> list[InundationResult]:
+        # Submit every branch to the shared LocalCluster. retries=0
+        # mirrors the process_branches setup: an OOMed branch should
+        # surface immediately as 'failed' so siblings finish instead
+        # of cascading into a KilledWorker storm.
+        client = _get_dask_client()
+        log.info(
+            "FimGenerator (dask): %d branches -> %d workers (dashboard %s)",
+            len(bids),
+            len(client.scheduler_info()["workers"]),
+            client.dashboard_link,
+        )
+        futures = client.map(
+            _run_one_branch,
+            [branch_root / b for b in bids],
+            list(bids),
+            [forecast_df] * len(bids),
+            [self.min_depth_m] * len(bids),
+            [self.drop_lakes] * len(bids),
+            [self.int16_mode] * len(bids),
+            [tmp_dir] * len(bids),
+            pure=False,
+            retries=0,
+        )
+        fut_to_bid = {fut.key: bid for fut, bid in zip(futures, bids)}
+        results: list[InundationResult] = []
+        for fut in _dask_as_completed(futures):
+            bid = fut_to_bid.get(fut.key, "?")
+            try:
+                results.append(fut.result())
+            except Exception as exc:
+                log.error(
+                    f"FimGenerator (dask): branch {bid} crashed: {exc}",
+                    exc_info=True,
+                )
+                results.append(InundationResult(
+                    branch_id=bid,
+                    extent_path=tmp_dir / f"inundation_extent_{bid}.tif",
+                    depth_path=tmp_dir / f"inundation_depth_{bid}.tif",
+                    n_hydroids_wet=0, n_pixels_wet=0, max_depth_m=0.0,
+                    skipped=True,
+                ))
+        return results
+
 
 def _run_one_branch(
     branch_dir: Path,
@@ -208,6 +275,7 @@ def _run_one_branch(
     forecast: pd.DataFrame,
     min_depth_m: float,
     drop_lakes: bool,
+    int16_mode: bool,
     out_dir: Path,
 ) -> InundationResult:
     return Inundator(
@@ -216,6 +284,7 @@ def _run_one_branch(
         forecast=forecast,
         min_depth_m=min_depth_m,
         drop_lakes=drop_lakes,
+        int16_mode=int16_mode,
         out_dir=out_dir,
     ).run()
 
@@ -236,14 +305,6 @@ def extract_feature_ids(
     aoi_dir: PathLike,
     out_csv: Optional[PathLike] = None,
 ) -> Path:
-    # Scan every per-branch hydroTable in the AOI and write
-    # <aoi_dir>/feature_id.csv (single column) listing every unique
-    # feature_id the AOI knows about. The user can then author a
-    # discharge CSV (feature_id,discharge_cms) and drop it into
-    # <aoi_dir>/discharge_inputs/ before running FimGenerator.
-    #
-    # Pass out_csv to override the default location. Returns the path
-    # to the written CSV.
     import glob
 
     aoi = Path(aoi_dir)
@@ -264,3 +325,73 @@ def extract_feature_ids(
     pd.DataFrame({"feature_id": fids}).to_csv(target, index=False)
     log.info(f"extract_feature_ids: {len(fids)} ids --> {target}")
     return target
+
+
+
+# CLI
+if __name__ == "__main__":
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        description="Two-step FIM generation: extract feature_ids, then run."
+    )
+    parser.add_argument("--aoi-dir", required=True)
+    parser.add_argument(
+        "--extract-only", action="store_true",
+        help="Step 1 only: write <aoi_dir>/feature_id.csv and exit.",
+    )
+    parser.add_argument(
+        "--forecast", default=None,
+        help="Step 2: a single discharge CSV. When omitted, every CSV under "
+             "<aoi_dir>/discharge_inputs/ is processed.",
+    )
+    parser.add_argument("--workers", type=int, default=4)
+    parser.add_argument(
+        "--int16", action="store_true",
+        help="Write depth raster as int16 millimetres.",
+    )
+    args = parser.parse_args()
+
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        datefmt="%H:%M:%S",
+    )
+    aoi_dir = Path(args.aoi_dir)
+
+    if args.extract_only:
+        out = extract_feature_ids(aoi_dir)
+        print(f"feature_id list -> {out}")
+    else:
+        # Resolve which discharge CSVs to run.
+        if args.forecast:
+            csvs = [Path(args.forecast)]
+        else:
+            ddir = aoi_dir / "discharge_inputs"
+            if not ddir.is_dir():
+                parser.error(
+                    f"{ddir} not found — run --extract-only first, drop your "
+                    "discharge CSVs into it, then rerun."
+                )
+            csvs = sorted(ddir.glob("*.csv"))
+            if not csvs:
+                parser.error(f"No discharge CSVs in {ddir}")
+
+        output_dir = aoi_dir / "fimbox_output"
+        output_dir.mkdir(exist_ok=True)
+        for csv in csvs:
+            base = csv.stem
+            print(f"\n=== {csv.name} ===")
+            result = FimGenerator(
+                aoi_dir=aoi_dir,
+                forecast=csv,
+                n_workers=args.workers,
+                int16_mode=args.int16,
+                depth_out=output_dir / f"{base}_depth.tif",
+                extent_out=output_dir / f"{base}_inundation.tif",
+            ).run()
+            print(f"  depth  -> {result.depth_path}")
+            print(f"  extent -> {result.extent_path}")
+            if result.mosaic is not None:
+                print(f"  {result.mosaic.n_wet_pixels:,} wet pixels, "
+                      f"max depth {result.mosaic.max_depth_m:.2f} m")

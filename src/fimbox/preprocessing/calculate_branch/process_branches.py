@@ -1,13 +1,12 @@
 """
 Author: Supath Dhital
-Date Updated: May 2026
+Date Updated: June 2026
 
 Multi-branch processing.
 
 Pipeline
 --------
-1. Read the AOI's branch list (output of BranchDerivation, at
-   ``<aoi_dir>/branch_list.csv``).
+1. Read the AOI's branch list.
 2. AOI-level USGS gage assignment (when ``usgs_gages_gpkg`` is provided).
 3. Branch-zero post-CreateHAND tasks: USGS crosswalk and deny-list cleanup.
 4. For every non-zero branch in parallel (ProcessPoolExecutor):
@@ -205,7 +204,6 @@ class AOIProcessingConfig:
         self.n_workers = n_workers
         self.timeout_seconds = timeout_seconds
 
-    # Read-only aliases so old callers using `cfg.huc_dir` / `cfg.huc_id` keep working
     @property
     def huc_dir(self) -> Path:
         return self.aoi_dir
@@ -239,9 +237,10 @@ HucProcessingConfig = AOIProcessingConfig
 def process_branches(cfg: AOIProcessingConfig) -> list[BranchResult]:
     """Run every non-zero branch in parallel.
 
-    Pure branch calculation: BranchZero + adjust_floodplains + CreateHAND +
-    USGS crosswalk + per-branch + branch-zero cleanup. **Calibration is NOT
-    invoked here** — run it explicitly via ``fimbox.run_calibration`` once
+    Pure branch calculation: BranchZero, adjust_floodplains, CreateHAND, 
+    USGS crosswalk, per-branch, branch-zero cleanup. 
+    
+    Calibration is NOT invoked here — run it explicitly via ``fimbox.run_calibration`` once
     the branch loop and any deny-list cleanups are complete.
 
     Returns the per-branch results list (caller can inspect statuses)."""
@@ -253,7 +252,7 @@ def process_branches(cfg: AOIProcessingConfig) -> list[BranchResult]:
     log.info(f"Branch list: {cfg.branch_list_path}")
     log.info(f"Workers: {cfg.n_workers}")
 
-    # Stage 0: AOI-level USGS gage assignment (once for the entire AOI)
+    # Stage 0: AOI-level USGS gage assignment
     if cfg.usgs_gages_gpkg and cfg.levelpaths_gpkg:
         log.info("--- USGS gage assignment (AOI level) ---")
         try:
@@ -281,12 +280,6 @@ def process_branches(cfg: AOIProcessingConfig) -> list[BranchResult]:
 
     results: list[BranchResult] = []
     if branch_ids:
-        # Dispatch every non-zero branch to the shared Dask LocalCluster.
-        # Worker count comes from FIMBOX_DASK_WORKERS or os.cpu_count();
-        # cfg.n_workers > 1 still acts as an explicit override so old
-        # callers stay reproducible. Each branch runs in its own worker
-        # process (threads_per_worker=1) to keep WBT/TauDEM subprocess
-        # handles and per-branch log files isolated.
         from ..._dask import get_client
         from distributed import as_completed as dask_as_completed
 
@@ -315,9 +308,7 @@ def process_branches(cfg: AOIProcessingConfig) -> list[BranchResult]:
             try:
                 results.append(fut.result(timeout=cfg.timeout_seconds))
             except Exception as exc:
-                # KilledWorker / OOM / unhandled exception — record as failed
-                # so the summary reflects it, but never let one branch's
-                # crash abort the whole AOI.
+                # KilledWorker / OOM / unhandled exception
                 exc_text = str(exc)
                 status = (
                     "killed"
@@ -336,16 +327,74 @@ def process_branches(cfg: AOIProcessingConfig) -> list[BranchResult]:
     branches_elapsed = time.time() - start
     _log_branch_summary(results, branches_elapsed)
 
+    # Per-branch + branch-zero deny-list cleanup runs once here, after
+    # every branch has finished, instead of inside each worker. Tests
+    # that consume intermediates (e.g. test_branchprocessing.py) can
+    # set cfg.delete_deny_list=False to skip this entirely.
+    _cleanup_after_all(cfg, results)
+
     total_elapsed = time.time() - start
     log.info(f"=== AOI processing complete: {cfg.aoi_id} ({total_elapsed:.1f}s) ===")
     return results
+
+
+def _cleanup_after_all(cfg: AOIProcessingConfig, results: Sequence[BranchResult]) -> None:
+    if not cfg.delete_deny_list:
+        log.info("Per-branch + branch-zero cleanup disabled (delete_deny_list=False)")
+        return
+
+    from .calculate_allbranches import _bundled_deny_list
+    from .outputs_cleanup import remove_deny_list_files
+
+    branches_root = cfg.aoi_dir / "branches"
+    bzero_dir = branches_root / cfg.branch_zero_id
+
+    # Branch zero.
+    if bzero_dir.is_dir():
+        deny_bz = cfg.deny_branch_zero_list or _bundled_deny_list("deny_branch_zero.lst")
+        if deny_bz is not None and Path(deny_bz).is_file():
+            log.info(f"--- branch-zero outputs cleanup ({Path(deny_bz).name}) ---")
+            try:
+                remove_deny_list_files(
+                    src_dir=bzero_dir,
+                    deny_list=deny_bz,
+                    branch_id=cfg.branch_zero_id,
+                    verbose=True,
+                )
+            except Exception as exc:
+                log.warning(f"Branch-zero cleanup skipped: {exc}")
+        else:
+            log.info("Branch-zero deny list not found — skipping cleanup")
+
+    # Non-zero branches that finished ok.
+    deny_br = cfg.deny_branches_list or _bundled_deny_list("deny_branches.lst")
+    if deny_br is None or not Path(deny_br).is_file():
+        log.info("Per-branch deny list not found — skipping cleanup")
+        return
+
+    log.info(f"--- per-branch outputs cleanup ({Path(deny_br).name}) ---")
+    for r in results:
+        if r.status != "ok" or r.branch_id == cfg.branch_zero_id:
+            continue
+        branch_dir = branches_root / r.branch_id
+        if not branch_dir.is_dir():
+            continue
+        try:
+            remove_deny_list_files(
+                src_dir=branch_dir,
+                deny_list=deny_br,
+                branch_id=r.branch_id,
+                verbose=False,
+            )
+        except Exception as exc:
+            log.warning(f"Branch {r.branch_id} cleanup skipped: {exc}")
 
 
 def _resolve_paths(cfg: AOIProcessingConfig) -> AOIProcessingConfig:
     """Fill in missing default paths from the case directory."""
     d = cfg.aoi_dir
     if cfg.branch_list_path is None:
-        # BranchDerivation writes branch_ids.lst (one branch id per line).
+        # BranchDerivation writes branch_ids.lst.
         # Inundation-mapping's branch_ids.csv is only consumed by its
         # cross-AOI post-processing aggregator (fim_post_processing.sh),
         # not by the branch loop itself, so fimbox doesn't emit it.
@@ -443,36 +492,8 @@ def _run_branch_zero_post_steps(cfg: AOIProcessingConfig) -> None:
                 "Branch-zero USGS crosswalk: required inputs missing — skipping"
             )
 
-    # Deny-list cleanup for the branch-zero directory.
-    if not cfg.delete_deny_list:
-        log.info("Branch-zero cleanup disabled (delete_deny_list=False)")
-        return
-
-    deny = cfg.deny_branch_zero_list
-    if deny is None:
-        from .calculate_allbranches import _bundled_deny_list
-
-        deny = _bundled_deny_list("deny_branch_zero.lst")
-        if deny is None:
-            log.warning(
-                "delete_deny_list=True but no deny_branch_zero_list provided "
-                "and fimbox/config/deny_branch_zero.lst not found — "
-                "skipping branch-zero cleanup."
-            )
-            return
-
-    from .outputs_cleanup import remove_deny_list_files
-
-    log.info(f"--- branch-zero outputs cleanup ({Path(deny).name}) ---")
-    try:
-        remove_deny_list_files(
-            src_dir=branch_dir,
-            deny_list=deny,
-            branch_id=cfg.branch_zero_id,
-            verbose=True,
-        )
-    except Exception as exc:
-        log.warning(f"Branch-zero cleanup skipped: {exc}")
+    # Branch-zero deny-list cleanup is deferred to _cleanup_after_all,
+    # which runs once after every branch (zero and non-zero) finishes.
 
 
 def _process_single_branch(cfg: AOIProcessingConfig, branch_id: str) -> BranchResult:
@@ -501,17 +522,69 @@ def _process_single_branch(cfg: AOIProcessingConfig, branch_id: str) -> BranchRe
     branch_dir.mkdir(parents=True, exist_ok=True)
 
     try:
-        # BranchZero raster prep — equivalent of run_by_branch.sh's clip+AGREE+filldem
+        # Non-zero branches clip to their own polygon (level-path buffer)
+        # rather than the full AOI boundary. Branch 0 keeps the AOI
+        # boundary because it covers the whole area.
+        branch_boundary = cfg.boundary_gpkg
+        branch_streams = cfg.streams_gpkg
+        branch_headwaters = cfg.headwaters_gpkg
+        branch_levelpaths_extended = cfg.levelpaths_extended_gpkg
+        if branch_id != cfg.branch_zero_id:
+            single = _write_single_branch_polygon(
+                cfg.branch_polygons_gpkg, branch_id, branch_dir
+            )
+            if single is not None:
+                branch_boundary = single
+                branch_log.info(
+                    f"Using per-branch clip polygon: {single.name}"
+                )
+            else:
+                branch_log.warning(
+                    "branch_polygons.gpkg missing or has no row for "
+                    f"branch {branch_id} — falling back to AOI boundary"
+                )
+
+            streams_src = cfg.aoi_dir / "nwm_subset_streams_levelPaths.gpkg"
+            filtered_streams = _filter_by_levpa_id(
+                streams_src, branch_id, branch_dir,
+                f"nwm_subset_streams_levelPaths_{branch_id}.gpkg",
+            )
+            if filtered_streams is not None:
+                branch_streams = filtered_streams
+
+            ext_src = cfg.aoi_dir / "nwm_subset_streams_levelPaths_extended.gpkg"
+            filtered_ext = _filter_by_levpa_id(
+                ext_src, branch_id, branch_dir,
+                f"nwm_subset_streams_levelPaths_extended_{branch_id}.gpkg",
+            )
+            if filtered_ext is not None:
+                branch_levelpaths_extended = filtered_ext
+
+            hw_src = cfg.aoi_dir / "nwm_subset_streams_levelPaths_dissolved_headwaters.gpkg"
+            filtered_hw = _filter_by_levpa_id(
+                hw_src, branch_id, branch_dir,
+                f"nwm_subset_streams_levelPaths_dissolved_headwaters_{branch_id}.gpkg",
+            )
+            if filtered_hw is not None:
+                branch_headwaters = filtered_hw
+
+            cat_src = cfg.aoi_dir / "nwm_catchments_proj_subset_levelPaths.gpkg"
+            _filter_by_levpa_id(
+                cat_src, branch_id, branch_dir,
+                f"nwm_catchments_proj_subset_levelPaths_{branch_id}.gpkg",
+            )
+
+        # BranchZero raster prep
         BranchZero(
             dem_path=cfg.dem_path,
-            streams_gpkg=cfg.streams_gpkg,
-            boundary_gpkg=cfg.boundary_gpkg,
+            streams_gpkg=branch_streams,
+            boundary_gpkg=branch_boundary,
             out_dir=cfg.aoi_dir,
             bridge_elev_diff_path=cfg.bridge_elev_diff_path,
             levee_gpkg_path=cfg.levee_gpkg_path,
             levee_raster_path=cfg.levee_raster_path,
-            headwaters_gpkg=cfg.headwaters_gpkg,
-            levelpaths_extended_gpkg=cfg.levelpaths_extended_gpkg,
+            headwaters_gpkg=branch_headwaters,
+            levelpaths_extended_gpkg=branch_levelpaths_extended,
             target_crs=(
                 f"EPSG:{cfg.target_crs}" if str(cfg.target_crs).isdigit() else cfg.target_crs
             ),
@@ -622,8 +695,7 @@ def _process_single_branch(cfg: AOIProcessingConfig, branch_id: str) -> BranchRe
                     f"required inputs missing"
                 )
 
-        # Int16 storage downcast. Skipped for Alaska (AOI id starting with
-        # "19" — HUC2=19 HydroIDs exceed Int16 range).
+        # Int16 storage downcast.
         if cfg.convert_to_int16:
             if str(cfg.aoi_id).startswith("19"):
                 branch_log.info(
@@ -646,34 +718,9 @@ def _process_single_branch(cfg: AOIProcessingConfig, branch_id: str) -> BranchRe
                         f"convert_to_int16 skipped for branch {branch_id}: {exc}"
                     )
 
-        # Per-branch deny-list cleanup. Skipped for branch zero (its cleanup
-        # is handled by _run_branch_zero_post_steps with deny_branch_zero.lst).
-        # Default-on; opt out via cfg.delete_deny_list=False.
-        if cfg.delete_deny_list and branch_id != cfg.branch_zero_id:
-            deny = cfg.deny_branches_list
-            if deny is None:
-                from .calculate_allbranches import _bundled_deny_list
-
-                deny = _bundled_deny_list("deny_branches.lst")
-            if deny is not None and Path(deny).is_file():
-                from .outputs_cleanup import remove_deny_list_files
-
-                try:
-                    remove_deny_list_files(
-                        src_dir=branch_dir,
-                        deny_list=deny,
-                        branch_id=branch_id,
-                        verbose=True,
-                    )
-                except Exception as exc:
-                    branch_log.warning(
-                        f"Branch {branch_id} cleanup skipped: {exc}"
-                    )
-            else:
-                branch_log.info(
-                    f"Branch {branch_id}: no deny_branches.lst available, "
-                    "skipping per-branch cleanup"
-                )
+        # Per-branch deny-list cleanup is deferred until every branch in
+        # the AOI finishes. process_branches() runs _cleanup_after_all
+        # after the parallel loop completes.
 
         elapsed = time.time() - started
         branch_log.info(f"--- Branch {branch_id} ok ({elapsed:.1f}s) ---")
@@ -682,7 +729,6 @@ def _process_single_branch(cfg: AOIProcessingConfig, branch_id: str) -> BranchRe
     except Exception as exc:
         elapsed = time.time() - started
         msg = f"{exc}\n{traceback.format_exc()}"
-        # Classify known fatal error markers (match process_branch.sh codes)
         status = _classify_branch_error(msg)
         branch_log.error(f"Branch {branch_id} {status} ({elapsed:.1f}s): {exc}")
         if status in ("no_flowlines", "no_crosswalk", "too_many_hydroids"):
@@ -720,6 +766,73 @@ def _wipe_branch_dir(branch_dir: Path) -> None:
         import shutil
 
         shutil.rmtree(branch_dir, ignore_errors=True)
+
+
+
+def _write_single_branch_polygon(
+    branch_polygons_gpkg,
+    branch_id: str,
+    branch_dir: Path,
+    branch_id_attribute: str = "levpa_id",
+):
+    """Extract the polygon for ``branch_id`` from the AOI-wide
+    branch_polygons.gpkg and write it as a single-feature gpkg inside
+    branch_dir. Returns the new path, or None if the source file is
+    missing or has no matching feature.
+
+    Non-zero branches use this polygon as their clip boundary so the
+    per-branch DEM is small (~MB) instead of full-AOI sized.
+    """
+    if branch_polygons_gpkg is None or not Path(branch_polygons_gpkg).is_file():
+        return None
+    try:
+        import geopandas as gpd
+
+        gdf = gpd.read_file(branch_polygons_gpkg)
+    except Exception as exc:
+        log.warning(f"Could not read {branch_polygons_gpkg}: {exc}")
+        return None
+
+    if branch_id_attribute not in gdf.columns:
+        log.warning(
+            f"branch_polygons.gpkg has no '{branch_id_attribute}' column; "
+            "falling back to AOI boundary"
+        )
+        return None
+
+    sub = gdf[gdf[branch_id_attribute].astype(str) == str(branch_id)]
+    if sub.empty:
+        return None
+
+    out_path = branch_dir / f"branch_polygon_{branch_id}.gpkg"
+    sub.to_file(out_path, driver="GPKG")
+    return out_path
+
+
+def _filter_by_levpa_id(
+    src_gpkg,
+    branch_id: str,
+    branch_dir: Path,
+    out_name: str,
+    branch_id_attribute: str = "levpa_id",
+):
+    if src_gpkg is None or not Path(src_gpkg).is_file():
+        return None
+    try:
+        import geopandas as gpd
+
+        gdf = gpd.read_file(src_gpkg)
+    except Exception as exc:
+        log.warning(f"Could not read {src_gpkg}: {exc}")
+        return None
+    if branch_id_attribute not in gdf.columns:
+        return None
+    sub = gdf[gdf[branch_id_attribute].astype(str) == str(branch_id)]
+    if sub.empty:
+        return None
+    out_path = branch_dir / out_name
+    sub.to_file(out_path, driver="GPKG")
+    return out_path
 
 
 def _log_branch_summary(results: Sequence[BranchResult], elapsed_s: float) -> None:

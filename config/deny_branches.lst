@@ -42,6 +42,7 @@ flowaccum_d8_burned_filled_{}.tif
 flowdir_d8_burned_filled_{}.tif
 flowdir_d8_burned_filled_flows_{}.tif
 flows_grid_boolean_{}.tif
+flows_grid_boolean_levelpaths_{}.tif
 flows_grid_boolean_euclidean_distance_{}.tif
 flows_points_pixels_{}.gpkg
 gw_catchments_pixels_{}.gpkg

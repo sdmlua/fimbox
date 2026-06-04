@@ -136,21 +136,34 @@ class BranchZero:
 
         crs, res = self._resolve_crs_and_res()
 
-        # clip DEM to HUC boundary once, then copy into branch subdirectory
-        dem_clipped = self.out_dir / "dem.tif"
+        # Branch 0 publishes its clipped DEM at the AOI root (downstream
+        # tools expect <aoi_dir>/dem.tif). Non-zero branches must NOT
+        # overwrite that file — every branch runs in parallel and racing
+        # on the AOI-root dem.tif corrupts the shared input. Non-zero
+        # branches write their per-branch clip directly into branch_dir.
+        is_branch_zero = (bid == "0")
+        if is_branch_zero:
+            dem_clipped = self.out_dir / "dem.tif"
+        else:
+            dem_clipped = branch_dir / f"dem_{bid}.tif"
+
         _rasterio_clip_reproject(
             self.dem_path, self.boundary_gpkg, dem_clipped, crs=crs, res=res
         )
         log.info("DEM clipped --> %s", dem_clipped.name)
 
         dem_branch = branch_dir / f"dem_{bid}.tif"
-        shutil.copy2(dem_clipped, dem_branch)
+        if dem_clipped != dem_branch:
+            shutil.copy2(dem_clipped, dem_branch)
 
         # clip bridge elev diff once, then copy into branch subdirectory
         bridge_clipped: Optional[Path] = None
         bridge_branch: Optional[Path] = None
         if self.bridge_elev_diff_path and self.bridge_elev_diff_path.exists():
-            bridge_clipped = self.out_dir / "bridge_elev_diff.tif"
+            if is_branch_zero:
+                bridge_clipped = self.out_dir / "bridge_elev_diff.tif"
+            else:
+                bridge_clipped = branch_dir / f"bridge_elev_diff_{bid}.tif"
             _rasterio_clip_reproject(
                 self.bridge_elev_diff_path,
                 self.boundary_gpkg,
@@ -160,7 +173,8 @@ class BranchZero:
             )
             log.info("Bridge elev diff clipped --> %s", bridge_clipped.name)
             bridge_branch = branch_dir / f"bridge_elev_diff_{bid}.tif"
-            shutil.copy2(bridge_clipped, bridge_branch)
+            if bridge_clipped != bridge_branch:
+                shutil.copy2(bridge_clipped, bridge_branch)
 
         # rasterize 3D levee lines if GeoPackage provided, then burn into DEM
         if self.levee_gpkg_path and self.levee_gpkg_path.exists():
@@ -190,7 +204,7 @@ class BranchZero:
         # rasterize extended level path streams if provided (used by non-zero branches)
         levelpaths_bool = None
         if self.levelpaths_extended_gpkg and self.levelpaths_extended_gpkg.exists():
-            levelpaths_bool = self.out_dir / "flows_grid_boolean.tif"
+            levelpaths_bool = branch_dir / f"flows_grid_boolean_levelpaths_{bid}.tif"
             LevelPathBooleanRasterizer(
                 self.levelpaths_extended_gpkg, dem_branch, levelpaths_bool
             ).run()
@@ -351,6 +365,7 @@ def _fill_depressions(dem: Path, out: Path, wbt_path: Optional[str] = None) -> N
     wbt_dir = wbt_path or os.environ.get("WBT_PATH")
     if wbt_dir:
         wbt.set_whitebox_dir(wbt_dir)
+    wbt.set_working_dir(str(Path(out).parent))
 
     # Write a float64 copy so WBT's flat-routing increments are representable
     dem_f64 = dem.with_suffix(".f64_tmp.tif")

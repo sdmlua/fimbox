@@ -110,6 +110,18 @@ def heal_bridges_osm(
         return None
     healed = pd.concat(parts, ignore_index=True)
 
+    # Defensive clamp: zonal_stats can produce NaN thresholds when a bridge
+    # geometry has no overlapping HAND pixels, and features.rasterize burns
+    # those NaNs into the array. Replace any leaked NaN with the raster's
+    # nodata sentinel so the downstream non-negativity invariant holds.
+    if np.issubdtype(hand_array.dtype, np.floating):
+        nan_mask = np.isnan(hand_array)
+        if nan_mask.any():
+            nd = hand_profile.get("nodata")
+            if nd is None or (isinstance(nd, float) and np.isnan(nd)):
+                nd = -9999.0
+            hand_array[nan_mask] = nd
+
     # Persist the updated HAND raster.
     with rasterio.open(str(hand_raster), "w", **hand_profile) as out_ds:
         out_ds.write(hand_array, 1)

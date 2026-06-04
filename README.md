@@ -2,6 +2,71 @@
   <img src="docs/images/fimbox.png" alt="fimbox" width="100" />
 </div>
 
-## ```FIMbox```- A testbed for Flood Inundation Mapping Experimentation 
+## `FIMbox` — A testbed for Flood Inundation Mapping Experimentation
 
-A modular open-source testbed framework to standardize Flood Inundation Mapping simulations and evaluation with custom datasets and hydrologic parameters with reproducible workflows.
+A modular open-source testbed framework to standardize Flood Inundation
+Mapping (FIM) simulations and evaluation with custom datasets and
+hydrologic parameters in reproducible workflows.
+
+---
+
+## Install
+---
+
+`fimbox` targets Python 3.10–3.12.
+
+```bash
+git clone https://github.com/sdmlua/fimbox.git
+cd fimbox
+
+# uv-based environment (recommended)
+pip install uv
+uv venv
+source .venv/bin/activate            # Windows: .venv\Scripts\activate
+uv pip install -e .
+```
+
+If you prefer Conda, create and activate the environment first, then run
+`uv pip install -e .` inside it.
+
+
+## Quick start: from boundary polygon to flood map
+---
+### 1. Stage AOI inputs
+
+Download the DEM, NHD/NWM hydrography, FEMA NFHL, NLD levees, OSM
+bridges/roads, and USGS gages into an AOI working directory.
+
+```python
+from fimbox import getAllInputData
+
+getAllInputData(
+    boundary="path/to/aoi_boundary.gpkg",
+    aoi_id="my_basin",
+    out_dir="out/my_basin",
+)
+```
+see the ```tests/``` folder for further detailed steps inclduing- HAND processing, SRC genetation, calibration and FIM generation. User can change different parameters based on requirements.
+
+## Contribution
+---
+For contribution guidelines see [`CONTRIBUTING.md`](CONTRIBUTING.md).
+
+## Acknowledgements
+---
+In `fimbox`, the HAND preprocessing implementation uses logic and workflow from NOAA OWP HAND-FIM
+framework. The original reference implementation lives at:
+https://github.com/NOAA-OWP/inundation-mapping
+
+## Funding
+---
+Funding for this project was provided by the National Oceanic & Atmospheric Administration (NOAA), awarded to the Cooperative Institute for Research to Operations in Hydrology (CIROH) through the NOAA Cooperative Agreement with The University of Alabama (NA22NWS4320003).
+
+
+## Contact
+---
+`fimbox` is developed at the
+[Surface Dynamics Modeling Lab (SDML)](https://sdml.ua.edu/) at The
+University of Alabama.
+
+Sagy Cohen (sagy.cohen@ua.edu), Supath Dhital (sdhital@ua.edu)

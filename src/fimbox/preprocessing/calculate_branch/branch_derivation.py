@@ -835,12 +835,29 @@ def _build_headwaters(
 
     if provided_headwaters is not None and not provided_headwaters.empty:
         points = provided_headwaters.to_crs(streams.crs)
+        streams_subset = streams[[reach_id_attribute, branch_id_attribute, "geometry"]]
         nearest = gpd.sjoin_nearest(
             points,
-            streams[[reach_id_attribute, branch_id_attribute, "geometry"]],
+            streams_subset,
             how="inner",
             distance_col="_snap_dist",
         )
+        # sjoin_nearest appends "_left"/"_right" suffixes when a column
+        # name exists in both frames. The reach_id and branch_id we care
+        # about are the ones from the stream network (right side); collapse
+        # the columns back to their canonical names so downstream code sees
+        # them as-is.
+        for col in (reach_id_attribute, branch_id_attribute):
+            if col not in nearest.columns:
+                right = f"{col}_right"
+                left = f"{col}_left"
+                if right in nearest.columns:
+                    nearest = nearest.rename(columns={right: col})
+                    if left in nearest.columns:
+                        nearest = nearest.drop(columns=[left])
+                elif left in nearest.columns:
+                    nearest = nearest.rename(columns={left: col})
+
         keep_ids = set(upstream_start_rows[reach_id_attribute].astype(str))
         nearest[reach_id_attribute] = nearest[reach_id_attribute].astype(str)
         nearest = nearest.loc[nearest[reach_id_attribute].isin(keep_ids)].copy()

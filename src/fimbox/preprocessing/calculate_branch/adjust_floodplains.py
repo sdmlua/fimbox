@@ -103,6 +103,7 @@ def adjust_floodplains(
     output_file = Path(output_file)
     branch_id = str(branch_id)
 
+    wbt.set_working_dir(str(distance_file.parent))
     wbt.euclidean_distance(input_file, str(distance_file))
 
     catchments = gpd.read_file(nwm_catchments)
