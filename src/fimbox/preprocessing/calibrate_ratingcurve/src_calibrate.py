@@ -87,7 +87,8 @@ class ManualCalibrator:
 
         branches_dir = aoi_dir / "branches"
         htable_files = sorted(
-            Path(p) for p in glob.glob(
+            Path(p)
+            for p in glob.glob(
                 str(branches_dir / "**" / "hydroTable_*.csv"), recursive=True
             )
         )

@@ -52,7 +52,6 @@ PARAMS_CREATE_HAND = dict(
     max_split_distance_m=2000.0,  # m, split-reach max length
     slope_min=0.0001,  # rise/run floor
     lakes_buffer_dist_m=100.0,  # m, lake-boundary buffer
-
     # SRC / crosswalk
     mannings_n=0.06,  # channel roughness
     stage_min_m=0.0,  # SRC stage ladder start
@@ -282,6 +281,7 @@ GW_PIXELS = BRANCH_DIR / f"gw_catchments_pixels_{BRANCH_ID}.tif"
 #                                             pit-fill, flowdir)
 #   B02..B21  CreateHAND steps 2-21        — one test per CreateHAND step
 
+
 # Stage Z — bootstrap. Together they produce every input the B-series tests need.
 def test_step_Z0_branch_derivation():
     """Derive level paths, branch polygons, and branch list from staged NWM data."""
@@ -347,6 +347,7 @@ def test_step_B02_flow_accumulation():
         threshold=1.0,
     ).run()
     import rasterio
+
     with rasterio.open(str(sp_out)) as src:
         stream_count = int((src.read(1) == 1).sum())
     log.info(f"stream pixels: {stream_count}")
@@ -374,15 +375,14 @@ def test_step_B04_d8_slopes():
     """CreateHAND step 4: D8 slope raster (rise/run from thalweg-adjusted DEM)."""
     assert THALWEG_ADJ.exists() and FLOWDIR.exists()
     import numpy as np, rasterio
+
     out = D8SlopeDEM(
         dem=THALWEG_ADJ, flowdir=FLOWDIR, out_path=SLOPES_D8, slope_min=0.0001
     ).run()
     with rasterio.open(str(out)) as src:
         d = src.read(1)
         nd = src.nodata
-        valid = (
-            d[(d != nd) & np.isfinite(d)] if nd is not None else d[np.isfinite(d)]
-        )
+        valid = d[(d != nd) & np.isfinite(d)] if nd is not None else d[np.isfinite(d)]
     log.info(f"slope range: [{valid.min():.6f}, {valid.max():.6f}]")
     # slope_min is clamped at 1e-4 in float32; allow a single-precision epsilon
     # of tolerance (~1e-7) so the test doesn't fail on the float32 representation
@@ -403,6 +403,7 @@ def test_step_B05_streamnet_reaches():
         branch_id=BRANCH_ID,
     ).run()
     import geopandas as gpd
+
     reaches = gpd.read_file(str(result["demDerived_reaches"]))
     log.info(f"reaches: {len(reaches)}")
     assert len(reaches) > 0
@@ -425,18 +426,18 @@ def test_step_B06_split_reaches():
         lakes_buffer_dist=100.0,
     )
     import geopandas as gpd
+
     split = gpd.read_file(str(split_gpkg))
     log.info(f"split reaches: {len(split)} columns={list(split.columns)}")
     assert (
-        len(split) > 0
-        and "HydroID" in split.columns
-        and "NextDownID" in split.columns
+        len(split) > 0 and "HydroID" in split.columns and "NextDownID" in split.columns
     )
 
 
 def test_step_B07_gage_watershed_reaches():
     """CreateHAND step 7: reverse-D8 walk labelling each pixel by its HydroID."""
     from fimbox import GageCatchments
+
     for p in (FLOWDIR, SPLIT_PTS):
         assert p.exists(), f"missing: {p}"
     GageCatchments(
@@ -450,6 +451,7 @@ def test_step_B07_gage_watershed_reaches():
 def test_step_B08_stream_pixel_points():
     """CreateHAND step 8: vectorise stream-pixel centroids (one point per stream pixel)."""
     from fimbox import stream_pixel_points
+
     assert STREAM_PIX.exists()
     stream_pixel_points(stream_pixels=STREAM_PIX, out_gpkg=PIXEL_PTS)
     assert PIXEL_PTS.exists()
@@ -458,6 +460,7 @@ def test_step_B08_stream_pixel_points():
 def test_step_B09_gage_watershed_pixels():
     """CreateHAND step 9: reverse-D8 walk labelling each pixel by NWM feature_id."""
     from fimbox import GageCatchments
+
     for p in (FLOWDIR, PIXEL_PTS):
         assert p.exists(), f"missing: {p}"
     GageCatchments(
@@ -471,6 +474,7 @@ def test_step_B09_gage_watershed_pixels():
 def test_step_B10_outlet_backpool_mitigation():
     """CreateHAND step 10: trim oversized outlet catchments (no-op for branch 0)."""
     from fimbox import OutletBackpoolMitigate
+
     for p in (SPLIT_REACHES, GW_PIXELS, GW_REACHES, SPLIT_PTS, STREAMS, THALWEG_COND):
         assert p.exists(), f"missing: {p}"
     OutletBackpoolMitigate(
@@ -499,6 +503,7 @@ def test_step_B11_make_rem():
     non-negativity, which is a step-12 invariant.
     """
     from fimbox import MakeREM
+
     for p in (THALWEG_COND, GW_PIXELS, STREAM_PIX):
         assert p.exists(), f"missing: {p}"
     out = MakeREM(
@@ -508,6 +513,7 @@ def test_step_B11_make_rem():
         out_rem=REM,
     ).run()
     import rasterio, numpy as np
+
     with rasterio.open(str(out)) as src:
         data = src.read(1)
         nd = src.nodata
@@ -531,6 +537,7 @@ def test_step_B11b_rem_nonnegative_after_zero_mask():
     """
     import numpy as np
     import rasterio
+
     if not REM_ZEROED.exists():
         log.warning("skipping non-negativity check — run step_B12 first")
         return
@@ -547,17 +554,18 @@ def test_step_B11b_rem_nonnegative_after_zero_mask():
     nan_count = int(np.isnan(data).sum())
     log.info(f"REM zero-mask: {valid.size} valid pixels, {nan_count} NaN pixels")
     assert valid.size > 0
-    assert nan_count == 0, (
-        f"step 12 leaked {nan_count} NaN pixels into the masked REM raster"
-    )
-    assert float(valid.min()) >= 0.0, (
-        f"step 12 left negatives in REM: min={valid.min()}"
-    )
+    assert (
+        nan_count == 0
+    ), f"step 12 leaked {nan_count} NaN pixels into the masked REM raster"
+    assert (
+        float(valid.min()) >= 0.0
+    ), f"step 12 left negatives in REM: min={valid.min()}"
 
 
 def test_step_B12_rem_zeroed_masked():
     """CreateHAND step 12: clip negative HAND to 0 + mask outside catchments."""
     from fimbox import rem_zeroed_masked
+
     for p in (REM, GW_REACHES):
         assert p.exists(), f"missing: {p}"
     rem_zeroed_masked(REM, GW_REACHES, REM_ZEROED)
@@ -570,9 +578,11 @@ def test_step_B13_polygonize_catchments():
     from fimbox.preprocessing.calculate_branch.create_hand import (
         _polygonize_catchments,
     )
+
     assert GW_REACHES.exists()
     _polygonize_catchments(GW_REACHES, CATCH_POLY)
     import geopandas as gpd
+
     gdf = gpd.read_file(str(CATCH_POLY))
     log.info(f"polygonised: {len(gdf)} catchments")
     assert CATCH_POLY.exists() and "HydroID" in gdf.columns and len(gdf) > 0
@@ -581,6 +591,7 @@ def test_step_B13_polygonize_catchments():
 def test_step_B14_filter_catchments():
     """CreateHAND step 14: drop slivers + attach flow attributes per HydroID."""
     from fimbox import FilterCatchments
+
     for p in (CATCH_POLY, SPLIT_REACHES):
         assert p.exists(), f"missing: {p}"
     out_catch, out_flows = FilterCatchments(
@@ -592,6 +603,7 @@ def test_step_B14_filter_catchments():
         boundary_gpkg=WBD8_CLP if WBD8_CLP.exists() else None,
     ).run()
     import geopandas as gpd
+
     catches = gpd.read_file(str(out_catch))
     flows = gpd.read_file(str(out_flows))
     log.info(f"filtered catchments: {len(catches)}  flows: {len(flows)}")
@@ -604,6 +616,7 @@ def test_step_B15_rasterize_filtered_catchments():
     from fimbox.preprocessing.calculate_branch.create_hand import (
         _rasterize_catchments,
     )
+
     for p in (FILT_CATCH, GW_REACHES):
         assert p.exists(), f"missing: {p}"
     _rasterize_catchments(FILT_CATCH, GW_REACHES, FILT_TIF)
@@ -613,6 +626,7 @@ def test_step_B15_rasterize_filtered_catchments():
 def test_step_B16_mask_slopes_to_catchments():
     """CreateHAND step 16: clip D8 slopes to the filtered catchment mask."""
     from fimbox import mask_slopes_to_catchments
+
     for p in (SLOPES_D8, FILT_TIF):
         assert p.exists(), f"missing: {p}"
     mask_slopes_to_catchments(SLOPES_D8, FILT_TIF, SLOPES_MASKED)
@@ -622,6 +636,7 @@ def test_step_B16_mask_slopes_to_catchments():
 def test_step_B17_stages_and_catchlist():
     """CreateHAND step 17: write the stage ladder + per-HydroID metadata text files."""
     from fimbox import make_stages_and_catchlist
+
     for p in (FILT_FLOWS, FILT_CATCH):
         assert p.exists(), f"missing: {p}"
     make_stages_and_catchlist(
@@ -639,6 +654,7 @@ def test_step_B17_stages_and_catchlist():
 def test_step_B18_build_src_base():
     """CreateHAND step 18: synthetic rating curve base table (TauDEM-style geometry)."""
     from fimbox import build_src_base
+
     for p in (REM_ZEROED, FILT_TIF, SLOPES_MASKED, CATCHLIST_TXT, STAGE_TXT):
         assert p.exists(), f"missing: {p}"
     build_src_base(
@@ -650,6 +666,7 @@ def test_step_B18_build_src_base():
         out_csv=SRC_BASE_CSV,
     )
     import pandas as pd
+
     df = pd.read_csv(SRC_BASE_CSV)
     log.info(f"src_base: {len(df)} rows  HydroIDs={df['CatchId'].nunique()}")
     assert SRC_BASE_CSV.exists() and len(df) > 0
@@ -658,6 +675,7 @@ def test_step_B18_build_src_base():
 def test_step_B19_add_crosswalk():
     """CreateHAND step 19: NWM crosswalk + Manning's hydraulics + hydroTable."""
     from fimbox import add_crosswalk
+
     for p in (FILT_CATCH, FILT_FLOWS, SRC_BASE_CSV, STREAMS):
         assert p.exists(), f"missing: {p}"
     add_crosswalk(
@@ -680,16 +698,16 @@ def test_step_B19_add_crosswalk():
         small_segments_csv=BRANCH_DIR / f"small_segments_{BRANCH_ID}.csv",
     )
     import pandas as pd
+
     ht = pd.read_csv(HYDRO_TABLE, dtype={"aoi_code": str, "HydroID": str})
-    log.info(
-        f"hydroTable: {len(ht)} rows  HydroIDs={ht['HydroID'].nunique()}"
-    )
+    log.info(f"hydroTable: {len(ht)} rows  HydroIDs={ht['HydroID'].nunique()}")
     assert HYDRO_TABLE.exists() and (ht["discharge_cms"] >= 0).all()
 
 
 def test_step_B20_heal_bridges_osm():
     """CreateHAND step 20: raise HAND at OSM bridge decks (in-place REM update)."""
     from fimbox import heal_bridges_osm
+
     bridges_gpkg = OUT_DIR / "osm_bridges_subset.gpkg"
     if not bridges_gpkg.exists():
         log.warning("skipping bridge heal — no OSM bridges gpkg")
@@ -710,6 +728,7 @@ def test_step_B20_heal_bridges_osm():
 def test_step_B21_process_roads_fimpact():
     """CreateHAND step 21: sample HAND along OSM roads to derive flood thresholds."""
     from fimbox import process_roads_fimpact
+
     roads_gpkg = OUT_DIR / "osm_roads_subset.gpkg"
     if not roads_gpkg.exists():
         log.warning("skipping road FIMpact — no OSM roads gpkg")
@@ -954,9 +973,7 @@ def test_step_C25_calculate_allbranches_live_run():
     # BranchDerivation writes branch_ids.lst
     branch_list_path = OUT_DIR / "branch_ids.lst"
 
-    deny_unit_list = (
-        Path(__file__).resolve().parent.parent / "config" / "deny_unit.lst"
-    )
+    deny_unit_list = Path(__file__).resolve().parent.parent / "config" / "deny_unit.lst"
     assert deny_unit_list.is_file(), f"deny_unit.lst missing: {deny_unit_list}"
 
     cfg = AOIProcessingConfig(

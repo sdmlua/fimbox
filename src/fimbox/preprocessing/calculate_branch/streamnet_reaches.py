@@ -33,6 +33,17 @@ import numpy as np
 
 log = logging.getLogger(__name__)
 
+
+class NoFlowlinesError(RuntimeError):
+    """Raised when a branch has no stream cells to vectorise.
+
+    The exception text contains "no valid flowlines" so process_branches'
+    _classify_branch_error maps it to the inundation-mapping exit-code 61
+    ("no_flowlines"), which wipes the branch directory and lets the run
+    continue instead of leaving a half-built branch full of intermediates.
+    """
+
+
 # WBT D8 pointer: power-of-2 code --> (row_offset, col_offset)
 _D8_OFFSETS: dict[int, tuple[int, int]] = {
     1: (0, 1),
@@ -157,6 +168,18 @@ class StreamNetReaches:
             int((in_deg[stream_idx] == 0).sum()),
             int((in_deg[stream_idx] >= 2).sum()),
         )
+
+        # No stream cells means the branch DEM never derived a flow network
+        # (e.g. the headwater seed for flow accumulation fell outside the DEM,
+        # so demDerived_streamPixels is all-nodata). Fail cleanly here instead
+        # of crashing on an empty array a few lines below — process_branches
+        # treats this as exit-code 61 and wipes the branch directory.
+        if stream_idx.size == 0:
+            raise NoFlowlinesError(
+                f"Branch {self.branch_id}: no valid flowlines "
+                "(0 stream cells in demDerived_streamPixels). Check that the "
+                "headwater raster has pixels inside the branch DEM extent."
+            )
 
         # ── Assign reach IDs in topological (upstream-->downstream) order ─────────
         # Rules:

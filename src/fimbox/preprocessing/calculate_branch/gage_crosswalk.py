@@ -206,7 +206,15 @@ def _load_aoi_gages(
         ahps["source"] = "ahps_site"
         keep_cols = [
             c
-            for c in ("feature_id", "nws_lid", "location_id", aoi_filter_column, "name", "states", "geometry")
+            for c in (
+                "feature_id",
+                "nws_lid",
+                "location_id",
+                aoi_filter_column,
+                "name",
+                "states",
+                "geometry",
+            )
             if c in ahps.columns
         ]
         gages = pd.concat([gages, ahps[keep_cols]], ignore_index=True)
@@ -227,7 +235,9 @@ def _attach_feature_id_and_levelpath(
     if "ID" in nwm.columns and "feature_id" not in nwm.columns:
         nwm = nwm.rename(columns={"ID": "feature_id"})
 
-    missing = gages[gages["feature_id"].isna()] if "feature_id" in gages.columns else gages
+    missing = (
+        gages[gages["feature_id"].isna()] if "feature_id" in gages.columns else gages
+    )
     if not missing.empty:
         union = nwm.geometry.union_all()
         gages.loc[missing.index, "feature_id"] = missing.geometry.apply(
@@ -237,8 +247,12 @@ def _attach_feature_id_and_levelpath(
     # Cast both join keys to the same nullable Int64 type. NWM levelpath
     # gpkgs sometimes store ``ID`` as text, while DownloadUSGSGages writes
     # ``feature_id`` as int64 — pandas refuses to merge mixed dtypes.
-    gages["feature_id"] = pd.to_numeric(gages["feature_id"], errors="coerce").astype("Int64")
-    nwm["feature_id"] = pd.to_numeric(nwm["feature_id"], errors="coerce").astype("Int64")
+    gages["feature_id"] = pd.to_numeric(gages["feature_id"], errors="coerce").astype(
+        "Int64"
+    )
+    nwm["feature_id"] = pd.to_numeric(nwm["feature_id"], errors="coerce").astype(
+        "Int64"
+    )
     keep = [c for c in ("feature_id", "levpa_id", "order_") if c in nwm.columns]
     gages = gages.merge(nwm[keep], on="feature_id", how="left")
     return gages
@@ -389,8 +403,15 @@ def _write_elev_tables(
         ras_cols = [
             c
             for c in (
-                "location_id", "HydroID", "feature_id", "levpa_id", "HUC8",
-                "dem_elevation", "dem_adj_elevation", "source", "stream_stn",
+                "location_id",
+                "HydroID",
+                "feature_id",
+                "levpa_id",
+                "HUC8",
+                "dem_elevation",
+                "dem_adj_elevation",
+                "source",
+                "stream_stn",
             )
             if c in ras.columns
         ]
@@ -403,8 +424,15 @@ def _write_elev_tables(
         usgs_cols = [
             c
             for c in (
-                "location_id", "HydroID", "feature_id", "levpa_id", "HUC8",
-                "dem_elevation", "dem_adj_elevation", "source", "snap_distance",
+                "location_id",
+                "HydroID",
+                "feature_id",
+                "levpa_id",
+                "HUC8",
+                "dem_elevation",
+                "dem_adj_elevation",
+                "source",
+                "snap_distance",
             )
             if c in usgs.columns
         ]
@@ -434,7 +462,9 @@ if __name__ == "__main__":
     aoi = sub.add_parser("aoi", help="Stage 1: assign AOI-wide gages to level paths")
     aoi.add_argument("--usgs-gages", required=True)
     aoi.add_argument("--nwm-streams-levelpaths", required=True)
-    aoi.add_argument("--aoi-id", required=True, help="AOI identifier (often a HUC8 code)")
+    aoi.add_argument(
+        "--aoi-id", required=True, help="AOI identifier (often a HUC8 code)"
+    )
     aoi.add_argument("--out-dir", required=True)
     aoi.add_argument("--ras-locs", default=None)
     aoi.add_argument("--ahps", default=None)
@@ -442,8 +472,9 @@ if __name__ == "__main__":
     aoi.add_argument("--target-crs", default="5070")
     aoi.add_argument("--out-name", default="usgs_subset_gages.gpkg")
     aoi.add_argument(
-        "--aoi-filter-column", default="HUC8",
-        help="Column in the gage tables that identifies AOI membership (default HUC8)."
+        "--aoi-filter-column",
+        default="HUC8",
+        help="Column in the gage tables that identifies AOI membership (default HUC8).",
     )
 
     br = sub.add_parser("branch", help="Stage 2: per-branch crosswalk + DEM sample")

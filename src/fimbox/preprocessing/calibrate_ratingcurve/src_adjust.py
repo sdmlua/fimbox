@@ -72,14 +72,14 @@ class SrcBankfull:
         df_bflows = pd.read_csv(bflows_path, dtype={"feature_id": int})
         df_bflows = df_bflows.rename(columns={"discharge": "bankfull_flow"})
 
-        branches = list(iter_branches(aoi_dir, exclude_zero=not self.include_branch_zero))
+        branches = list(
+            iter_branches(aoi_dir, exclude_zero=not self.include_branch_zero)
+        )
         if not branches:
             log.warning(f"SrcBankfull: no branches found under {aoi_dir}")
             return {}
 
-        log.info(
-            f"SrcBankfull: {len(branches)} branches, {self.n_workers} workers"
-        )
+        log.info(f"SrcBankfull: {len(branches)} branches, {self.n_workers} workers")
         results: dict[str, str] = {}
         if self.n_workers <= 1:
             for bid, bp in branches:
@@ -115,33 +115,52 @@ def _bankfull_one_branch(branch_dir: Path, bid: str, df_bflows: pd.DataFrame) ->
     df_src["bankfull_flow"] = df_src["bankfull_flow"].fillna(-999)
 
     # Distance to bankfull flow at each stage. NaN guarded.
-    df_src["Q_bfull_find"] = (df_src["bankfull_flow"] - df_src["Discharge (m3s-1)"]).abs()
+    df_src["Q_bfull_find"] = (
+        df_src["bankfull_flow"] - df_src["Discharge (m3s-1)"]
+    ).abs()
     df_src["Q_bfull_find"] = df_src["Q_bfull_find"].fillna(999999)
 
     # For each HydroID, the row whose discharge is closest to bankfull_flow
     # is the bankfull stage. Drop the stage=0 row before idxmin so a flat
     # rating curve doesn't degenerate to zero.
-    cand = df_src[df_src["Stage"] > 0.0][[
-        "Stage", "HydroID", BEDAREA_VAR, VOLUME_VAR, HRADIUS_VAR,
-        SURFACE_AREA_VAR, "Q_bfull_find",
-    ]].reset_index(drop=True)
+    cand = df_src[df_src["Stage"] > 0.0][
+        [
+            "Stage",
+            "HydroID",
+            BEDAREA_VAR,
+            VOLUME_VAR,
+            HRADIUS_VAR,
+            SURFACE_AREA_VAR,
+            "Q_bfull_find",
+        ]
+    ].reset_index(drop=True)
     if cand.empty:
         return "SKIP empty SRC"
-    picked = cand.loc[cand.groupby("HydroID")["Q_bfull_find"].idxmin()].reset_index(drop=True)
-    picked = picked.rename(columns={
-        "Stage": "Stage_bankfull",
-        BEDAREA_VAR: "BedArea_bankfull",
-        VOLUME_VAR: "Volume_bankfull",
-        HRADIUS_VAR: "HRadius_bankfull",
-        SURFACE_AREA_VAR: "SurfArea_bankfull",
-    })
+    picked = cand.loc[cand.groupby("HydroID")["Q_bfull_find"].idxmin()].reset_index(
+        drop=True
+    )
+    picked = picked.rename(
+        columns={
+            "Stage": "Stage_bankfull",
+            BEDAREA_VAR: "BedArea_bankfull",
+            VOLUME_VAR: "Volume_bankfull",
+            HRADIUS_VAR: "HRadius_bankfull",
+            SURFACE_AREA_VAR: "SurfArea_bankfull",
+        }
+    )
 
     df_src = df_src.drop(columns=["Q_bfull_find"])
     df_src = df_src.merge(
-        picked[[
-            "Stage_bankfull", "HydroID", "BedArea_bankfull",
-            "Volume_bankfull", "HRadius_bankfull", "SurfArea_bankfull",
-        ]],
+        picked[
+            [
+                "Stage_bankfull",
+                "HydroID",
+                "BedArea_bankfull",
+                "Volume_bankfull",
+                "HRadius_bankfull",
+                "SurfArea_bankfull",
+            ]
+        ],
         how="left",
         on="HydroID",
     )
@@ -150,8 +169,12 @@ def _bankfull_one_branch(branch_dir: Path, bid: str, df_bflows: pd.DataFrame) ->
     df_src.loc[df_src["bankfull_flow"] <= 0.0, "Stage_bankfull"] = np.nan
 
     # Tag each row as channel vs floodplain by comparing stage to bankfull.
-    df_src.loc[df_src["Stage"] <= df_src["Stage_bankfull"], "bankfull_proxy"] = "channel"
-    df_src.loc[df_src["Stage"] > df_src["Stage_bankfull"], "bankfull_proxy"] = "floodplain"
+    df_src.loc[df_src["Stage"] <= df_src["Stage_bankfull"], "bankfull_proxy"] = (
+        "channel"
+    )
+    df_src.loc[df_src["Stage"] > df_src["Stage_bankfull"], "bankfull_proxy"] = (
+        "floodplain"
+    )
     df_src["bankfull_proxy"] = df_src["bankfull_proxy"].fillna("channel")
 
     df_src.to_csv(src_path, index=False)
@@ -184,7 +207,9 @@ class SrcSubdiv:
 
         df_mann = pd.read_csv(mann_path, dtype={"feature_id": "int64"})
 
-        branches = list(iter_branches(aoi_dir, exclude_zero=not self.include_branch_zero))
+        branches = list(
+            iter_branches(aoi_dir, exclude_zero=not self.include_branch_zero)
+        )
         log.info(f"SrcSubdiv: {len(branches)} branches, {self.n_workers} workers")
         results: dict[str, str] = {}
         if self.n_workers <= 1:
@@ -196,8 +221,12 @@ class SrcSubdiv:
             with ProcessPoolExecutor(max_workers=self.n_workers) as pool:
                 fut_to_bid = {
                     pool.submit(
-                        _subdiv_one_branch, bp, bid, df_mann,
-                        self.default_channel_n, self.default_overbank_n,
+                        _subdiv_one_branch,
+                        bp,
+                        bid,
+                        df_mann,
+                        self.default_channel_n,
+                        self.default_overbank_n,
                     ): bid
                     for bid, bp in branches
                 }
@@ -221,7 +250,8 @@ def _subdiv_geometry(df: pd.DataFrame) -> pd.DataFrame:
     df["Volume_chan (m3)"] = np.where(
         in_channel,
         df[VOLUME_VAR],
-        df["Volume_bankfull"] + (df["Stage"] - df["Stage_bankfull"]) * df["SurfArea_bankfull"],
+        df["Volume_bankfull"]
+        + (df["Stage"] - df["Stage_bankfull"]) * df["SurfArea_bankfull"],
     )
     df["BedArea_chan (m2)"] = np.where(
         in_channel, df[BEDAREA_VAR], df["BedArea_bankfull"]
@@ -254,7 +284,9 @@ def _subdiv_mannings(df: pd.DataFrame) -> pd.DataFrame:
 
     # Channel
     df["WetArea_chan (m2)"] = df["Volume_chan (m3)"] / df["LENGTHKM"] / 1000
-    df["HydraulicRadius_chan (m)"] = df["WetArea_chan (m2)"] / df["WettedPerimeter_chan (m)"]
+    df["HydraulicRadius_chan (m)"] = (
+        df["WetArea_chan (m2)"] / df["WettedPerimeter_chan (m)"]
+    )
     df["HydraulicRadius_chan (m)"] = df["HydraulicRadius_chan (m)"].fillna(0)
     df["Discharge_chan (m3s-1)"] = (
         df["WetArea_chan (m2)"]
@@ -262,11 +294,15 @@ def _subdiv_mannings(df: pd.DataFrame) -> pd.DataFrame:
         * np.power(df["SLOPE"], 0.5)
         / df["channel_n"]
     )
-    df["Velocity_chan (m/s)"] = (df["Discharge_chan (m3s-1)"] / df["WetArea_chan (m2)"]).fillna(0)
+    df["Velocity_chan (m/s)"] = (
+        df["Discharge_chan (m3s-1)"] / df["WetArea_chan (m2)"]
+    ).fillna(0)
 
     # Overbank
     df["WetArea_obank (m2)"] = df["Volume_obank (m3)"] / df["LENGTHKM"] / 1000
-    df["HydraulicRadius_obank (m)"] = df["WetArea_obank (m2)"] / df["WettedPerimeter_obank (m)"]
+    df["HydraulicRadius_obank (m)"] = (
+        df["WetArea_obank (m2)"] / df["WettedPerimeter_obank (m)"]
+    )
     df = df.replace([np.inf, -np.inf], np.nan)
     df["HydraulicRadius_obank (m)"] = df["HydraulicRadius_obank (m)"].fillna(0)
     df["Discharge_obank (m3s-1)"] = (
@@ -275,10 +311,14 @@ def _subdiv_mannings(df: pd.DataFrame) -> pd.DataFrame:
         * np.power(df["SLOPE"], 0.5)
         / df["overbank_n"]
     )
-    df["Velocity_obank (m/s)"] = (df["Discharge_obank (m3s-1)"] / df["WetArea_obank (m2)"]).fillna(0)
+    df["Velocity_obank (m/s)"] = (
+        df["Discharge_obank (m3s-1)"] / df["WetArea_obank (m2)"]
+    ).fillna(0)
 
     # Total
-    df["Discharge (m3s-1)_subdiv"] = df["Discharge_chan (m3s-1)"] + df["Discharge_obank (m3s-1)"]
+    df["Discharge (m3s-1)_subdiv"] = (
+        df["Discharge_chan (m3s-1)"] + df["Discharge_obank (m3s-1)"]
+    )
     df.loc[df["Stage"] == 0, "Discharge (m3s-1)_subdiv"] = 0
     return df
 
@@ -301,16 +341,29 @@ def _subdiv_one_branch(
 
     # Drop any leftover subdiv columns from a previous run so we recompute
     # cleanly. errors='ignore' covers the first-time case.
-    df = df.drop(columns=[
-        "channel_n", "overbank_n", "subdiv_applied", "Discharge (m3s-1)_subdiv",
-        "Volume_chan (m3)", "Volume_obank (m3)",
-        "BedArea_chan (m2)", "BedArea_obank (m2)",
-        "WettedPerimeter_chan (m)", "WettedPerimeter_obank (m)",
-        "WetArea_chan (m2)", "HydraulicRadius_chan (m)",
-        "Discharge_chan (m3s-1)", "Velocity_chan (m/s)",
-        "WetArea_obank (m2)", "HydraulicRadius_obank (m)",
-        "Discharge_obank (m3s-1)", "Velocity_obank (m/s)",
-    ], errors="ignore")
+    df = df.drop(
+        columns=[
+            "channel_n",
+            "overbank_n",
+            "subdiv_applied",
+            "Discharge (m3s-1)_subdiv",
+            "Volume_chan (m3)",
+            "Volume_obank (m3)",
+            "BedArea_chan (m2)",
+            "BedArea_obank (m2)",
+            "WettedPerimeter_chan (m)",
+            "WettedPerimeter_obank (m)",
+            "WetArea_chan (m2)",
+            "HydraulicRadius_chan (m)",
+            "Discharge_chan (m3s-1)",
+            "Velocity_chan (m/s)",
+            "WetArea_obank (m2)",
+            "HydraulicRadius_obank (m)",
+            "Discharge_obank (m3s-1)",
+            "Velocity_obank (m/s)",
+        ],
+        errors="ignore",
+    )
 
     # Geometry and Manning's calculations.
     df = _subdiv_geometry(df)
@@ -328,24 +381,46 @@ def _subdiv_one_branch(
     df.to_csv(src_path, index=False)
 
     # Push the subdivided discharge + n values into the hydroTable.
-    trim = df[[
-        "HydroID", "Stage", "subdiv_applied", "channel_n", "overbank_n",
-        "Discharge (m3s-1)_subdiv",
-    ]].copy()
+    trim = df[
+        [
+            "HydroID",
+            "Stage",
+            "subdiv_applied",
+            "channel_n",
+            "overbank_n",
+            "Discharge (m3s-1)_subdiv",
+        ]
+    ].copy()
     if "Bathymetry_source" in df.columns:
         trim["Bathymetry_source"] = df["Bathymetry_source"]
-    trim = trim.rename(columns={
-        "Stage": "stage",
-        "Discharge (m3s-1)_subdiv": "subdiv_discharge_cms",
-    })
+    trim = trim.rename(
+        columns={
+            "Stage": "stage",
+            "Discharge (m3s-1)_subdiv": "subdiv_discharge_cms",
+        }
+    )
     trim["discharge_cms"] = trim["subdiv_discharge_cms"]
 
-    ht = pd.read_csv(ht_path, dtype={"HUC": str, "last_updated": object,
-                                      "submitter": object, "obs_source": object})
-    ht = ht.drop(columns=[
-        "subdiv_applied", "discharge_cms", "overbank_n", "channel_n",
-        "subdiv_discharge_cms", "Bathymetry_source",
-    ], errors="ignore")
+    ht = pd.read_csv(
+        ht_path,
+        dtype={
+            "HUC": str,
+            "last_updated": object,
+            "submitter": object,
+            "obs_source": object,
+        },
+    )
+    ht = ht.drop(
+        columns=[
+            "subdiv_applied",
+            "discharge_cms",
+            "overbank_n",
+            "channel_n",
+            "subdiv_discharge_cms",
+            "Bathymetry_source",
+        ],
+        errors="ignore",
+    )
     ht = ht.merge(trim, how="left", on=["HydroID", "stage"])
     ht.to_csv(ht_path, index=False)
 
@@ -398,8 +473,12 @@ class SrcNonmonotonic:
         ht = pd.read_csv(ht0, low_memory=False)
 
         if "Bathymetry_source" in src.columns:
-            src.loc[src["Bathymetry_source"].astype(str) == "0", "Bathymetry_source"] = "No Bathymetry Applied"
-            src["Bathymetry_source"] = src["Bathymetry_source"].fillna("No Bathymetry Applied")
+            src.loc[
+                src["Bathymetry_source"].astype(str) == "0", "Bathymetry_source"
+            ] = "No Bathymetry Applied"
+            src["Bathymetry_source"] = src["Bathymetry_source"].fillna(
+                "No Bathymetry Applied"
+            )
             ht["Bathymetry_source"] = src["Bathymetry_source"]
         for flag in (
             "Longitudinal_adjustment_applied",
@@ -408,8 +487,12 @@ class SrcNonmonotonic:
         ):
             src[flag] = False
 
-        src = src.drop_duplicates(subset=["HydroID", "feature_id", "Stage"], keep="first").reset_index(drop=True)
-        ht = ht.drop_duplicates(subset=["HydroID", "feature_id", "stage"], keep="first").reset_index(drop=True)
+        src = src.drop_duplicates(
+            subset=["HydroID", "feature_id", "Stage"], keep="first"
+        ).reset_index(drop=True)
+        ht = ht.drop_duplicates(
+            subset=["HydroID", "feature_id", "stage"], keep="first"
+        ).reset_index(drop=True)
         src.to_csv(src0, index=False)
         ht.to_csv(ht0, index=False)
 
@@ -419,7 +502,9 @@ class SrcNonmonotonic:
             return "SKIP no src"
 
         df = pd.read_csv(src_path, low_memory=False)
-        df = df.drop_duplicates(subset=["HydroID", "Stage"], keep="first").reset_index(drop=True)
+        df = df.drop_duplicates(subset=["HydroID", "Stage"], keep="first").reset_index(
+            drop=True
+        )
 
         # If subdivision ran, use that as the discharge source. Otherwise
         # the standard Discharge column is canonical.
@@ -434,7 +519,8 @@ class SrcNonmonotonic:
 
         # Per-HydroID nonmonotonic fix.
         fixed = df.groupby("HydroID", group_keys=False).apply(
-            self._fix_hydroid, strm_order=self.stream_order_min,
+            self._fix_hydroid,
+            strm_order=self.stream_order_min,
         )
 
         # Restore floodplain rows to the original values so we only touch
@@ -442,8 +528,12 @@ class SrcNonmonotonic:
         if "bankfull_proxy" in original.columns:
             mask_fp = original["bankfull_proxy"] == "floodplain"
             cols = [
-                "Discharge (m3s-1)", "SurfaceArea (m2)", "BedArea (m2)",
-                "TopWidth (m)", "WettedPerimeter (m)", "HydraulicRadius (m)",
+                "Discharge (m3s-1)",
+                "SurfaceArea (m2)",
+                "BedArea (m2)",
+                "TopWidth (m)",
+                "WettedPerimeter (m)",
+                "HydraulicRadius (m)",
             ]
             if "Discharge (m3s-1)_subdiv" in original.columns:
                 cols.append("Discharge (m3s-1)_subdiv")
@@ -458,8 +548,12 @@ class SrcNonmonotonic:
 
         # Tidy Bathymetry_source the same way as branch 0.
         if "Bathymetry_source" in fixed.columns:
-            fixed.loc[fixed["Bathymetry_source"].astype(str) == "0", "Bathymetry_source"] = "No Bathymetry Applied"
-            fixed["Bathymetry_source"] = fixed["Bathymetry_source"].fillna("No Bathymetry Applied")
+            fixed.loc[
+                fixed["Bathymetry_source"].astype(str) == "0", "Bathymetry_source"
+            ] = "No Bathymetry Applied"
+            fixed["Bathymetry_source"] = fixed["Bathymetry_source"].fillna(
+                "No Bathymetry Applied"
+            )
 
         # Forward-fill per-HydroID flag columns that were attached at one
         # stage only.
@@ -504,19 +598,25 @@ class SrcNonmonotonic:
         grp.loc[rows, "WettedPerimeter (m)"] = tgt_ba / length_km / 1000
 
         wet_area = grp.loc[rows, "WetArea (m2)"]
-        grp.loc[rows, "HydraulicRadius (m)"] = wet_area / grp.loc[rows, "WettedPerimeter (m)"]
+        grp.loc[rows, "HydraulicRadius (m)"] = (
+            wet_area / grp.loc[rows, "WettedPerimeter (m)"]
+        )
         grp["HydraulicRadius (m)"] = grp["HydraulicRadius (m)"].fillna(0)
 
         # Recompute discharge from the corrected geometry.
         grp.loc[rows, "Discharge (m3s-1)"] = (
-            wet_area
-            * np.power(grp.loc[rows, "HydraulicRadius (m)"], 2.0 / 3)
-            * np.power(grp.loc[rows, "SLOPE"], 0.5)
-            / grp.loc[rows, "channel_n"]
-        ) if "channel_n" in grp.columns else (
-            wet_area
-            * np.power(grp.loc[rows, "HydraulicRadius (m)"], 2.0 / 3)
-            * np.power(grp.loc[rows, "SLOPE"], 0.5)
-            / grp.loc[rows, "ManningN"]
+            (
+                wet_area
+                * np.power(grp.loc[rows, "HydraulicRadius (m)"], 2.0 / 3)
+                * np.power(grp.loc[rows, "SLOPE"], 0.5)
+                / grp.loc[rows, "channel_n"]
+            )
+            if "channel_n" in grp.columns
+            else (
+                wet_area
+                * np.power(grp.loc[rows, "HydraulicRadius (m)"], 2.0 / 3)
+                * np.power(grp.loc[rows, "SLOPE"], 0.5)
+                / grp.loc[rows, "ManningN"]
+            )
         )
         return grp

@@ -100,7 +100,11 @@ class DEMProcessor:
         # before any reprojection / clipping / network work.
         save_path = self.output_dir / (
             self.out_name
-            or ("processed_local_dem.tif" if self.dem_file else f"3dep_dem_{self.resolution}m.tif")
+            or (
+                "processed_local_dem.tif"
+                if self.dem_file
+                else f"3dep_dem_{self.resolution}m.tif"
+            )
         )
         if should_skip(save_path):
             self.logger.info(f"DEM output already valid, skipping: {save_path}")
@@ -207,9 +211,7 @@ class DEMProcessor:
         self.logger.info(f"Splitting AOI into {n} tiles for parallel fetch")
 
         def _one(geom):
-            return py3dep.get_dem(
-                geometry=geom, resolution=self.resolution, crs=4326
-            )
+            return py3dep.get_dem(geometry=geom, resolution=self.resolution, crs=4326)
 
         results: list = [None] * n
         with ThreadPoolExecutor(max_workers=self.max_workers) as pool:

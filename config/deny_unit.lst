@@ -23,8 +23,8 @@ flows_grid_boolean.tif
 # nld_subset_levees.gpkg
 # nwm_catchments_proj_subset.gpkg
 # nwm_catchments_proj_subset_levelPaths.gpkg
-nwm_headwaters.gpkg
-nwm_headwater_points_subset.gpkg
+# nwm_headwaters.gpkg  (kept; needed by branch zero for FlowAccDEM)
+# nwm_headwater_points_subset.gpkg  (kept; NOAA's branch-0 headwater raster source)
 # nwm_lakes_proj_subset.gpkg
 # nwm_subset_streams.gpkg
 # nwm_subset_streams_levelPaths.gpkg

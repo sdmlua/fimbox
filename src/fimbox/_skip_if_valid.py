@@ -7,6 +7,7 @@ GeoTIFFs / GeoPackages that ``.exists()`` happily returns True for —
 this module catches those and deletes them so the calling step reruns
 instead of silently propagating corrupt data downstream.
 """
+
 from __future__ import annotations
 
 import logging

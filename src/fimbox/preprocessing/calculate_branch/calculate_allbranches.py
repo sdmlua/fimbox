@@ -69,9 +69,9 @@ def _bundled_deny_list(name: str) -> Optional[Path]:
     """
     pkg_root = Path(__file__).resolve().parents[2]
     for candidate in (
-        pkg_root.parent.parent / "config" / name,    # repo_root/config/...
-        pkg_root.parent / "config" / name,           # alt layout
-        pkg_root / "config" / name,                  # in-package fallback
+        pkg_root.parent.parent / "config" / name,  # repo_root/config/...
+        pkg_root.parent / "config" / name,  # alt layout
+        pkg_root / "config" / name,  # in-package fallback
     ):
         if candidate.is_file():
             return candidate
@@ -84,9 +84,9 @@ class AllBranchesResult:
 
     branch_results: list[BranchResult]
     branch_ids_csv: Path
-    n_branch_zero_recorded: int     # 0 or 1
-    n_non_zero_recorded: int        # number of successful non-zero branches written
-    n_unit_files_removed: int       # AOI-level deny-list cleanup count (0 when skipped)
+    n_branch_zero_recorded: int  # 0 or 1
+    n_non_zero_recorded: int  # number of successful non-zero branches written
+    n_unit_files_removed: int  # AOI-level deny-list cleanup count (0 when skipped)
 
 
 def calculate_allbranches(
@@ -178,9 +178,7 @@ def calculate_allbranches(
             except Exception as exc:
                 log.warning(f"AOI deny-list cleanup failed: {exc}")
         elif deny_unit_list is not None:
-            log.warning(
-                f"deny_unit_list does not exist, skipping: {deny_unit_list}"
-            )
+            log.warning(f"deny_unit_list does not exist, skipping: {deny_unit_list}")
 
     # summary line.
     n_ok = sum(1 for r in results if r.status == "ok")
@@ -219,14 +217,16 @@ if __name__ == "__main__":
     parser.add_argument("--branch-list", default=None)
     parser.add_argument("--workers", type=int, default=1)
     parser.add_argument(
-        "--deny-unit-list", default=None,
+        "--deny-unit-list",
+        default=None,
         help=(
             "Path to deny_unit.lst (AOI-level cleanup). When --no-delete-deny-list "
             "is not set and this is omitted, fimbox/config/deny_unit.lst is used."
         ),
     )
     parser.add_argument(
-        "--no-delete-deny-list", action="store_true",
+        "--no-delete-deny-list",
+        action="store_true",
         help=(
             "Skip AOI-level deny-list cleanup and keep every intermediate file. "
             "Default behaviour (no flag) deletes the files listed in deny_unit.lst."

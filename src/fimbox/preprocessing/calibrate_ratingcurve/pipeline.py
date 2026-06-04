@@ -91,12 +91,14 @@ class Calibrator:
         BranchAggregator(aoi_dir=aoi_dir, usgs_elev=True, ras_elev=True).run()
 
         self._maybe(
-            cfg.thalweg_notches_adjustment, "thalweg notches adjustment",
+            cfg.thalweg_notches_adjustment,
+            "thalweg notches adjustment",
             lambda: ThalwegNotchesAdjustment(aoi_dir=aoi_dir).run(),
         )
 
         self._maybe(
-            cfg.longitudinal_filter, "longitudinal discharge adjustment",
+            cfg.longitudinal_filter,
+            "longitudinal discharge adjustment",
             lambda: LongitudinalFlowFilter(aoi_dir=aoi_dir).run(),
         )
 
@@ -106,7 +108,8 @@ class Calibrator:
                     "bathymetry_adjust requires bathy_file_ehydro + bathy_file_aibased"
                 )
             self._maybe(
-                True, "bathymetry adjustment",
+                True,
+                "bathymetry adjustment",
                 lambda: BathymetricAdjustment(
                     aoi_dir=aoi_dir,
                     bathy_file_ehydro=cfg.bathy_file_ehydro,
@@ -119,7 +122,8 @@ class Calibrator:
             if cfg.bankfull_flows_file is None:
                 raise ValueError("src_bankfull_toggle requires bankfull_flows_file")
             self._maybe(
-                True, "SRC bankfull identification",
+                True,
+                "SRC bankfull identification",
                 lambda: SrcBankfull(
                     aoi_dir=aoi_dir,
                     bankfull_flows_file=cfg.bankfull_flows_file,
@@ -131,7 +135,8 @@ class Calibrator:
             if cfg.vmann_input_file is None:
                 raise ValueError("src_subdiv_toggle requires vmann_input_file")
             self._maybe(
-                True, "SRC channel/overbank subdivision",
+                True,
+                "SRC channel/overbank subdivision",
                 lambda: SrcSubdiv(
                     aoi_dir=aoi_dir,
                     vmann_table=cfg.vmann_input_file,
@@ -140,19 +145,25 @@ class Calibrator:
             )
 
         self._maybe(
-            cfg.nonmonotonic_src_adjustment, "nonmonotonic SRC adjustment",
+            cfg.nonmonotonic_src_adjustment,
+            "nonmonotonic SRC adjustment",
             lambda: SrcNonmonotonic(aoi_dir=aoi_dir).run(),
         )
 
         if cfg.src_adjust_usgs and cfg.src_subdiv_toggle:
-            required = (cfg.usgs_rating_curve_csv, cfg.usgs_acceptable_gages, cfg.nwm_recur_file)
+            required = (
+                cfg.usgs_rating_curve_csv,
+                cfg.usgs_acceptable_gages,
+                cfg.nwm_recur_file,
+            )
             if any(x is None for x in required):
                 raise ValueError(
                     "src_adjust_usgs requires usgs_rating_curve_csv, "
                     "usgs_acceptable_gages, nwm_recur_file"
                 )
             self._maybe(
-                True, "SRC adjust (USGS rating curves)",
+                True,
+                "SRC adjust (USGS rating curves)",
                 lambda: UsgsRatingCalibrator(
                     aoi_dir=aoi_dir,
                     usgs_rating_curve_csv=cfg.usgs_rating_curve_csv,
@@ -168,7 +179,8 @@ class Calibrator:
                     "src_adjust_ras2fim requires ras_rating_curve_csv + nwm_recur_file"
                 )
             self._maybe(
-                True, "SRC adjust (RAS2FIM)",
+                True,
+                "SRC adjust (RAS2FIM)",
                 lambda: Ras2fimCalibrator(
                     aoi_dir=aoi_dir,
                     ras_rating_curve_csv=cfg.ras_rating_curve_csv,
@@ -179,7 +191,8 @@ class Calibrator:
 
         if cfg.src_adjust_spatial and cfg.src_subdiv_toggle:
             self._maybe(
-                True, "SRC adjust (spatial observations)",
+                True,
+                "SRC adjust (spatial observations)",
                 lambda: SpatialObsCalibrator(
                     aoi_dir=aoi_dir, n_workers=cfg.job_branch_limit
                 ).run(),
@@ -187,7 +200,9 @@ class Calibrator:
 
         if cfg.manual_calb_toggle:
             if cfg.man_calb_file is None or not Path(cfg.man_calb_file).is_file():
-                log.warning(f"manual_calb_toggle set but file missing: {cfg.man_calb_file}")
+                log.warning(
+                    f"manual_calb_toggle set but file missing: {cfg.man_calb_file}"
+                )
             else:
                 log.info("--- manual calibration ---")
                 ManualCalibrator(
@@ -195,9 +210,7 @@ class Calibrator:
                 ).run()
 
         log.info("--- aggregate hydroTable + bridge + road outputs ---")
-        BranchAggregator(
-            aoi_dir=aoi_dir, htable=True, bridge=True, road=True
-        ).run()
+        BranchAggregator(aoi_dir=aoi_dir, htable=True, bridge=True, road=True).run()
         log.info("=== Calibration pipeline complete ===")
 
     def _maybe(self, enabled: bool, name: str, fn) -> None:

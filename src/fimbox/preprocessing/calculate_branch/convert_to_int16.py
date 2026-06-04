@@ -107,7 +107,9 @@ def _convert_catchment(path: Path, hydroid_prefix: Optional[int]) -> int:
     catchment.rio.to_raster(backup, compress="LZW", tiled=True)
 
     # Strip the common 4-digit prefix (e.g. 18640001 -> 0001) so the last 4 digits fit in Int16. Nodata pixels are left alone.
-    shifted = xr.where(catchment != nodata, catchment - hydroid_prefix * 10000, catchment)
+    shifted = xr.where(
+        catchment != nodata, catchment - hydroid_prefix * 10000, catchment
+    )
     shifted = shifted.astype(np.int16)
     shifted.rio.write_nodata(nodata, inplace=True)
     shifted.rio.write_crs(crs, inplace=True)

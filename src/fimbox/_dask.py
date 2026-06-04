@@ -37,6 +37,7 @@ Env-var overrides for advanced users:
 - ``FIMBOX_DASK_RAM_PER_BRANCH`` — GB to budget per worker for the
   auto-sizer (default 6)
 """
+
 from __future__ import annotations
 
 import atexit
@@ -63,12 +64,13 @@ def _system_ram_gb() -> float:
     """Best-effort total RAM in GB. Returns 8.0 if it can't be detected."""
     try:
         import psutil  # type: ignore
-        return psutil.virtual_memory().total / (1024 ** 3)
+
+        return psutil.virtual_memory().total / (1024**3)
     except Exception:
         pass
     # POSIX fallback (Linux + macOS): sysconf
     try:
-        return (os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES")) / (1024 ** 3)
+        return (os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES")) / (1024**3)
     except (ValueError, AttributeError, OSError):
         return 8.0
 
@@ -93,15 +95,18 @@ def _resolve_n_workers() -> int:
     cpu = max(1, os.cpu_count() or 1)
     ram_gb = _system_ram_gb()
 
-    per_branch = float(os.environ.get(
-        "FIMBOX_DASK_RAM_PER_BRANCH", _DEFAULT_RAM_PER_BRANCH_GB
-    ))
+    per_branch = float(
+        os.environ.get("FIMBOX_DASK_RAM_PER_BRANCH", _DEFAULT_RAM_PER_BRANCH_GB)
+    )
     by_ram = max(2, int(ram_gb // per_branch))
     n = min(cpu, by_ram)
     log.info(
         "Dask worker sizing: cpu_count=%d, system_ram=%.1f GB, "
         "ram_per_branch=%.1f GB => n_workers=%d",
-        cpu, ram_gb, per_branch, n,
+        cpu,
+        ram_gb,
+        per_branch,
+        n,
     )
     return n
 
@@ -126,16 +131,19 @@ def _silence_memory_governor() -> None:
     """
     try:
         import dask
-        dask.config.set({
-            "distributed.worker.memory.target": False,
-            "distributed.worker.memory.spill": False,
-            "distributed.worker.memory.pause": False,
-            "distributed.worker.memory.terminate": False,
-            # When a worker DOES die unexpectedly, don't retry the task
-            # on 3 more workers and OOM each in turn — fail fast so the
-            # branch loop records it as failed and moves on.
-            "distributed.scheduler.allowed-failures": 0,
-        })
+
+        dask.config.set(
+            {
+                "distributed.worker.memory.target": False,
+                "distributed.worker.memory.spill": False,
+                "distributed.worker.memory.pause": False,
+                "distributed.worker.memory.terminate": False,
+                # When a worker DOES die unexpectedly, don't retry the task
+                # on 3 more workers and OOM each in turn — fail fast so the
+                # branch loop records it as failed and moves on.
+                "distributed.scheduler.allowed-failures": 0,
+            }
+        )
     except Exception as exc:
         log.warning("Could not adjust dask config: %s", exc)
 
@@ -166,7 +174,8 @@ def get_client(n_workers: Optional[int] = None):
         log.info(
             "Starting Dask LocalCluster: n_workers=%d, threads_per_worker=1, "
             "memory_limit=%s, memory governor=disabled",
-            n, mem,
+            n,
+            mem,
         )
         _cluster = LocalCluster(
             n_workers=n,

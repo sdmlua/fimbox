@@ -63,7 +63,12 @@ class BranchAggregator:
 
         # Sinks for each requested output.
         sinks = {
-            "usgs": [], "ras": [], "htable": [], "src": [], "bridge": [], "road": [],
+            "usgs": [],
+            "ras": [],
+            "htable": [],
+            "src": [],
+            "bridge": [],
+            "road": [],
         }
 
         branch_ids = self.limit_branches or sorted(
@@ -78,7 +83,9 @@ class BranchAggregator:
             if self.htable:
                 self._append_htable(bp / f"hydroTable_{bid}.csv", bid, sinks["htable"])
             if self.src_cross:
-                self._append_src(bp / f"src_full_crosswalked_{bid}.csv", bid, sinks["src"])
+                self._append_src(
+                    bp / f"src_full_crosswalked_{bid}.csv", bid, sinks["src"]
+                )
             if self.bridge:
                 self._append_bridge(bp, bid, sinks["bridge"])
             if self.road:
@@ -196,24 +203,43 @@ class BranchAggregator:
 
         # Compact view for downstream inundation tools (feather + parquet).
         req_cols = [
-            "HUC", "branch_id", "feature_id", "HydroID", "stage", "discharge_cms",
-            "SurfaceArea (m2)", "LakeID", "Bathymetry_source",
+            "HUC",
+            "branch_id",
+            "feature_id",
+            "HydroID",
+            "stage",
+            "discharge_cms",
+            "SurfaceArea (m2)",
+            "LakeID",
+            "Bathymetry_source",
         ]
         present = [c for c in req_cols if c in out.columns]
         if not present:
             return
         dtype = {
-            "HUC": str, "branch_id": int, "feature_id": str, "HydroID": str,
-            "stage": float, "discharge_cms": float, "SurfaceArea (m2)": int, "LakeID": int,
+            "HUC": str,
+            "branch_id": int,
+            "feature_id": str,
+            "HydroID": str,
+            "stage": float,
+            "discharge_cms": float,
+            "SurfaceArea (m2)": int,
+            "LakeID": int,
         }
-        temp = out.reset_index()[present].astype({k: v for k, v in dtype.items() if k in present})
+        temp = out.reset_index()[present].astype(
+            {k: v for k, v in dtype.items() if k in present}
+        )
         temp.to_feather(csv_path.with_suffix(".feather"))
-        sort_cols = [c for c in ("HydroID", "feature_id", "discharge_cms") if c in temp.columns]
+        sort_cols = [
+            c for c in ("HydroID", "feature_id", "discharge_cms") if c in temp.columns
+        ]
         if sort_cols:
             temp = temp.sort_values(sort_cols)
         if {"HydroID", "feature_id"}.issubset(temp.columns):
             temp = temp.set_index(["HydroID", "feature_id"])
-        temp.to_parquet(csv_path.with_suffix(".parquet"), compression="zstd", index=True)
+        temp.to_parquet(
+            csv_path.with_suffix(".parquet"), compression="zstd", index=True
+        )
         log.info(f"AOI hydroTable --> {csv_path.with_suffix('.parquet').name}")
 
     def _write_bridge(self, aoi_dir: Path, frames: list) -> None:
@@ -234,13 +260,16 @@ class BranchAggregator:
         bridge_pnts = bridge_pnts.merge(b0, on="osmid", how="left")
 
         # For each (osmid, feature_id) keep the lowest threshold_discharge row.
-        g = bridge_pnts.groupby(["osmid", "feature_id"])["threshold_discharge"].transform("min")
+        g = bridge_pnts.groupby(["osmid", "feature_id"])[
+            "threshold_discharge"
+        ].transform("min")
         bridge_pnts = bridge_pnts[bridge_pnts["threshold_discharge"] == g].copy()
 
         bridge_pnts["is_backwater"] = 0
         cnt = bridge_pnts.groupby(["osmid"])["feature_id"].transform("count")
         bridge_pnts.loc[
-            (cnt > 1) & (bridge_pnts["feature_id"] != bridge_pnts["crossing_feature_id"]),
+            (cnt > 1)
+            & (bridge_pnts["feature_id"] != bridge_pnts["crossing_feature_id"]),
             "is_backwater",
         ] = 1
 
@@ -272,7 +301,9 @@ def _flow_lookup(stage: float, hydroid: int, htable: pd.DataFrame) -> float:
     if sub.empty:
         return float("nan")
     sub = sub.sort_values("stage")
-    return float(np.interp(stage, sub["stage"].to_numpy(), sub["discharge_cms"].to_numpy()))
+    return float(
+        np.interp(stage, sub["stage"].to_numpy(), sub["discharge_cms"].to_numpy())
+    )
 
 
 # Convenience wrapper for callers that prefer a function-style entry.

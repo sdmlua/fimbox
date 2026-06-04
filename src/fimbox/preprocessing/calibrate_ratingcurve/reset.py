@@ -28,12 +28,30 @@ log = logging.getLogger(__name__)
 # Columns kept in src_full_crosswalked after a reset. Anything else is a
 # calibration artefact we want to clear.
 _PRESERVE_COLUMNS = [
-    "SLOPE_RISE_RUN", "ManningN", "HydroID", "NextDownID", "order_",
-    "SLOPE_HFAB", "SLOPE_IRIS_SWORD", "SLOPE", "feature_id", "Stage",
-    "Number of Cells", "SurfaceArea (m2)", "LENGTHKM", "AREASQKM",
-    "Volume (m3)", "BedArea (m2)", "TopWidth (m)", "WettedPerimeter (m)",
-    "WetArea (m2)", "HydraulicRadius (m)", "Discharge (m3s-1)",
-    "Bathymetry_source", "default_SLOPE", "default_ManningN",
+    "SLOPE_RISE_RUN",
+    "ManningN",
+    "HydroID",
+    "NextDownID",
+    "order_",
+    "SLOPE_HFAB",
+    "SLOPE_IRIS_SWORD",
+    "SLOPE",
+    "feature_id",
+    "Stage",
+    "Number of Cells",
+    "SurfaceArea (m2)",
+    "LENGTHKM",
+    "AREASQKM",
+    "Volume (m3)",
+    "BedArea (m2)",
+    "TopWidth (m)",
+    "WettedPerimeter (m)",
+    "WetArea (m2)",
+    "HydraulicRadius (m)",
+    "Discharge (m3s-1)",
+    "Bathymetry_source",
+    "default_SLOPE",
+    "default_ManningN",
 ]
 
 
@@ -75,23 +93,38 @@ class HydroTableReset:
                 full[col] = full[col].astype(str)
 
         # All numeric base columns get coerced; non-numeric ones are dropped.
-        numeric_cols = [c for c in base.columns if c not in ("CatchId", "HydroID", "NextDownID")]
+        numeric_cols = [
+            c for c in base.columns if c not in ("CatchId", "HydroID", "NextDownID")
+        ]
         base[numeric_cols] = base[numeric_cols].apply(pd.to_numeric, errors="coerce")
 
         base = base.drop(columns=["SLOPE"]).rename(columns={"CatchId": "HydroID"})
         recalc = base.merge(
-            full[["HydroID", "Stage", "default_SLOPE", "default_ManningN", "NextDownID", "order_"]],
+            full[
+                [
+                    "HydroID",
+                    "Stage",
+                    "default_SLOPE",
+                    "default_ManningN",
+                    "NextDownID",
+                    "order_",
+                ]
+            ],
             on=["HydroID", "Stage"],
         )
         if recalc.empty:
             log.warning(f"HydroTableReset: merge failed for branch {bid}")
             return
 
-        recalc = recalc.rename(columns={"default_SLOPE": "SLOPE", "default_ManningN": "ManningN"})
+        recalc = recalc.rename(
+            columns={"default_SLOPE": "SLOPE", "default_ManningN": "ManningN"}
+        )
 
         # Geometric properties (derived from raw cell counts).
         recalc["TopWidth (m)"] = recalc["SurfaceArea (m2)"] / recalc["LENGTHKM"] / 1000
-        recalc["WettedPerimeter (m)"] = recalc["BedArea (m2)"] / recalc["LENGTHKM"] / 1000
+        recalc["WettedPerimeter (m)"] = (
+            recalc["BedArea (m2)"] / recalc["LENGTHKM"] / 1000
+        )
         recalc["WetArea (m2)"] = recalc["Volume (m3)"] / recalc["LENGTHKM"] / 1000
         recalc["HydraulicRadius (m)"] = (
             recalc["WetArea (m2)"] / recalc["WettedPerimeter (m)"]
@@ -148,7 +181,10 @@ class HydroTableReset:
                 ["HydroID", "Stage", "Discharge (m3s-1)"]
             ]
             merged = sml.merge(
-                new_values, left_on="update_id", right_on="HydroID", suffixes=("", "_new")
+                new_values,
+                left_on="update_id",
+                right_on="HydroID",
+                suffixes=("", "_new"),
             )
             merged = merged[["short_id", "Stage", "Discharge (m3s-1)"]]
             recalc = recalc.merge(
@@ -169,7 +205,9 @@ class HydroTableReset:
                 recalc["HydroID"] == update_id, ["Stage", "Discharge (m3s-1)"]
             ]
             for _, sv in new_vals.iterrows():
-                mask = (recalc["HydroID"] == short_id) & (recalc["Stage"] == sv["Stage"])
+                mask = (recalc["HydroID"] == short_id) & (
+                    recalc["Stage"] == sv["Stage"]
+                )
                 recalc.loc[mask, "Discharge (m3s-1)"] = sv["Discharge (m3s-1)"]
         return recalc
 

@@ -35,6 +35,7 @@ log = logging.getLogger(__name__)
 try:
     from .._dask import get_client as _get_dask_client
     from distributed import as_completed as _dask_as_completed
+
     _DASK_AVAILABLE = True
 except ImportError:
     _DASK_AVAILABLE = False
@@ -90,7 +91,7 @@ class FimGenerator:
 
     # When True, depth rasters are written as int16 millimetres instead of
     # float32 metres. Halves disk footprint and matches NOAA's int16 mode.
-    int16_mode: bool = False
+    int16_mode: bool = True
 
     depth_out: Optional[PathLike] = None
     extent_out: Optional[PathLike] = None
@@ -119,7 +120,7 @@ class FimGenerator:
         # Normalise the forecast once so each worker doesn't re-read it.
         forecast_df = _load_forecast(self.forecast)
 
-        # Per-branch intermediates land here. 
+        # Per-branch intermediates land here.
         tmp_dir = (
             Path(self.intermediate_dir)
             if self.intermediate_dir is not None
@@ -152,8 +153,13 @@ class FimGenerator:
         elif self.n_workers <= 1:
             results = [
                 _run_one_branch(
-                    branch_root / bid, bid, forecast_df,
-                    self.min_depth_m, self.drop_lakes, self.int16_mode, tmp_dir,
+                    branch_root / bid,
+                    bid,
+                    forecast_df,
+                    self.min_depth_m,
+                    self.drop_lakes,
+                    self.int16_mode,
+                    tmp_dir,
                 )
                 for bid in bids
             ]
@@ -163,8 +169,13 @@ class FimGenerator:
                 fut_to_bid = {
                     pool.submit(
                         _run_one_branch,
-                        branch_root / bid, bid, forecast_df,
-                        self.min_depth_m, self.drop_lakes, self.int16_mode, tmp_dir,
+                        branch_root / bid,
+                        bid,
+                        forecast_df,
+                        self.min_depth_m,
+                        self.drop_lakes,
+                        self.int16_mode,
+                        tmp_dir,
                     ): bid
                     for bid in bids
                 }
@@ -177,13 +188,17 @@ class FimGenerator:
                             f"FimGenerator: branch {bid} crashed: {exc}",
                             exc_info=True,
                         )
-                        results.append(InundationResult(
-                            branch_id=bid,
-                            extent_path=tmp_dir / f"inundation_extent_{bid}.tif",
-                            depth_path=tmp_dir / f"inundation_depth_{bid}.tif",
-                            n_hydroids_wet=0, n_pixels_wet=0, max_depth_m=0.0,
-                            skipped=True,
-                        ))
+                        results.append(
+                            InundationResult(
+                                branch_id=bid,
+                                extent_path=tmp_dir / f"inundation_extent_{bid}.tif",
+                                depth_path=tmp_dir / f"inundation_depth_{bid}.tif",
+                                n_hydroids_wet=0,
+                                n_pixels_wet=0,
+                                max_depth_m=0.0,
+                                skipped=True,
+                            )
+                        )
 
         results.sort(key=lambda r: r.branch_id)
 
@@ -191,9 +206,7 @@ class FimGenerator:
         if self.mosaic:
             ok_bids = [r.branch_id for r in results if not r.skipped]
             if not ok_bids:
-                log.warning(
-                    "FimGenerator: no successful branches — skipping mosaic"
-                )
+                log.warning("FimGenerator: no successful branches — skipping mosaic")
             else:
                 mosaic_result = BranchMosaic(
                     aoi_dir=self.aoi_dir,
@@ -206,6 +219,7 @@ class FimGenerator:
         # Clean up per-branch intermediates once the mosaic is done.
         if self.cleanup_intermediates and self.mosaic and mosaic_result is not None:
             import shutil
+
             try:
                 shutil.rmtree(tmp_dir)
                 log.info(f"Cleaned up intermediates: {tmp_dir}")
@@ -259,13 +273,17 @@ class FimGenerator:
                     f"FimGenerator (dask): branch {bid} crashed: {exc}",
                     exc_info=True,
                 )
-                results.append(InundationResult(
-                    branch_id=bid,
-                    extent_path=tmp_dir / f"inundation_extent_{bid}.tif",
-                    depth_path=tmp_dir / f"inundation_depth_{bid}.tif",
-                    n_hydroids_wet=0, n_pixels_wet=0, max_depth_m=0.0,
-                    skipped=True,
-                ))
+                results.append(
+                    InundationResult(
+                        branch_id=bid,
+                        extent_path=tmp_dir / f"inundation_extent_{bid}.tif",
+                        depth_path=tmp_dir / f"inundation_depth_{bid}.tif",
+                        n_hydroids_wet=0,
+                        n_pixels_wet=0,
+                        max_depth_m=0.0,
+                        skipped=True,
+                    )
+                )
         return results
 
 
@@ -327,7 +345,6 @@ def extract_feature_ids(
     return target
 
 
-
 # CLI
 if __name__ == "__main__":
     import argparse
@@ -337,17 +354,20 @@ if __name__ == "__main__":
     )
     parser.add_argument("--aoi-dir", required=True)
     parser.add_argument(
-        "--extract-only", action="store_true",
+        "--extract-only",
+        action="store_true",
         help="Step 1 only: write <aoi_dir>/feature_id.csv and exit.",
     )
     parser.add_argument(
-        "--forecast", default=None,
+        "--forecast",
+        default=None,
         help="Step 2: a single discharge CSV. When omitted, every CSV under "
-             "<aoi_dir>/discharge_inputs/ is processed.",
+        "<aoi_dir>/discharge_inputs/ is processed.",
     )
     parser.add_argument("--workers", type=int, default=4)
     parser.add_argument(
-        "--int16", action="store_true",
+        "--int16",
+        action="store_true",
         help="Write depth raster as int16 millimetres.",
     )
     args = parser.parse_args()
@@ -393,5 +413,7 @@ if __name__ == "__main__":
             print(f"  depth  -> {result.depth_path}")
             print(f"  extent -> {result.extent_path}")
             if result.mosaic is not None:
-                print(f"  {result.mosaic.n_wet_pixels:,} wet pixels, "
-                      f"max depth {result.mosaic.max_depth_m:.2f} m")
+                print(
+                    f"  {result.mosaic.n_wet_pixels:,} wet pixels, "
+                    f"max depth {result.mosaic.max_depth_m:.2f} m"
+                )

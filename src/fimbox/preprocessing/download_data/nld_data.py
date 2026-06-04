@@ -164,8 +164,13 @@ class ESRI_REST:
                 log.warning(
                     "ESRI page failed (offset=%d, size=%d, attempt=%d/%d): %s. "
                     "Retrying with size=%d after %.1fs.",
-                    offset, size, attempt, self.MAX_PAGE_RETRIES, exc,
-                    new_size, self.RETRY_BACKOFF_S * attempt,
+                    offset,
+                    size,
+                    attempt,
+                    self.MAX_PAGE_RETRIES,
+                    exc,
+                    new_size,
+                    self.RETRY_BACKOFF_S * attempt,
                 )
                 if new_size == size and attempt >= self.MAX_PAGE_RETRIES:
                     break
@@ -211,6 +216,7 @@ class ESRI_REST:
         # Point
         if "x" in geom and "y" in geom:
             from shapely.geometry import Point
+
             return Point(geom["x"], geom["y"])
         return None
 

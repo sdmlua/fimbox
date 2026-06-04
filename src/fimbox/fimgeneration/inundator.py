@@ -43,10 +43,10 @@ class InundationResult:
     branch_id: str
     extent_path: Path
     depth_path: Path
-    n_hydroids_wet: int       # how many HydroIDs ended up with stage > 0
-    n_pixels_wet: int         # how many DEM pixels are flooded
-    max_depth_m: float        # max water depth across the raster
-    skipped: bool = False     # True when the branch had no input data
+    n_hydroids_wet: int  # how many HydroIDs ended up with stage > 0
+    n_pixels_wet: int  # how many DEM pixels are flooded
+    max_depth_m: float  # max water depth across the raster
+    skipped: bool = False  # True when the branch had no input data
 
 
 @dataclass
@@ -61,11 +61,11 @@ class Inundator:
     extent_out: Optional[PathLike] = None
     depth_out: Optional[PathLike] = None
 
-    # Smallest depth (m) that counts as wet. ~30 mm 
+    # Smallest depth (m) that counts as wet. ~30 mm
     min_depth_m: float = 0.03
 
-    #When true, written as a millimeter
-    int16_mode: bool = False
+    # When true, written as a millimeter
+    int16_mode: bool = True
 
     # When True, skip lake reaches (LakeID != -999). Set to False to include
     # lakes in the inundation map.
@@ -93,8 +93,11 @@ class Inundator:
             self.depth_out = write_dir / f"inundation_depth_{bid}.tif"
 
         for attr in (
-            "hand_raster", "catchments_raster", "hydrotable_csv",
-            "extent_out", "depth_out",
+            "hand_raster",
+            "catchments_raster",
+            "hydrotable_csv",
+            "extent_out",
+            "depth_out",
         ):
             setattr(self, attr, Path(getattr(self, attr)))
 
@@ -104,14 +107,14 @@ class Inundator:
         # as an absent branch, not a fatal error.
         for p in (self.hand_raster, self.catchments_raster, self.hydrotable_csv):
             if not p.is_file():
-                log.warning(
-                    f"Inundator: branch {bid} missing {p.name} — skipping"
-                )
+                log.warning(f"Inundator: branch {bid} missing {p.name} — skipping")
                 return InundationResult(
                     branch_id=bid,
                     extent_path=self.extent_out,
                     depth_path=self.depth_out,
-                    n_hydroids_wet=0, n_pixels_wet=0, max_depth_m=0.0,
+                    n_hydroids_wet=0,
+                    n_pixels_wet=0,
+                    max_depth_m=0.0,
                     skipped=True,
                 )
 
@@ -125,7 +128,9 @@ class Inundator:
                 branch_id=bid,
                 extent_path=self.extent_out,
                 depth_path=self.depth_out,
-                n_hydroids_wet=0, n_pixels_wet=0, max_depth_m=0.0,
+                n_hydroids_wet=0,
+                n_pixels_wet=0,
+                max_depth_m=0.0,
                 skipped=True,
             )
 
@@ -138,9 +143,7 @@ class Inundator:
         elif isinstance(f, pd.DataFrame):
             df = f.copy()
         else:
-            raise TypeError(
-                "forecast must be a path to a CSV or a pandas DataFrame"
-            )
+            raise TypeError("forecast must be a path to a CSV or a pandas DataFrame")
 
         # Accept the common column-name variants.
         if "discharge_cms" not in df.columns:
@@ -158,9 +161,7 @@ class Inundator:
         df = df.groupby("feature_id", as_index=False)["discharge_cms"].max()
         return df
 
-    def _build_stage_lookup(
-        self, forecast: pd.DataFrame
-    ) -> dict[int, float]:
+    def _build_stage_lookup(self, forecast: pd.DataFrame) -> dict[int, float]:
         ht_cols_needed = ["feature_id", "HydroID", "stage", "discharge_cms"]
         ht_optional = ["LakeID"]
         header = pd.read_csv(self.hydrotable_csv, nrows=0).columns
@@ -199,9 +200,7 @@ class Inundator:
             stage_by_hydroid[int(hid)] = max(0.0, interpolated)
         return stage_by_hydroid
 
-    def _write_rasters(
-        self, stage_by_hydroid: dict[int, float]
-    ) -> InundationResult:
+    def _write_rasters(self, stage_by_hydroid: dict[int, float]) -> InundationResult:
         bid = self.branch_id
 
         with (
@@ -218,20 +217,35 @@ class Inundator:
             if self.int16_mode:
                 # Depth in millimetres as int16.
                 depth_meta.update(
-                    dtype="int16", count=1, nodata=0,
-                    compress="lzw", tiled=True, blockxsize=512, blockysize=512,
+                    dtype="int16",
+                    count=1,
+                    nodata=0,
+                    compress="lzw",
+                    tiled=True,
+                    blockxsize=512,
+                    blockysize=512,
                     BIGTIFF="YES",
                 )
             else:
                 depth_meta.update(
-                    dtype="float32", count=1, nodata=-9999.0,
-                    compress="lzw", tiled=True, blockxsize=512, blockysize=512,
+                    dtype="float32",
+                    count=1,
+                    nodata=-9999.0,
+                    compress="lzw",
+                    tiled=True,
+                    blockxsize=512,
+                    blockysize=512,
                     BIGTIFF="YES",
                 )
             ext_meta = hand_ds.meta.copy()
             ext_meta.update(
-                dtype="int32", count=1, nodata=0,
-                compress="lzw", tiled=True, blockxsize=512, blockysize=512,
+                dtype="int32",
+                count=1,
+                nodata=0,
+                compress="lzw",
+                tiled=True,
+                blockxsize=512,
+                blockysize=512,
                 BIGTIFF="YES",
             )
 
@@ -265,7 +279,7 @@ class Inundator:
                     # Pixels with valid catchment + non-negative HAND can be tested. Everything else is dry.
                     valid = (cat > 0) & (cat <= max_hid) & (hand >= 0)
                     if hand_nodata is not None and not np.isnan(hand_nodata):
-                        valid &= (hand != hand_nodata)
+                        valid &= hand != hand_nodata
                     valid &= ~np.isnan(hand)
 
                     # Vectorised stage lookup via indexing.
@@ -313,4 +327,3 @@ class Inundator:
             n_pixels_wet=n_wet_pixels,
             max_depth_m=max_depth,
         )
-

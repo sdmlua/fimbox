@@ -125,7 +125,9 @@ def adjust_floodplains(
     ].dissolve()
 
     if upstream_catchments.empty:
-        log.warning(f"adjust_floodplains: no upstream catchments for branch {branch_id}")
+        log.warning(
+            f"adjust_floodplains: no upstream catchments for branch {branch_id}"
+        )
         return None
 
     with rio.open(distance_file) as src, rio.open(dem_file) as dem_src:
@@ -160,7 +162,8 @@ def adjust_floodplains(
 
     adjustment = np.where(
         distance < distance_threshold,
-        ((distance_threshold - distance) / distance_threshold) ** slope_exponent * z_factor,
+        ((distance_threshold - distance) / distance_threshold) ** slope_exponent
+        * z_factor,
         0,
     )
     adjustment[np.isnan(adjustment)] = 0
@@ -234,7 +237,9 @@ if __name__ == "__main__":
     from ...logging_utils import configure_cli_logging
 
     configure_cli_logging()
-    parser = argparse.ArgumentParser(description="Adjust burned DEM using NFHL floodplains.")
+    parser = argparse.ArgumentParser(
+        description="Adjust burned DEM using NFHL floodplains."
+    )
     parser.add_argument("-i", "--input-file", required=True)
     parser.add_argument("-e", "--distance-file", required=True)
     parser.add_argument("-d", "--dem-file", required=True)

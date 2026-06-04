@@ -91,7 +91,9 @@ if __name__ == "__main__":
     )
     parser.add_argument("-d", "--src-dir", required=True)
     parser.add_argument(
-        "-l", "--deny-list", required=True,
+        "-l",
+        "--deny-list",
+        required=True,
         help='Path to deny-list file, or "NONE" to skip cleanup.',
     )
     parser.add_argument("-b", "--branch-id", required=True)

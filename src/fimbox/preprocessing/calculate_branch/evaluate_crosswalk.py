@@ -94,9 +94,7 @@ def evaluate_crosswalk(
     return results
 
 
-def _evaluate_intersections(
-    flows_gpkg: Path, nwm_flows_gpkg: Path
-) -> pd.DataFrame:
+def _evaluate_intersections(flows_gpkg: Path, nwm_flows_gpkg: Path) -> pd.DataFrame:
     flows = gpd.read_file(flows_gpkg)
     nwm_streams = gpd.read_file(nwm_flows_gpkg)
     intersects = flows.sjoin(nwm_streams)
@@ -231,7 +229,13 @@ def _evaluate_network(
 
     return pd.DataFrame(
         results,
-        columns=["HydroID", "feature_id", "upstream_fids", "upstream_nwm_fids", "status"],
+        columns=[
+            "HydroID",
+            "feature_id",
+            "upstream_fids",
+            "upstream_nwm_fids",
+            "status",
+        ],
     )
 
 

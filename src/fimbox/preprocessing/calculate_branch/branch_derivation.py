@@ -24,6 +24,8 @@ from shapely.geometry import Point
 
 gpd.options.io_engine = "pyogrio"
 
+log = logging.getLogger(__name__)
+
 
 @dataclass(slots=True)
 class BranchDerivationResult:
@@ -833,51 +835,68 @@ def _build_headwaters(
     to_nodes = set(streams["_to_node"])
     upstream_start_rows = streams.loc[~streams["_from_node"].isin(to_nodes)].copy()
 
-    if provided_headwaters is not None and not provided_headwaters.empty:
-        points = provided_headwaters.to_crs(streams.crs)
-        streams_subset = streams[[reach_id_attribute, branch_id_attribute, "geometry"]]
-        nearest = gpd.sjoin_nearest(
-            points,
-            streams_subset,
-            how="inner",
-            distance_col="_snap_dist",
-        )
-        # sjoin_nearest appends "_left"/"_right" suffixes when a column
-        # name exists in both frames. The reach_id and branch_id we care
-        # about are the ones from the stream network (right side); collapse
-        # the columns back to their canonical names so downstream code sees
-        # them as-is.
-        for col in (reach_id_attribute, branch_id_attribute):
-            if col not in nearest.columns:
-                right = f"{col}_right"
-                left = f"{col}_left"
-                if right in nearest.columns:
-                    nearest = nearest.rename(columns={right: col})
-                    if left in nearest.columns:
-                        nearest = nearest.drop(columns=[left])
-                elif left in nearest.columns:
-                    nearest = nearest.rename(columns={left: col})
-
-        keep_ids = set(upstream_start_rows[reach_id_attribute].astype(str))
-        nearest[reach_id_attribute] = nearest[reach_id_attribute].astype(str)
-        nearest = nearest.loc[nearest[reach_id_attribute].isin(keep_ids)].copy()
-        if not nearest.empty:
-            nearest = nearest.drop(
-                columns=[col for col in nearest.columns if col.startswith("index_")]
-            )
-            return nearest.reset_index(drop=True)
-
+    # One canonical headwater per level-path inlet: the upstream-most vertex of
+    # each upstream-start reach. This mirrors inundation-mapping's
+    # StreamNetwork.derive_headwater_points_with_inlets, which sets each
+    # headwater to ``row.geometry.coords[inlet_linestring_index]`` — i.e. the
+    # inlet vertex of the stream line itself. Because the point comes from the
+    # level-path geometry, it lies ON the line (distance 0) and therefore always
+    # falls inside the branch clip polygon / per-branch DEM. Flow accumulation
+    # seeds entirely from this raster, so a headwater that lands outside the
+    # branch DEM produces 0 stream cells and crashes StreamNetReaches.
+    #
+    # An external NWM headwater inventory (``provided_headwaters``), when given,
+    # is used ONLY to annotate the snap distance for diagnostics — never to set
+    # the geometry and never to drop a branch. inundation-mapping does not
+    # filter level-path headwaters by an external point inventory either;
+    # keeping the inlet vertex for every branch is what guarantees each branch
+    # has a seed. (The previous fimbox code kept the raw NWM point geometry,
+    # which can sit kilometres upstream of the stream-order-filtered,
+    # boundary-clipped level path — that is what put the seed outside the branch
+    # DEM and broke every non-zero branch.)
     headwater_points = []
     for _, row in upstream_start_rows.iterrows():
         first_coord = list(row.geometry.coords)[0]
         headwater_points.append(
             {
-                reach_id_attribute: row[reach_id_attribute],
-                branch_id_attribute: row[branch_id_attribute],
+                reach_id_attribute: str(row[reach_id_attribute]),
+                branch_id_attribute: str(row[branch_id_attribute]),
                 "geometry": Point(first_coord),
             }
         )
-    return gpd.GeoDataFrame(headwater_points, crs=streams.crs, geometry="geometry")
+    headwaters = gpd.GeoDataFrame(
+        headwater_points, crs=streams.crs, geometry="geometry"
+    )
+
+    if provided_headwaters is None or provided_headwaters.empty:
+        return headwaters
+
+    # Diagnostic-only: distance from each inlet vertex to the nearest provided
+    # NWM headwater point. Large values flag inlets the NWM inventory doesn't
+    # corroborate, but every branch is still kept.
+    try:
+        points = provided_headwaters.to_crs(streams.crs)
+        nearest = gpd.sjoin_nearest(
+            headwaters,
+            points[["geometry"]],
+            how="left",
+            distance_col="_snap_dist",
+        )
+        nearest = nearest.drop(
+            columns=[c for c in nearest.columns if c.startswith("index_")]
+        )
+        # sjoin_nearest can duplicate rows on ties — collapse back to one row
+        # per inlet reach, keeping the closest match.
+        nearest = (
+            nearest.sort_values("_snap_dist")
+            .drop_duplicates(subset=[reach_id_attribute])
+            .sort_index()
+        )
+        headwaters = nearest.reset_index(drop=True)
+    except Exception as exc:  # diagnostics must never break headwater derivation
+        log.warning("Headwater snap-distance annotation skipped: %s", exc)
+
+    return headwaters
 
 
 def _associate_levelpaths_with_levees(

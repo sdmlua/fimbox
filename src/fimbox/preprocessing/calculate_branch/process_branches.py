@@ -109,14 +109,12 @@ class AOIProcessingConfig:
         aoi_id: Optional[str] = None,
         huc_id: Optional[str] = None,
         branch_list_path: Optional[Path] = None,
-
         # required per-branch inputs
         dem_path: Optional[Path] = None,
         streams_gpkg: Optional[Path] = None,
         boundary_gpkg: Optional[Path] = None,
         catchments_gpkg: Optional[Path] = None,
         levelpaths_gpkg: Optional[Path] = None,
-
         # optional per-branch inputs
         bridge_elev_diff_path: Optional[Path] = None,
         levee_gpkg_path: Optional[Path] = None,
@@ -125,16 +123,13 @@ class AOIProcessingConfig:
         levelpaths_extended_gpkg: Optional[Path] = None,
         fema_nfhl_gpkg: Optional[Path] = None,
         branch_polygons_gpkg: Optional[Path] = None,
-
         # USGS crosswalk inputs
         usgs_gages_gpkg: Optional[Path] = None,
         ahps_gpkg: Optional[Path] = None,
         ras_locs_gpkg: Optional[Path] = None,
-
         # CRS / numeric
-        target_crs: Union[str, int] = 5070, 
+        target_crs: Union[str, int] = 5070,
         branch_zero_id: str = "0",
-
         # AGREE and floodplain adjustment defaults match inundation-mapping
         agree_buffer_m: float = 15.0,
         agree_smooth_drop: float = 10.0,
@@ -148,15 +143,13 @@ class AOIProcessingConfig:
         huc_code: Optional[str] = None,
         evaluate_crosswalk: bool = False,
         convert_to_int16: bool = False,
-        # gage crosswalk schema 
+        # gage crosswalk schema
         gage_aoi_filter_column: str = "HUC8",
-
-        # branch-zero post-CreateHAND steps 
+        # branch-zero post-CreateHAND steps
         run_branch_zero_usgs_crosswalk: bool = False,
         delete_deny_list: bool = True,
         deny_branch_zero_list: Optional[Path] = None,
         deny_branches_list: Optional[Path] = None,
-
         # parallelism
         n_workers: int = 1,
         timeout_seconds: Optional[int] = None,
@@ -200,7 +193,9 @@ class AOIProcessingConfig:
             Path(deny_branches_list) if deny_branches_list else None
         )
         # aoi_code defaults to the AOI id (CreateHAND stores it on hydroTable rows)
-        self.aoi_code = _pick_one("aoi_code", aoi_code, "huc_code", huc_code, required=False) or ""
+        self.aoi_code = (
+            _pick_one("aoi_code", aoi_code, "huc_code", huc_code, required=False) or ""
+        )
         self.n_workers = n_workers
         self.timeout_seconds = timeout_seconds
 
@@ -237,9 +232,9 @@ HucProcessingConfig = AOIProcessingConfig
 def process_branches(cfg: AOIProcessingConfig) -> list[BranchResult]:
     """Run every non-zero branch in parallel.
 
-    Pure branch calculation: BranchZero, adjust_floodplains, CreateHAND, 
-    USGS crosswalk, per-branch, branch-zero cleanup. 
-    
+    Pure branch calculation: BranchZero, adjust_floodplains, CreateHAND,
+    USGS crosswalk, per-branch, branch-zero cleanup.
+
     Calibration is NOT invoked here — run it explicitly via ``fimbox.run_calibration`` once
     the branch loop and any deny-list cleanups are complete.
 
@@ -321,7 +316,9 @@ def process_branches(cfg: AOIProcessingConfig) -> list[BranchResult]:
                     exc_info=True,
                 )
                 results.append(
-                    BranchResult(branch_id=bid, status=status, elapsed_s=0.0, error=exc_text)
+                    BranchResult(
+                        branch_id=bid, status=status, elapsed_s=0.0, error=exc_text
+                    )
                 )
 
     branches_elapsed = time.time() - start
@@ -338,7 +335,9 @@ def process_branches(cfg: AOIProcessingConfig) -> list[BranchResult]:
     return results
 
 
-def _cleanup_after_all(cfg: AOIProcessingConfig, results: Sequence[BranchResult]) -> None:
+def _cleanup_after_all(
+    cfg: AOIProcessingConfig, results: Sequence[BranchResult]
+) -> None:
     if not cfg.delete_deny_list:
         log.info("Per-branch + branch-zero cleanup disabled (delete_deny_list=False)")
         return
@@ -351,7 +350,9 @@ def _cleanup_after_all(cfg: AOIProcessingConfig, results: Sequence[BranchResult]
 
     # Branch zero.
     if bzero_dir.is_dir():
-        deny_bz = cfg.deny_branch_zero_list or _bundled_deny_list("deny_branch_zero.lst")
+        deny_bz = cfg.deny_branch_zero_list or _bundled_deny_list(
+            "deny_branch_zero.lst"
+        )
         if deny_bz is not None and Path(deny_bz).is_file():
             log.info(f"--- branch-zero outputs cleanup ({Path(deny_bz).name}) ---")
             try:
@@ -410,11 +411,16 @@ def _resolve_paths(cfg: AOIProcessingConfig) -> AOIProcessingConfig:
     cfg.streams_gpkg = cfg.streams_gpkg or d / "nwm_subset_streams.gpkg"
     cfg.boundary_gpkg = cfg.boundary_gpkg or d / "wbd8_clp.gpkg"
     cfg.catchments_gpkg = cfg.catchments_gpkg or d / "nwm_catchments_proj_subset.gpkg"
-    cfg.levelpaths_gpkg = cfg.levelpaths_gpkg or d / "nwm_subset_streams_levelPaths.gpkg"
+    cfg.levelpaths_gpkg = (
+        cfg.levelpaths_gpkg or d / "nwm_subset_streams_levelPaths.gpkg"
+    )
     cfg.branch_polygons_gpkg = cfg.branch_polygons_gpkg or d / "branch_polygons.gpkg"
     if cfg.headwaters_gpkg is None:
-        hw = d / "nwm_headwater_points_subset.gpkg"
-        cfg.headwaters_gpkg = hw if hw.exists() else None
+        for name in ("nwm_headwater_points_subset.gpkg", "nwm_headwaters.gpkg"):
+            cand = d / name
+            if cand.exists():
+                cfg.headwaters_gpkg = cand
+                break
     if cfg.levee_gpkg_path is None:
         lg = d / "3d_nld_subset_levees_burned.gpkg"
         cfg.levee_gpkg_path = lg if lg.exists() else None
@@ -460,8 +466,7 @@ def _run_branch_zero_post_steps(cfg: AOIProcessingConfig) -> None:
     if cfg.run_branch_zero_usgs_crosswalk:
         bzero_gages = cfg.aoi_dir / f"usgs_subset_gages_{cfg.branch_zero_id}.gpkg"
         catchments_xwalk = (
-            branch_dir
-            / f"gw_catchments_reaches_filtered_addedAttributes_crosswalked_"
+            branch_dir / f"gw_catchments_reaches_filtered_addedAttributes_crosswalked_"
             f"{cfg.branch_zero_id}.gpkg"
         )
         flows = (
@@ -472,7 +477,9 @@ def _run_branch_zero_post_steps(cfg: AOIProcessingConfig) -> None:
         if not dem_b.exists():
             dem_b = branch_dir / f"dem_{cfg.branch_zero_id}.tif"
 
-        if all(p.exists() for p in (bzero_gages, catchments_xwalk, flows, dem_b, dem_adj)):
+        if all(
+            p.exists() for p in (bzero_gages, catchments_xwalk, flows, dem_b, dem_adj)
+        ):
             log.info("--- USGS crosswalk (branch zero) ---")
             try:
                 run_branch_crosswalk(
@@ -488,9 +495,7 @@ def _run_branch_zero_post_steps(cfg: AOIProcessingConfig) -> None:
             except Exception as exc:
                 log.warning(f"Branch-zero USGS crosswalk skipped: {exc}")
         else:
-            log.info(
-                "Branch-zero USGS crosswalk: required inputs missing — skipping"
-            )
+            log.info("Branch-zero USGS crosswalk: required inputs missing — skipping")
 
     # Branch-zero deny-list cleanup is deferred to _cleanup_after_all,
     # which runs once after every branch (zero and non-zero) finishes.
@@ -535,9 +540,7 @@ def _process_single_branch(cfg: AOIProcessingConfig, branch_id: str) -> BranchRe
             )
             if single is not None:
                 branch_boundary = single
-                branch_log.info(
-                    f"Using per-branch clip polygon: {single.name}"
-                )
+                branch_log.info(f"Using per-branch clip polygon: {single.name}")
             else:
                 branch_log.warning(
                     "branch_polygons.gpkg missing or has no row for "
@@ -546,7 +549,9 @@ def _process_single_branch(cfg: AOIProcessingConfig, branch_id: str) -> BranchRe
 
             streams_src = cfg.aoi_dir / "nwm_subset_streams_levelPaths.gpkg"
             filtered_streams = _filter_by_levpa_id(
-                streams_src, branch_id, branch_dir,
+                streams_src,
+                branch_id,
+                branch_dir,
                 f"nwm_subset_streams_levelPaths_{branch_id}.gpkg",
             )
             if filtered_streams is not None:
@@ -554,15 +559,21 @@ def _process_single_branch(cfg: AOIProcessingConfig, branch_id: str) -> BranchRe
 
             ext_src = cfg.aoi_dir / "nwm_subset_streams_levelPaths_extended.gpkg"
             filtered_ext = _filter_by_levpa_id(
-                ext_src, branch_id, branch_dir,
+                ext_src,
+                branch_id,
+                branch_dir,
                 f"nwm_subset_streams_levelPaths_extended_{branch_id}.gpkg",
             )
             if filtered_ext is not None:
                 branch_levelpaths_extended = filtered_ext
 
-            hw_src = cfg.aoi_dir / "nwm_subset_streams_levelPaths_dissolved_headwaters.gpkg"
+            hw_src = (
+                cfg.aoi_dir / "nwm_subset_streams_levelPaths_dissolved_headwaters.gpkg"
+            )
             filtered_hw = _filter_by_levpa_id(
-                hw_src, branch_id, branch_dir,
+                hw_src,
+                branch_id,
+                branch_dir,
                 f"nwm_subset_streams_levelPaths_dissolved_headwaters_{branch_id}.gpkg",
             )
             if filtered_hw is not None:
@@ -570,7 +581,9 @@ def _process_single_branch(cfg: AOIProcessingConfig, branch_id: str) -> BranchRe
 
             cat_src = cfg.aoi_dir / "nwm_catchments_proj_subset_levelPaths.gpkg"
             _filter_by_levpa_id(
-                cat_src, branch_id, branch_dir,
+                cat_src,
+                branch_id,
+                branch_dir,
                 f"nwm_catchments_proj_subset_levelPaths_{branch_id}.gpkg",
             )
 
@@ -586,7 +599,9 @@ def _process_single_branch(cfg: AOIProcessingConfig, branch_id: str) -> BranchRe
             headwaters_gpkg=branch_headwaters,
             levelpaths_extended_gpkg=branch_levelpaths_extended,
             target_crs=(
-                f"EPSG:{cfg.target_crs}" if str(cfg.target_crs).isdigit() else cfg.target_crs
+                f"EPSG:{cfg.target_crs}"
+                if str(cfg.target_crs).isdigit()
+                else cfg.target_crs
             ),
             agree_buffer_m=cfg.agree_buffer_m,
             agree_smooth_drop=cfg.agree_smooth_drop,
@@ -606,7 +621,8 @@ def _process_single_branch(cfg: AOIProcessingConfig, branch_id: str) -> BranchRe
                         nwm_catchments=cfg.catchments_gpkg,
                         nwm_streams=cfg.streams_gpkg,
                         nwm_levelpaths=cfg.levelpaths_gpkg,
-                        distance_file=branch_dir / f"flows_grid_boolean_euclidean_distance_{branch_id}.tif",
+                        distance_file=branch_dir
+                        / f"flows_grid_boolean_euclidean_distance_{branch_id}.tif",
                         output_file=branch_dir / f"dem_burned_adjusted_{branch_id}.tif",
                         distance_threshold=cfg.floodplain_distance_threshold,
                         slope_exponent=cfg.floodplain_slope_exponent,
@@ -629,9 +645,11 @@ def _process_single_branch(cfg: AOIProcessingConfig, branch_id: str) -> BranchRe
             aoi_code=cfg.aoi_code or cfg.aoi_id,
             levee_protected_areas_gpkg=None,  # set by user if needed
             levee_levelpaths_csv=None,
-            lakes_gpkg=cfg.aoi_dir / "nwm_lakes_proj_subset.gpkg" if (
+            lakes_gpkg=(
                 cfg.aoi_dir / "nwm_lakes_proj_subset.gpkg"
-            ).exists() else None,
+                if (cfg.aoi_dir / "nwm_lakes_proj_subset.gpkg").exists()
+                else None
+            ),
             boundary_gpkg=cfg.boundary_gpkg,
             dem_path=cfg.dem_path,
         ).run()
@@ -698,9 +716,7 @@ def _process_single_branch(cfg: AOIProcessingConfig, branch_id: str) -> BranchRe
         # Int16 storage downcast.
         if cfg.convert_to_int16:
             if str(cfg.aoi_id).startswith("19"):
-                branch_log.info(
-                    f"convert_to_int16 skipped (Alaska AOI {cfg.aoi_id})"
-                )
+                branch_log.info(f"convert_to_int16 skipped (Alaska AOI {cfg.aoi_id})")
             else:
                 from .convert_to_int16 import (
                     CannotConvertHydroIDsToInt16,
@@ -766,7 +782,6 @@ def _wipe_branch_dir(branch_dir: Path) -> None:
         import shutil
 
         shutil.rmtree(branch_dir, ignore_errors=True)
-
 
 
 def _write_single_branch_polygon(
@@ -877,26 +892,31 @@ if __name__ == "__main__":
     parser.add_argument("--ras-locs", default=None)
     parser.add_argument("--target-crs", default="5070")
     parser.add_argument(
-        "--evaluate-crosswalk", action="store_true",
+        "--evaluate-crosswalk",
+        action="store_true",
         help="Write crosswalk_evaluation_<branch>.csv for branch zero only.",
     )
     parser.add_argument(
-        "--convert-to-int16", action="store_true",
+        "--convert-to-int16",
+        action="store_true",
         help="Downcast gw_catchments + REM rasters to Int16 (skipped for AOI id starting with '19').",
     )
     parser.add_argument(
-        "--gage-aoi-filter-column", default="HUC8",
+        "--gage-aoi-filter-column",
+        default="HUC8",
         help=(
             "Column in the USGS gages gpkg that identifies AOI membership "
             "(default HUC8; use 'aoi_id' when the gpkg came from DownloadUSGSGages)."
         ),
     )
     parser.add_argument(
-        "--run-branch-zero-usgs-crosswalk", action="store_true",
+        "--run-branch-zero-usgs-crosswalk",
+        action="store_true",
         help="Run the USGS crosswalk for branch zero after its CreateHAND finishes.",
     )
     parser.add_argument(
-        "--no-delete-deny-list", action="store_true",
+        "--no-delete-deny-list",
+        action="store_true",
         help=(
             "Skip branch-zero deny-list cleanup. Default behaviour deletes "
             "intermediates using fimbox/config/deny_branch_zero.lst (or the "
@@ -904,7 +924,8 @@ if __name__ == "__main__":
         ),
     )
     parser.add_argument(
-        "--deny-branch-zero-list", default=None,
+        "--deny-branch-zero-list",
+        default=None,
         help=(
             "Path to a branch-zero deny-list. When omitted and cleanup is on, "
             "fimbox/config/deny_branch_zero.lst is used. Lines starting with "
@@ -917,7 +938,9 @@ if __name__ == "__main__":
     cfg = AOIProcessingConfig(
         aoi_dir=aoi_dir,
         aoi_id=args.aoi_id,
-        branch_list_path=Path(args.branch_list) if args.branch_list else (aoi_dir / "branch_ids.lst"),
+        branch_list_path=(
+            Path(args.branch_list) if args.branch_list else (aoi_dir / "branch_ids.lst")
+        ),
         n_workers=args.workers,
         fema_nfhl_gpkg=Path(args.fema_nfhl) if args.fema_nfhl else None,
         usgs_gages_gpkg=Path(args.usgs_gages) if args.usgs_gages else None,

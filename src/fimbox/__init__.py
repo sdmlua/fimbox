@@ -138,6 +138,7 @@ from .fimgeneration import (
     NoForecastMatch,
     extract_feature_ids,
 )
+
 __all__ += [
     "FimGenerator",
     "FimGenerationResult",

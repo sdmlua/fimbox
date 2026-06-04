@@ -35,7 +35,7 @@ log = logging.getLogger(__name__)
 class MosaicResult:
     depth_path: Path
     extent_path: Path
-    n_branches_merged: int       # zero counted, plus every non-zero that had data
+    n_branches_merged: int  # zero counted, plus every non-zero that had data
     n_wet_pixels: int
     max_depth_m: float
 
@@ -96,7 +96,9 @@ class BranchMosaic:
             extent_files = [src_root / f"inundation_extent_{b}.tif" for b in ordered]
         else:
             depth_files = [src_root / b / f"inundation_depth_{b}.tif" for b in ordered]
-            extent_files = [src_root / b / f"inundation_extent_{b}.tif" for b in ordered]
+            extent_files = [
+                src_root / b / f"inundation_extent_{b}.tif" for b in ordered
+            ]
         depth_files = [p for p in depth_files if p.is_file()]
         extent_files = [p for p in extent_files if p.is_file()]
 
@@ -133,14 +135,12 @@ class BranchMosaic:
         bids = set()
         for p in src_root.glob("inundation_depth_*.tif"):
             stem = p.stem  # inundation_depth_<bid>
-            bid = stem[len("inundation_depth_"):]
+            bid = stem[len("inundation_depth_") :]
             if bid:
                 bids.add(bid)
         return sorted(bids)
 
-    def _mosaic(
-        self, sources: list[Path], out_path: Path, method: str
-    ) -> None:
+    def _mosaic(self, sources: list[Path], out_path: Path, method: str) -> None:
         # method = "max_positive": pick deepest depth per pixel. Source
         #     rasters have dry = 0, wet > 0, nodata = sentinel. Built-in
         #     "max" picks the largest value across overlapping sources,
@@ -174,7 +174,9 @@ def _summarise_depth(depth_path: Path) -> tuple[int, float]:
     n_wet = 0
     max_d = 0.0
     with rasterio.open(depth_path) as ds:
-        scale = 1.0 / 1000.0 if np.issubdtype(np.dtype(ds.dtypes[0]), np.integer) else 1.0
+        scale = (
+            1.0 / 1000.0 if np.issubdtype(np.dtype(ds.dtypes[0]), np.integer) else 1.0
+        )
         for _, w in ds.block_windows(1):
             arr = ds.read(1, window=w)
             wet = arr > 0
@@ -184,4 +186,3 @@ def _summarise_depth(depth_path: Path) -> tuple[int, float]:
                 if block_max > max_d:
                     max_d = block_max
     return n_wet, max_d
-

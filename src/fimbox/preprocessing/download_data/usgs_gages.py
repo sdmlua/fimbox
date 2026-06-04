@@ -78,7 +78,7 @@ class DownloadUSGSGages(ArcGISDownloader):
             boundary_layer=boundary_layer,
             boundary_crs=boundary_crs,
             where=where,
-            out_dir=None, 
+            out_dir=None,
             out_name=out_name,
             out_layer=out_layer,
         )
@@ -133,9 +133,13 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description="Download USGS gauges that intersect a boundary."
     )
-    parser.add_argument("--boundary", required=True, help="Boundary file (gpkg/shp/geojson)")
+    parser.add_argument(
+        "--boundary", required=True, help="Boundary file (gpkg/shp/geojson)"
+    )
     parser.add_argument("--boundary-layer", default=None)
-    parser.add_argument("--aoi-id", required=True, help="AOI identifier tagged on every row")
+    parser.add_argument(
+        "--aoi-id", required=True, help="AOI identifier tagged on every row"
+    )
     parser.add_argument("--out-dir", required=True)
     parser.add_argument("--out-name", default="usgs_gages.gpkg")
     parser.add_argument("--out-sr", type=int, default=5070)

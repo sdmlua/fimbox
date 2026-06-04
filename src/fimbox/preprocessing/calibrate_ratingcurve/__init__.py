@@ -40,6 +40,7 @@ from .src_calibrate import (
     manual_calibration,
 )
 
+
 # Function-style aliases so callers that prefer ``identify_src_bankfull(...)``
 # over ``SrcBankfull(...).run()`` get a one-line entry point. Each just
 # instantiates the class and calls .run().
@@ -67,7 +68,9 @@ def longitudinal_flow_adjustment(aoi_dir):
     return LongitudinalFlowFilter(aoi_dir=aoi_dir).run()
 
 
-def bathymetric_adjustment(aoi_dir, bathy_file_ehydro=None, bathy_file_aibased=None, *, ai_toggle: int = 0):
+def bathymetric_adjustment(
+    aoi_dir, bathy_file_ehydro=None, bathy_file_aibased=None, *, ai_toggle: int = 0
+):
     return BathymetricAdjustment(
         aoi_dir=aoi_dir,
         bathy_file_ehydro=bathy_file_ehydro,
@@ -76,7 +79,14 @@ def bathymetric_adjustment(aoi_dir, bathy_file_ehydro=None, bathy_file_aibased=N
     ).run()
 
 
-def src_adjust_usgs_rating_trace(aoi_dir, usgs_rating_curve_csv, usgs_acceptable_gages, nwm_recur_file, *, n_workers: int = 1):
+def src_adjust_usgs_rating_trace(
+    aoi_dir,
+    usgs_rating_curve_csv,
+    usgs_acceptable_gages,
+    nwm_recur_file,
+    *,
+    n_workers: int = 1,
+):
     return UsgsRatingCalibrator(
         aoi_dir=aoi_dir,
         usgs_rating_curve_csv=usgs_rating_curve_csv,
@@ -86,7 +96,9 @@ def src_adjust_usgs_rating_trace(aoi_dir, usgs_rating_curve_csv, usgs_acceptable
     ).run()
 
 
-def src_adjust_ras2fim_rating(aoi_dir, ras_rating_curve_csv, nwm_recur_file, *, n_workers: int = 1):
+def src_adjust_ras2fim_rating(
+    aoi_dir, ras_rating_curve_csv, nwm_recur_file, *, n_workers: int = 1
+):
     return Ras2fimCalibrator(
         aoi_dir=aoi_dir,
         ras_rating_curve_csv=ras_rating_curve_csv,

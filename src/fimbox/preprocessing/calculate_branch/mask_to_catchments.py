@@ -61,7 +61,9 @@ def rem_zeroed_masked(
         # If the source's declared nodata is NaN (common for GDAL-written
         # float rasters), we cannot use it as a finite sentinel in the
         # output — multiply propagates NaN. Force a finite output sentinel.
-        if src_nodata is None or (isinstance(src_nodata, float) and np.isnan(src_nodata)):
+        if src_nodata is None or (
+            isinstance(src_nodata, float) and np.isnan(src_nodata)
+        ):
             nodata_out = float(nodata)
         else:
             nodata_out = float(src_nodata)

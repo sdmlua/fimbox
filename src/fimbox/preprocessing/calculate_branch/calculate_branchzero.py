@@ -141,7 +141,7 @@ class BranchZero:
         # overwrite that file — every branch runs in parallel and racing
         # on the AOI-root dem.tif corrupts the shared input. Non-zero
         # branches write their per-branch clip directly into branch_dir.
-        is_branch_zero = (bid == "0")
+        is_branch_zero = bid == "0"
         if is_branch_zero:
             dem_clipped = self.out_dir / "dem.tif"
         else:
