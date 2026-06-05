@@ -42,7 +42,7 @@ from fimbox import (
 # AOI parameters — point this at any user-supplied AOI working directory.
 # aoi_code is recorded on every hydroTable row; a generic string is fine
 # (HUC IDs work unchanged for legacy datasets).
-OUT_DIR = Path("/Users/Supath/Downloads/SDML/FIMBOX/out/HUC08060202")
+OUT_DIR = Path(".././out/HUC08060202")
 AOI_CODE = "08060202"
 
 # Tunable CreateHAND parameters- All have sensible defaults in CreateHAND itself.

@@ -1,6 +1,6 @@
 """
 Author: Supath Dhital
-Updated = May 2026
+Updated = June 2026
 ---------------------
 Downloads USGS 3DEP LiDAR points for each bridge in a GeoPackage
 and IDW-interpolates them into per-bridge elevation rasters.
@@ -13,8 +13,6 @@ from __future__ import annotations
 
 import logging
 import os
-import shutil
-import subprocess
 import tempfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
@@ -52,31 +50,6 @@ def _session() -> requests.Session:
 # EPT manifest + hierarchy cache: fetch once per unique EPT URL, reuse for all bridges
 _EPT_CACHE: dict = {}
 _EPT_CACHE_LOCK = Lock()
-
-# Serialize WhiteboxTools binary download — prevents multiple threads racing to unzip it.
-_WBT_READY = False
-_WBT_LOCK = Lock()
-_WBT_EXE: str = ""  # absolute path to whitebox_tools binary, set by _ensure_wbt_ready
-
-
-def _ensure_wbt_ready() -> None:
-    """Download the WBT binary once in the calling thread and record its absolute path.
-
-    WBT's run_tool() calls os.chdir() which is not thread-safe — multiple threads
-    clobbering the cwd causes 'No such file or directory: ./whitebox_tools'. We bypass
-    run_tool entirely and invoke the binary by absolute path via subprocess.
-    """
-    global _WBT_READY, _WBT_EXE
-    if _WBT_READY:
-        return
-    with _WBT_LOCK:
-        if not _WBT_READY:
-            import whitebox as _wbt_mod
-
-            _inst = _wbt_mod.WhiteboxTools()
-            _inst.verbose = False
-            _WBT_EXE = os.path.join(_inst.exe_path, _inst.exe_name)
-            _WBT_READY = True
 
 
 def _ept_meta(base: str) -> tuple[dict, dict]:
@@ -251,9 +224,7 @@ class generateBridgeRaster:
         self.bridge_gpkg = Path(self.bridge_gpkg)
         self._log_dir = Path(self.out_dir)  # log lives in the user-supplied root
         self.out_dir = self._log_dir / "bridge_dem"
-        self._point_dir = self.out_dir / "point_files"
         self._tif_dir = self.out_dir / "lidar_osm_rasters"
-        self._point_dir.mkdir(parents=True, exist_ok=True)
         self._tif_dir.mkdir(parents=True, exist_ok=True)
 
     def status(self) -> dict:
@@ -302,8 +273,6 @@ class generateBridgeRaster:
             f"skip_existing={self.skip_existing}"
         )
         self._process_parallel(footprints)
-        shutil.rmtree(self._point_dir, ignore_errors=True)
-        log.info(f"Removed temporary point_files: {self._point_dir}")
         n_out = len(list(self._tif_dir.glob("*.tif")))
         log.info(f"Bridge rasters complete: {n_out} files --> {self._tif_dir.name}")
         return self._tif_dir
@@ -356,9 +325,6 @@ class generateBridgeRaster:
         return joined
 
     def _process_parallel(self, footprints: gpd.GeoDataFrame):
-        _ensure_wbt_ready()
-
-        point_dir = str(self._point_dir)
         tif_dir = str(self._tif_dir)
         n = len(footprints)
         ok = failed = skipped = 0
@@ -370,7 +336,6 @@ class generateBridgeRaster:
                     bridge_id=row["_bridge_id"],
                     bounds=row.geometry.bounds,
                     lidar_url=row["url"],
-                    point_dir=point_dir,
                     tif_dir=tif_dir,
                     resolution=self.resolution,
                     tile_workers=self.tile_workers,
@@ -400,11 +365,72 @@ class generateBridgeRaster:
         log.info(f"Completed — {ok} processed, {skipped} skipped, {failed} failed")
 
 
+def _idw_rasterize(
+    xy: np.ndarray,
+    z: np.ndarray,
+    bounds: tuple,
+    resolution: float,
+    weight: float = 2.0,
+) -> tuple:
+    """
+    IDW-interpolate scattered (x, y, z) LiDAR points onto a regular grid.
+
+    Every output pixel is always filled — no radius cutoff.  The k nearest
+    points are used regardless of distance, which guarantees full coverage
+    even when point density is lower than the output resolution.
+
+    Returns (grid, transform, nodata) where grid is float32 and transform is
+    an affine rasterio transform.  Pure numpy/scipy — no external binaries.
+    """
+    import rasterio.transform as _rt
+
+    xmin, ymin, xmax, ymax = bounds
+    cols = max(1, int(np.ceil((xmax - xmin) / resolution)))
+    rows = max(1, int(np.ceil((ymax - ymin) / resolution)))
+
+    # pixel centres
+    cx = xmin + (np.arange(cols) + 0.5) * resolution
+    cy = ymax - (np.arange(rows) + 0.5) * resolution
+    gx, gy = np.meshgrid(cx, cy)
+    grid_pts = np.column_stack([gx.ravel(), gy.ravel()])
+
+    # Use up to 12 neighbours — no distance_upper_bound so every pixel always gets a value
+    k = min(12, len(xy))
+    tree = KDTree(xy)
+    dists, idxs = tree.query(grid_pts, k=k)
+    # When k=1 scipy returns 1-D arrays; normalise to (n_pixels, k) for uniform logic
+    if k == 1:
+        dists = dists[:, np.newaxis]
+        idxs  = idxs[:, np.newaxis]
+
+    nodata = np.float32(-9999.0)
+
+    z_vals = z[idxs]  # (n_pixels, k)
+
+    # Exact hits (distance == 0): use the point elevation directly
+    exact_mask = dists == 0.0          # (n_pixels, k)
+    has_exact  = exact_mask.any(axis=1)
+
+    with np.errstate(divide="ignore", invalid="ignore"):
+        w = np.where(~exact_mask, 1.0 / np.power(dists, weight), 0.0)
+
+    w_sum    = w.sum(axis=1)
+    idw_vals = np.where(w_sum > 0, (w * z_vals).sum(axis=1) / w_sum, nodata)
+
+    first_exact_idx = np.argmax(exact_mask, axis=1)
+    exact_z  = z_vals[np.arange(len(grid_pts)), first_exact_idx]
+
+    out = np.where(has_exact, exact_z, idw_vals)
+
+    grid = out.reshape(rows, cols).astype(np.float32)
+    transform = _rt.from_bounds(xmin, ymin, xmax, ymax, cols, rows)
+    return grid, transform, nodata
+
+
 def _process_one_bridge(
     bridge_id: str,
     bounds: tuple,
     lidar_url: str,
-    point_dir: str,
     tif_dir: str,
     resolution: float,
     tile_workers: int = 8,
@@ -412,10 +438,10 @@ def _process_one_bridge(
     bridge_cls_threshold: float = 0.05,
     skip_existing: bool = True,
 ):
-    import laspy
+    import rasterio
+    from rasterio.crs import CRS as _CRS
 
     out_crs = "EPSG:5070"
-    las_path = os.path.join(point_dir, f"{bridge_id}.las")
     tif_path = os.path.join(tif_dir, f"{bridge_id}.tif")
 
     if skip_existing and os.path.exists(tif_path):
@@ -438,69 +464,48 @@ def _process_one_bridge(
 
         bridge_mask = np.isin(cls, list(_BRIDGE_CLASSES))
         if bridge_mask.sum() / len(cls) >= bridge_cls_threshold:
-            # survey has bridge-deck classifications — denoise non-bridge points
+            # survey has bridge-deck classifications — replace non-bridge z with nearest bridge z
             if (~bridge_mask).any():
                 n_bridge = bridge_mask.sum()
                 k = min(2, n_bridge)
                 tree = KDTree(xy[bridge_mask])
                 _, idx = tree.query(xy[~bridge_mask], k=k)
-                # k=1 --> idx shape (N,); k=2 --> (N,2). Normalise to (N,k) for mean(axis=1)
                 if k == 1:
                     idx = idx.reshape(-1, 1)
                 z[~bridge_mask] = z[bridge_mask][idx].mean(axis=1)
 
-        # else: survey doesn't classify bridge decks (class 1/2 only) — use all last-return points
-        hdr = laspy.LasHeader(version="1.2", point_format=0)
-        hdr.offsets = np.array([xy[:, 0].min(), xy[:, 1].min(), z.min()])
-        hdr.scales = np.array([0.001, 0.001, 0.001])
-        las_out = laspy.LasData(header=hdr)
-        las_out.x = xy[:, 0]
-        las_out.y = xy[:, 1]
-        las_out.z = z
-        las_out.write(las_path)
+        # else: survey doesn't classify bridge decks — use all last-return points as-is
 
-        # Run WBT by absolute path so os.chdir() inside run_tool can't corrupt other
-        # threads' cwd. Use returns=all because we already filtered last-returns in
-        # Python; passing returns=last on a LAS with unset return-number fields gives
-        # WBT 0 points and causes it to hang indefinitely on readline().
-        proc = subprocess.Popen(
-            [
-                _WBT_EXE,
-                "--run=LidarIdwInterpolation",
-                f"--i={las_path}",
-                f"--output={tif_path}",
-                "--parameter=elevation",
-                "--returns=all",
-                f"--resolution={resolution}",
-                "--weight=2.0",
-                "--radius=5.0",
-                "-v=false",
-                "--compress_rasters=False",
-            ],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            cwd=os.path.dirname(_WBT_EXE),
+        # Compute grid bounds from point cloud extent (not EPT query bbox)
+        xmin, ymin = xy[:, 0].min(), xy[:, 1].min()
+        xmax, ymax = xy[:, 0].max(), xy[:, 1].max()
+        # Ensure at least one pixel
+        if xmax <= xmin:
+            xmax = xmin + resolution
+        if ymax <= ymin:
+            ymax = ymin + resolution
+
+        grid, transform, nodata = _idw_rasterize(
+            xy, z, (xmin, ymin, xmax, ymax), resolution
         )
-        try:
-            proc.communicate(timeout=30)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-            proc.communicate()
-            log.warning(f"bridge {bridge_id}: WBT IDW timed out after 30s, skipping")
-            return
 
-        # WBT IDW doesn't embed CRS — stamp it explicitly.
-        if os.path.exists(tif_path):
-            import rasterio
-            from rasterio.crs import CRS as _CRS
+        with rasterio.open(
+            tif_path,
+            "w",
+            driver="GTiff",
+            height=grid.shape[0],
+            width=grid.shape[1],
+            count=1,
+            dtype="float32",
+            crs=_CRS.from_string(out_crs),
+            transform=transform,
+            nodata=nodata,
+            compress="lzw",
+        ) as dst:
+            dst.write(grid, 1)
 
-            with rasterio.open(tif_path, "r+") as _dst:
-                _dst.crs = _CRS.from_string(out_crs)
     except Exception as exc:
         log.warning(f"bridge {bridge_id} failed: {exc}")
-    finally:
-        if os.path.exists(las_path):
-            os.remove(las_path)
 
 
 # CLI
