@@ -374,6 +374,18 @@ class DownloadOSMBridges(_OSMBoundaryIO):
     dissolve_buffer: float = 0.0001  # dissolve happens in EPSG:4326
     drop_list_columns: bool = True
 
+    # OSMnx hits a single Overpass endpoint by default; rotate across mirrors
+    # (same hosts the roads downloader uses) so one dead host doesn't fail bridges.
+    # NOTE: ox.settings.overpass_url is the base; OSMnx appends "/interpreter".
+    _OVERPASS_MIRRORS: List[str] = None
+
+    def __post_init__(self):
+        self._OVERPASS_MIRRORS = [
+            "https://overpass-api.de/api",
+            "https://lz4.overpass-api.de/api",
+            "https://z.overpass-api.de/api",
+        ]
+
     @staticmethod
     def _find_touching_groups(gdf: gpd.GeoDataFrame) -> List[set]:
         graph = Graph()
@@ -498,6 +510,10 @@ class DownloadOSMBridges(_OSMBoundaryIO):
         ox.settings.requests_timeout = self.requests_timeout
 
         for attempt in range(1, self.max_attempts + 1):
+            # rotate Overpass mirror each attempt so one dead host doesn't fail bridges
+            ox.settings.overpass_url = self._OVERPASS_MIRRORS[
+                (attempt - 1) % len(self._OVERPASS_MIRRORS)
+            ]
             try:
                 gdf = ox.features_from_polygon(geom4326, {"bridge": True})
                 if gdf is None or len(gdf) == 0:

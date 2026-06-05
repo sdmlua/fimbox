@@ -78,13 +78,13 @@ test_boundary = "/Users/Supath/Downloads/SDML/FIMBOX/Sample_Data/Big_Boundary_MS
 #         resolution=10,
 #     )
 
-# def test_get_osm_roads():
-#     fimbox.DownloadOSMRoads().download(
-#         boundary=test_boundary,
-#         out_dir="../out",
-#         out_name="osm_roads.gpkg",
-#         out_layer="osm_roads",
-#     )
+def test_get_osm_roads():
+    fimbox.DownloadOSMRoads().download(
+        boundary=test_boundary,
+        out_dir="../out",
+        out_name="osm_roads.gpkg",
+        out_layer="osm_roads",
+    )
 
 # def test_get_osm_bridges():
 #     fimbox.DownloadOSMBridges().download(
@@ -95,15 +95,15 @@ test_boundary = "/Users/Supath/Downloads/SDML/FIMBOX/Sample_Data/Big_Boundary_MS
 #     )
 
 
-# Get the HUC8 information
-def test_get_huc8_info():
-    huc8_info = fimbox.getHUC8Info(
-        boundary=test_boundary,
-        calc_overlap=True,
-        save=True,
-        out_dir="../out",
-    )
-    logging.getLogger(__name__).info(f"HUC8 info:\n{huc8_info}")
+# # Get the HUC8 information
+# def test_get_huc8_info():
+#     huc8_info = fimbox.getHUC8Info(
+#         boundary=test_boundary,
+#         calc_overlap=True,
+#         save=True,
+#         out_dir="../out",
+#     )
+#     logging.getLogger(__name__).info(f"HUC8 info:\n{huc8_info}")
 
 
 # USGS gauge points — downloads from the ArcGIS Online FeatureServer.

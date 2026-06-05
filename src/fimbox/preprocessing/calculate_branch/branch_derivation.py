@@ -119,7 +119,7 @@ class BranchDerivation:
         reach_id_attribute: str = "ID",
         catchment_reach_id_attribute: str = "ID",
         stream_order_attribute: str = "order_",
-        branch_buffer_distance_meters: float = 1000.0,
+        branch_buffer_distance_meters: float = 7000.0,
         excluded_stream_orders: tuple[int, ...] = (1, 2),
         min_stream_order: Optional[int] = None,
         max_stream_order: Optional[int] = None,
@@ -140,7 +140,7 @@ class BranchDerivation:
         levees: Optional[str | Path] = None,
         leveed_areas: Optional[str | Path] = None,
         levee_id_attribute: str = "SYSTEM_ID",
-        levee_buffer: float = 150.0,
+        levee_buffer: float = 1000.0,
     ) -> None:
         self.out_dir = Path(out_dir).expanduser().resolve()
         self.area_id = area_id
@@ -356,6 +356,23 @@ class BranchDerivation:
             buffered_stream_boundary_gdf, streams.crs
         )
 
+        # Drop level paths with no catchment (matches inundation-mapping's
+        # remove_branches_without_catchments). Done before
+        # dissolve/headwaters/polygons so a catchment-less branch never reaches
+        # any output and never seeds an empty per-branch DEM.
+        streams = _remove_branches_without_catchments(
+            streams,
+            catchments_gdf,
+            reach_id_attribute=self.reach_id_attribute,
+            branch_id_attribute=self.branch_id_attribute,
+            catchment_reach_id_attribute=self.catchment_reach_id_attribute,
+        )
+        if streams.empty:
+            self.logger.warning("No stream branches remain after catchment filtering")
+            raise ValueError(
+                "No stream branches remain after removing branches without catchments."
+            )
+
         # attach branch IDs to catchments, dissolve, build polygons and headwaters
         catchments_levelpaths = _attach_branch_ids_to_catchments(
             catchments_gdf,
@@ -529,12 +546,12 @@ def derive_area_branches(
     levees: Optional[str | Path] = None,
     leveed_areas: Optional[str | Path] = None,
     levee_id_attribute: str = "SYSTEM_ID",
-    levee_buffer: float = 150.0,
+    levee_buffer: float = 1000.0,
     branch_id_attribute: str = "levpa_id",
     reach_id_attribute: str = "ID",
     catchment_reach_id_attribute: str = "ID",
     stream_order_attribute: str = "order_",
-    branch_buffer_distance_meters: float = 1000.0,
+    branch_buffer_distance_meters: float = 7000.0,
     excluded_stream_orders: tuple[int, ...] = (1, 2),
     min_stream_order: Optional[int] = None,
     max_stream_order: Optional[int] = None,
@@ -732,11 +749,15 @@ def _assign_levelpaths(
             ]
             if not candidates:
                 return
+            # Mainstem selection (matches inundation-mapping's
+            # derive_stream_branches): pick the upstream reach with the highest
+            # stream order, breaking ties by arbolate sum, then reach id for
+            # determinism.
             candidates = sorted(
                 candidates,
                 key=lambda rid: (
-                    arbolate_cache.get(rid, 0.0),
                     order_lookup.get(rid, -1),
+                    arbolate_cache.get(rid, 0.0),
                     rid,
                 ),
                 reverse=True,
@@ -764,6 +785,44 @@ def _assign_levelpaths(
     streams[branch_id_attribute] = streams[reach_id_attribute].map(assigned).astype(str)
     streams["arbolate_sum"] = streams[reach_id_attribute].map(arbolate_cache)
     return streams
+
+
+def _remove_branches_without_catchments(
+    streams: gpd.GeoDataFrame,
+    catchments: gpd.GeoDataFrame,
+    *,
+    reach_id_attribute: str,
+    branch_id_attribute: str,
+    catchment_reach_id_attribute: str,
+) -> gpd.GeoDataFrame:
+    """Drop level paths whose reaches have no matching catchment.
+
+    Port of inundation-mapping ``StreamNetwork.remove_branches_without_catchments``:
+    a whole branch is removed only when *none* of its reach ids appear in the
+    catchment layer, so a branch with at least one catchment is kept intact.
+    """
+    if catchment_reach_id_attribute not in catchments.columns:
+        raise KeyError(
+            f"Catchment reach id column '{catchment_reach_id_attribute}' was not found in catchments."
+        )
+    catchment_reach_ids = set(
+        catchments[catchment_reach_id_attribute].astype(str).unique()
+    )
+
+    reach_ids = streams[reach_id_attribute].astype(str)
+    branch_has_catchment = (
+        reach_ids.isin(catchment_reach_ids)
+        .groupby(streams[branch_id_attribute])
+        .transform("any")
+    )
+    dropped = streams.loc[~branch_has_catchment, branch_id_attribute].unique()
+    if len(dropped):
+        log.info(
+            "Removing %d branch(es) without catchments: %s",
+            len(dropped),
+            ", ".join(map(str, dropped)),
+        )
+    return streams.loc[branch_has_catchment].copy()
 
 
 def _attach_branch_ids_to_catchments(
@@ -835,25 +894,15 @@ def _build_headwaters(
     to_nodes = set(streams["_to_node"])
     upstream_start_rows = streams.loc[~streams["_from_node"].isin(to_nodes)].copy()
 
-    # One canonical headwater per level-path inlet: the upstream-most vertex of
-    # each upstream-start reach. This mirrors inundation-mapping's
-    # StreamNetwork.derive_headwater_points_with_inlets, which sets each
-    # headwater to ``row.geometry.coords[inlet_linestring_index]`` — i.e. the
-    # inlet vertex of the stream line itself. Because the point comes from the
-    # level-path geometry, it lies ON the line (distance 0) and therefore always
-    # falls inside the branch clip polygon / per-branch DEM. Flow accumulation
-    # seeds entirely from this raster, so a headwater that lands outside the
-    # branch DEM produces 0 stream cells and crashes StreamNetReaches.
+    # One headwater per level path: the upstream-most vertex of its
+    # upstream-start reach (matches inundation-mapping's
+    # derive_headwater_points_with_inlets). Taking the point from the level-path
+    # geometry guarantees it lies ON the line and inside the per-branch DEM,
+    # which is what flow accumulation seeds from — a seed outside the DEM gives
+    # 0 stream cells and crashes StreamNetReaches.
     #
-    # An external NWM headwater inventory (``provided_headwaters``), when given,
-    # is used ONLY to annotate the snap distance for diagnostics — never to set
-    # the geometry and never to drop a branch. inundation-mapping does not
-    # filter level-path headwaters by an external point inventory either;
-    # keeping the inlet vertex for every branch is what guarantees each branch
-    # has a seed. (The previous fimbox code kept the raw NWM point geometry,
-    # which can sit kilometres upstream of the stream-order-filtered,
-    # boundary-clipped level path — that is what put the seed outside the branch
-    # DEM and broke every non-zero branch.)
+    # ``provided_headwaters`` (external NWM inventory), if given, only annotates
+    # snap distance for diagnostics — it never sets geometry or drops a branch.
     headwater_points = []
     for _, row in upstream_start_rows.iterrows():
         first_coord = list(row.geometry.coords)[0]

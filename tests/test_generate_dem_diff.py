@@ -10,10 +10,10 @@ import fimbox
 log = logging.getLogger(__name__)
 
 bridge_gpkg = (
-    "/Users/Supath/Downloads/SDML/FIMBOX/out/test_smallB/osm_bridges_subset.gpkg"
+    "/Users/Supath/Downloads/SDML/FIMBOX/out/HUC08060202/osm_bridges_subset.gpkg"
 )
-dem_path = "/Users/Supath/Downloads/SDML/FIMBOX/out/test_smallB/dem.tif"
-out_dir = "/Users/Supath/Downloads/SDML/FIMBOX/out/test_smallB"
+dem_path = "/Users/Supath/Downloads/SDML/FIMBOX/out/HUC08060202/dem.tif"
+out_dir = "/Users/Supath/Downloads/SDML/FIMBOX/out/HUC08060202"
 
 
 # check which bridges already have rasters vs still pending (safe to run anytime)
@@ -51,7 +51,7 @@ def test_bridge_dem_diff():
     log.info(f"Bridge diff raster --> {out_path}")
 
 
-# Run both steps end-to-end (needs pdal + laspy)
+# Run both steps end-to-end
 # def test_full_pipeline():
 #     tif_dir = fimbox.generateBridgeRaster(
 #         bridge_gpkg=bridge_gpkg,

@@ -243,6 +243,11 @@ class getAllInputData:
         all datasets. Default 2000.
     headwater_buffer_cells : int, optional
         Number of DEM cells used for the inner clip when deriving headwaters
+    get_flowlines : bool, optional
+        Download NWM/NHDPlus flowlines (and derive headwater points from them).
+        Default True. Set False to skip.
+    get_catchments : bool, optional
+        Download NWM/NHDPlus catchments. Default True. Set False to skip.
 
     Either ``huc8`` or ``boundary`` must be provided.
     """
@@ -257,6 +262,8 @@ class getAllInputData:
         dem_resolution: int = 10,
         buffer_m: float = 2000.0,
         headwater_buffer_cells: int = 8,
+        get_flowlines: bool = True,
+        get_catchments: bool = True,
     ):
         if huc8 is None and boundary is None:
             raise ValueError("Provide either huc8 or boundary.")
@@ -268,6 +275,8 @@ class getAllInputData:
         self.dem_resolution = dem_resolution
         self.buffer_m = buffer_m
         self.headwater_buffer_cells = headwater_buffer_cells
+        self.get_flowlines = get_flowlines
+        self.get_catchments = get_catchments
 
         self.case_name = f"HUC{huc8}" if huc8 else self.boundary_path.stem
 
@@ -438,21 +447,31 @@ class getAllInputData:
             self.logger.error(f"DEM failed: {exc}", exc_info=True)
 
     def run_nhd(self):
-        all_exist = all(
-            self._out(k).exists()
-            for k in ("nwm_streams", "nwm_catchments", "nwm_lakes")
-        )
+        # Lakes always download; flowlines/catchments are user-toggleable.
+        expected_keys = ["nwm_lakes"]
+        if self.get_flowlines:
+            expected_keys.append("nwm_streams")
+        if self.get_catchments:
+            expected_keys.append("nwm_catchments")
+
+        all_exist = all(self._out(k).exists() for k in expected_keys)
         if all_exist:
             self.logger.info(f"SKIP (exists): nwm_subset_streams/catchments/lakes")
             return
+
+        if not self.get_flowlines:
+            self.logger.info("get_flowlines=False --> skipping NWM flowlines/headwaters")
+        if not self.get_catchments:
+            self.logger.info("get_catchments=False --> skipping NWM catchments")
+
         self.logger.info("--- NWM Flowlines / Catchments / Lakes ---")
         try:
             results = getNHDPlusData(
                 boundary=self.buffer_gdf,
                 out_dir=str(self.case_dir),
                 epsg=self.epsg,
-                download_flowlines=True,
-                download_catchments=True,
+                download_flowlines=self.get_flowlines,
+                download_catchments=self.get_catchments,
                 download_lakes=True,
             )
             if results.get("flowlines") is not None and not results["flowlines"].empty:
@@ -636,6 +655,16 @@ if __name__ == "__main__":
     parser.add_argument("--dem-resolution", type=int, default=10)
     parser.add_argument("--buffer-m", type=float, default=2000.0)
     parser.add_argument("--headwater-buffer-cells", type=int, default=8)
+    parser.add_argument(
+        "--no-flowlines",
+        action="store_true",
+        help="Skip NWM flowline + headwater download (bring your own).",
+    )
+    parser.add_argument(
+        "--no-catchments",
+        action="store_true",
+        help="Skip NWM catchment download (bring your own).",
+    )
     args = parser.parse_args()
 
     pp = getAllInputData(
@@ -647,5 +676,7 @@ if __name__ == "__main__":
         dem_resolution=args.dem_resolution,
         buffer_m=args.buffer_m,
         headwater_buffer_cells=args.headwater_buffer_cells,
+        get_flowlines=not args.no_flowlines,
+        get_catchments=not args.no_catchments,
     )
     pp.run()
