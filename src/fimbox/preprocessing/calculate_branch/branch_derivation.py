@@ -22,6 +22,8 @@ import numpy as np
 import pandas as pd
 from shapely.geometry import Point
 
+from ..source_naming import detect_identifier, resolve_source, source_name
+
 gpd.options.io_engine = "pyogrio"
 
 log = logging.getLogger(__name__)
@@ -87,6 +89,18 @@ def discover_area_inputs(
                 return candidate
         return None
 
+    # Source-derived files carry an identifier prefix (default "nwm"); resolve
+    # them by their stable suffix so any prefix is found.
+    def must_source(kind: str) -> Path:
+        path = resolve_source(root, kind)
+        if not path.exists():
+            raise FileNotFoundError(f"Could not find a *{kind} file in {root}")
+        return path
+
+    def may_source(kind: str) -> Optional[Path]:
+        path = resolve_source(root, kind)
+        return path if path.exists() else None
+
     return AreaInputPaths(
         area_id=area_id or root.name,
         staged_dir=root,
@@ -97,10 +111,10 @@ def discover_area_inputs(
             "wbd_buffered.gpkg",
             "wbd.gpkg",
         ),
-        stream_network=must_find("nwm_subset_streams.gpkg"),
-        catchments=must_find("nwm_catchments_proj_subset.gpkg"),
-        lakes=may_find("nwm_lakes_proj_subset.gpkg"),
-        headwaters=may_find("nwm_headwater_points_subset.gpkg", "nwm_headwaters.gpkg"),
+        stream_network=must_source("streams"),
+        catchments=must_source("catchments"),
+        lakes=may_source("lakes"),
+        headwaters=may_source("headwaters_points") or may_source("headwaters"),
         dem=may_find("dem.tif"),
         levees=may_find("nld_subset_levees.gpkg"),
         leveed_areas=may_find("LeveeProtectedAreas_subset.gpkg"),
@@ -195,6 +209,10 @@ class BranchDerivation:
         else:
             self.logger.info("Using explicit input dataset overrides")
 
+        # Source-file prefix (default "nwm"); detected from the staged streams
+        # file so derived level-path outputs keep the same identifier.
+        identifier = detect_identifier(self.out_dir)
+
         stream_path = (
             Path(self.stream_network_override).resolve()
             if self.stream_network_override
@@ -237,13 +255,13 @@ class BranchDerivation:
 
         stream_path = self._localize_vector_override(
             stream_path,
-            "nwm_subset_streams.gpkg",
+            source_name("streams", identifier),
             self.stream_network_override is not None,
             self.stream_layer,
         )
         catchment_path = self._localize_vector_override(
             catchment_path,
-            "nwm_catchments_proj_subset.gpkg",
+            source_name("catchments", identifier),
             self.catchments_override is not None,
             self.catchments_layer,
         )
@@ -268,14 +286,14 @@ class BranchDerivation:
         if lake_path is not None:
             lake_path = self._localize_vector_override(
                 lake_path,
-                "nwm_lakes_proj_subset.gpkg",
+                source_name("lakes", identifier),
                 self.lakes_override is not None,
                 self.waterbodies_layer,
             )
         if headwater_path is not None:
             headwater_path = self._localize_vector_override(
                 headwater_path,
-                "nwm_headwater_points_subset.gpkg",
+                source_name("headwaters_points", identifier),
                 self.headwaters_override is not None,
                 self.headwaters_layer,
             )
@@ -420,19 +438,19 @@ class BranchDerivation:
             .reset_index(drop=True)
         )
 
-        # write all outputs
+        # write all outputs (level-path derivatives keep the source identifier)
         result = BranchDerivationResult(
             output_dir=self.out_dir,
-            levelpaths=self.out_dir / "nwm_subset_streams_levelPaths.gpkg",
+            levelpaths=self.out_dir / source_name("lp_streams", identifier),
             dissolved_levelpaths=self.out_dir
-            / "nwm_subset_streams_levelPaths_dissolved.gpkg",
+            / source_name("lp_streams_dissolved", identifier),
             extended_levelpaths=self.out_dir
-            / "nwm_subset_streams_levelPaths_extended.gpkg",
+            / source_name("lp_streams_extended", identifier),
             catchments_levelpaths=self.out_dir
-            / "nwm_catchments_proj_subset_levelPaths.gpkg",
-            headwaters=self.out_dir / "nwm_headwaters.gpkg",
+            / source_name("lp_catchments", identifier),
+            headwaters=self.out_dir / source_name("headwaters", identifier),
             dissolved_headwaters=self.out_dir
-            / "nwm_subset_streams_levelPaths_dissolved_headwaters.gpkg",
+            / source_name("lp_streams_dissolved_headwaters", identifier),
             branch_polygons=self.out_dir / "branch_polygons.gpkg",
             branch_list=self.out_dir / "branch_ids.lst",
             branch_dataframe=branch_df,

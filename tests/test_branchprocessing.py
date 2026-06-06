@@ -45,6 +45,9 @@ from fimbox import (
 OUT_DIR = Path(".././out/test_smallB")
 AOI_CODE = "08060202"
 
+# Source-data filename prefix.
+IDENTIFIER = "nwm"
+
 # Tunable CreateHAND parameters- All have sensible defaults in CreateHAND itself.
 PARAMS_CREATE_HAND = dict(
     cost_distance_tolerance=50.0,  # m, lateral cost distance
@@ -63,21 +66,21 @@ PARAMS_CREATE_HAND = dict(
 )
 
 DEM = OUT_DIR / "dem.tif"
-STREAMS = OUT_DIR / "nwm_subset_streams.gpkg"
+STREAMS = OUT_DIR / f"{IDENTIFIER}_subset_streams.gpkg"
 BOUNDARY_BUF = OUT_DIR / "wbd_buffered.gpkg"
-CATCHMENTS = OUT_DIR / "nwm_catchments_proj_subset.gpkg"
+CATCHMENTS = OUT_DIR / f"{IDENTIFIER}_catchments_proj_subset.gpkg"
 HEADWATERS = (
-    OUT_DIR / "nwm_headwater_points_subset.gpkg"
-    if (OUT_DIR / "nwm_headwater_points_subset.gpkg").is_file()
-    else OUT_DIR / "nwm_headwaters.gpkg"
+    OUT_DIR / f"{IDENTIFIER}_headwater_points_subset.gpkg"
+    if (OUT_DIR / f"{IDENTIFIER}_headwater_points_subset.gpkg").is_file()
+    else OUT_DIR / f"{IDENTIFIER}_headwaters.gpkg"
 )
-LEVELPATH_EXT = OUT_DIR / "nwm_subset_streams_levelPaths_extended.gpkg"
+LEVELPATH_EXT = OUT_DIR / f"{IDENTIFIER}_subset_streams_levelPaths_extended.gpkg"
 BRIDGE_DIFF = OUT_DIR / "bridge_elev_diff.tif"
 NLD_LEVEES = OUT_DIR / "3d_nld_subset_levees_burned.gpkg"
 
 # optional files
 WBD8_CLP = OUT_DIR / "wbd8_clp.gpkg"
-LAKES = OUT_DIR / "nwm_lakes_proj_subset.gpkg"
+LAKES = OUT_DIR / f"{IDENTIFIER}_lakes_proj_subset.gpkg"
 LEVEE_AREAS = OUT_DIR / "LeveeProtectedAreas_subset.gpkg"
 LEVEE_LP_CSV = OUT_DIR / "levee_levelpaths.csv"
 
@@ -592,412 +595,412 @@ def test_step_B13_polygonize_catchments():
     assert CATCH_POLY.exists() and "HydroID" in gdf.columns and len(gdf) > 0
 
 
-# def test_step_B14_filter_catchments():
-#     """CreateHAND step 14: drop slivers + attach flow attributes per HydroID."""
-#     from fimbox import FilterCatchments
-
-#     for p in (CATCH_POLY, SPLIT_REACHES):
-#         assert p.exists(), f"missing: {p}"
-#     out_catch, out_flows = FilterCatchments(
-#         catchments_gpkg=CATCH_POLY,
-#         flows_gpkg=SPLIT_REACHES,
-#         out_catchments=FILT_CATCH,
-#         out_flows=FILT_FLOWS,
-#         aoi_code=AOI_CODE,
-#         boundary_gpkg=WBD8_CLP if WBD8_CLP.exists() else None,
-#     ).run()
-#     import geopandas as gpd
-
-#     catches = gpd.read_file(str(out_catch))
-#     flows = gpd.read_file(str(out_flows))
-#     log.info(f"filtered catchments: {len(catches)}  flows: {len(flows)}")
-#     assert len(catches) > 0 and "areasqkm" in catches.columns
-#     assert len(flows) > 0 and "HydroID" in flows.columns
-
-
-# def test_step_B15_rasterize_filtered_catchments():
-#     """CreateHAND step 15: burn HydroID back onto the reference raster grid."""
-#     from fimbox.preprocessing.calculate_branch.create_hand import (
-#         _rasterize_catchments,
-#     )
-
-#     for p in (FILT_CATCH, GW_REACHES):
-#         assert p.exists(), f"missing: {p}"
-#     _rasterize_catchments(FILT_CATCH, GW_REACHES, FILT_TIF)
-#     assert FILT_TIF.exists()
-
-
-# def test_step_B16_mask_slopes_to_catchments():
-#     """CreateHAND step 16: clip D8 slopes to the filtered catchment mask."""
-#     from fimbox import mask_slopes_to_catchments
-
-#     for p in (SLOPES_D8, FILT_TIF):
-#         assert p.exists(), f"missing: {p}"
-#     mask_slopes_to_catchments(SLOPES_D8, FILT_TIF, SLOPES_MASKED)
-#     assert SLOPES_MASKED.exists()
-
-
-# def test_step_B17_stages_and_catchlist():
-#     """CreateHAND step 17: write the stage ladder + per-HydroID metadata text files."""
-#     from fimbox import make_stages_and_catchlist
-
-#     for p in (FILT_FLOWS, FILT_CATCH):
-#         assert p.exists(), f"missing: {p}"
-#     make_stages_and_catchlist(
-#         flows_gpkg=FILT_FLOWS,
-#         catchments_gpkg=FILT_CATCH,
-#         out_stages=STAGE_TXT,
-#         out_catchlist=CATCHLIST_TXT,
-#         stages_min=0.0,
-#         stages_interval=0.3048,
-#         stages_max=25.2984,
-#     )
-#     assert STAGE_TXT.exists() and CATCHLIST_TXT.exists()
-
-
-# def test_step_B18_build_src_base():
-#     """CreateHAND step 18: synthetic rating curve base table (TauDEM-style geometry)."""
-#     from fimbox import build_src_base
-
-#     for p in (REM_ZEROED, FILT_TIF, SLOPES_MASKED, CATCHLIST_TXT, STAGE_TXT):
-#         assert p.exists(), f"missing: {p}"
-#     build_src_base(
-#         hand_raster=REM_ZEROED,
-#         catch_raster=FILT_TIF,
-#         slope_raster=SLOPES_MASKED,
-#         catchlist_txt=CATCHLIST_TXT,
-#         stages_txt=STAGE_TXT,
-#         out_csv=SRC_BASE_CSV,
-#     )
-#     import pandas as pd
-
-#     df = pd.read_csv(SRC_BASE_CSV)
-#     log.info(f"src_base: {len(df)} rows  HydroIDs={df['CatchId'].nunique()}")
-#     assert SRC_BASE_CSV.exists() and len(df) > 0
-
-
-# def test_step_B19_add_crosswalk():
-#     """CreateHAND step 19: NWM crosswalk + Manning's hydraulics + hydroTable."""
-#     from fimbox import add_crosswalk
-
-#     for p in (FILT_CATCH, FILT_FLOWS, SRC_BASE_CSV, STREAMS):
-#         assert p.exists(), f"missing: {p}"
-#     add_crosswalk(
-#         catchments_gpkg=FILT_CATCH,
-#         flows_gpkg=FILT_FLOWS,
-#         src_base_csv=SRC_BASE_CSV,
-#         nwm_streams_gpkg=STREAMS,
-#         out_catchments_gpkg=XWALK_CATCH,
-#         out_flows_gpkg=XWALK_FLOWS,
-#         out_src_csv=SRC_FULL_CSV,
-#         out_src_json=SRC_JSON,
-#         out_crosswalk_csv=XWALK_CSV,
-#         out_hydro_csv=HYDRO_TABLE,
-#         aoi_code=AOI_CODE,
-#         boundary_gpkg=WBD8_CLP if WBD8_CLP.exists() else None,
-#         mannings_n=0.06,
-#         min_catchment_area=0.25,
-#         min_stream_length=0.5,
-#         max_distance_m=100.0,
-#         small_segments_csv=BRANCH_DIR / f"small_segments_{BRANCH_ID}.csv",
-#     )
-#     import pandas as pd
-
-#     ht = pd.read_csv(HYDRO_TABLE, dtype={"aoi_code": str, "HydroID": str})
-#     log.info(f"hydroTable: {len(ht)} rows  HydroIDs={ht['HydroID'].nunique()}")
-#     assert HYDRO_TABLE.exists() and (ht["discharge_cms"] >= 0).all()
-
-
-# def test_step_B20_heal_bridges_osm():
-#     """CreateHAND step 20: raise HAND at OSM bridge decks (in-place REM update)."""
-#     from fimbox import heal_bridges_osm
-
-#     bridges_gpkg = OUT_DIR / "osm_bridges_subset.gpkg"
-#     if not bridges_gpkg.exists():
-#         log.warning("skipping bridge heal — no OSM bridges gpkg")
-#         return
-#     for p in (REM_ZEROED, XWALK_CATCH):
-#         assert p.exists(), f"missing: {p}"
-#     bridge_diff = OUT_DIR / "bridge_elev_diff.tif"
-#     heal_bridges_osm(
-#         hand_raster=REM_ZEROED,
-#         bridges_gpkg=bridges_gpkg,
-#         catchments_gpkg=XWALK_CATCH,
-#         out_centroids_gpkg=BRIDGES_GPKG,
-#         bridge_diff_raster=bridge_diff if bridge_diff.exists() else None,
-#     )
-#     assert BRIDGES_GPKG.exists()
-
-
-# def test_step_B21_process_roads_fimpact():
-#     """CreateHAND step 21: sample HAND along OSM roads to derive flood thresholds."""
-#     from fimbox import process_roads_fimpact
-
-#     roads_gpkg = OUT_DIR / "osm_roads_subset.gpkg"
-#     if not roads_gpkg.exists():
-#         log.warning("skipping road FIMpact — no OSM roads gpkg")
-#         return
-#     for p in (REM_ZEROED, XWALK_CATCH):
-#         assert p.exists(), f"missing: {p}"
-#     process_roads_fimpact(
-#         hand_raster=REM_ZEROED,
-#         roads_gpkg=roads_gpkg,
-#         catchments_gpkg=XWALK_CATCH,
-#         out_csv=ROADS_CSV,
-#     )
-#     assert ROADS_CSV.exists()
-
-
-# # Stage C — branch-zero post-CreateHAND steps
-# # (download USGS gauges --> AOI-level assignment --> branch-zero crosswalk --> cleanup)
-
-# # AOI-level path to the staged USGS gages gpkg
-# USGS_GAGES = OUT_DIR / "usgs_gages.gpkg"
-# USGS_SUBSET = OUT_DIR / "usgs_subset_gages.gpkg"
-# USGS_SUBSET_BZERO = OUT_DIR / f"usgs_subset_gages_{BRANCH_ID}.gpkg"
-# NWM_LEVELPATHS = OUT_DIR / "nwm_subset_streams_levelPaths.gpkg"
-
-
-# def test_step_C20_download_usgs_gages():
-#     """Download USGS gauge points inside the AOI from the ArcGIS Online
-#     FeatureServer. Writes ``usgs_gages.gpkg`` at the AOI root, with the columns
-#     ``assign_gages_to_branches`` expects: ``location_id``, ``feature_id``,
-#     ``aoi_id``, ``source``, geometry.
-#     """
-#     from fimbox import DownloadUSGSGages
-
-#     # Use the buffered boundary so gauges just outside the WBD are still
-#     # captured (they may snap to streams that drain into the AOI).
-#     boundary = BOUNDARY_BUF if BOUNDARY_BUF.exists() else WBD8_CLP
-#     assert boundary.exists(), f"missing boundary: {boundary}"
-
-#     gdf = DownloadUSGSGages().download(
-#         boundary=boundary,
-#         aoi_id=AOI_CODE,
-#         out_dir=OUT_DIR,
-#         out_name="usgs_gages.gpkg",
-#         out_layer="usgs_gages",
-#     )
-#     log.info(f"USGS gauges downloaded: {len(gdf)} features --> {USGS_GAGES.name}")
-#     # Empty AOI (no gauges in CONUS layer) is acceptable; only assert the
-#     # file exists when at least one feature came back.
-#     if len(gdf) > 0:
-#         assert USGS_GAGES.exists()
-#         assert {"location_id", "feature_id", "aoi_id", "source"}.issubset(gdf.columns)
-
-
-# def test_step_C21_assign_gages_to_branches():
-#     """Stage 1 of the gage crosswalk: tag every gage with a ``feature_id`` +
-#     ``levpa_id`` (= branch id) and write the AOI-wide + branch-zero gpkgs.
-
-#     Skips if either ``usgs_gages.gpkg`` (from C20) or
-#     ``nwm_subset_streams_levelPaths.gpkg`` (from BranchDerivation in Z0) is
-#     missing — both prerequisites get logged so a failure points at the
-#     right upstream step.
-#     """
-#     from fimbox import assign_gages_to_branches
-
-#     if not USGS_GAGES.exists():
-#         log.warning(
-#             "skipping gage assignment — usgs_gages.gpkg missing (run step_C20 first)"
-#         )
-#         return
-#     if not NWM_LEVELPATHS.exists():
-#         log.warning(
-#             "skipping gage assignment — nwm_subset_streams_levelPaths.gpkg missing "
-#             "(run step_Z0_branch_derivation first)"
-#         )
-#         return
-
-#     assign_gages_to_branches(
-#         usgs_gages_gpkg=USGS_GAGES,
-#         nwm_streams_levelpaths_gpkg=NWM_LEVELPATHS,
-#         aoi_id=AOI_CODE,
-#         out_dir=OUT_DIR,
-#         # DownloadUSGSGages writes "aoi_id"; the default filter column ("HUC8")
-#         # would not find anything in that gpkg.
-#         aoi_filter_column="aoi_id",
-#         branch_zero_id=BRANCH_ID,
-#     )
-#     # When the AOI actually contains gauges both files exist; on empty AOIs
-#     # neither is written and the function returns None (logged a warning).
-#     if USGS_SUBSET.exists():
-#         log.info(
-#             f"AOI-wide gages --> {USGS_SUBSET.name} | "
-#             f"branch-zero --> {USGS_SUBSET_BZERO.name}"
-#         )
-#         assert USGS_SUBSET_BZERO.exists()
-
-
-# def test_step_C22_usgs_crosswalk_branch_zero():
-#     """Stage 2 of the gage crosswalk for branch zero.
-
-#     Snaps every branch-zero gage to its DEM-derived thalweg and samples the
-#     DEM + thalweg-conditioned DEM to populate ``dem_elevation`` and
-#     ``dem_adj_elevation`` on the gage table. Output:
-#     ``branches/0/usgs_elev_table.csv``.
-
-#     Prerequisites: ``usgs_subset_gages_0.gpkg`` (from C21) and the per-branch
-#     CreateHAND outputs (from Z1 + the B-series). Skips silently when the
-#     branch-zero gage gpkg isn't on disk, so an AOI with no gauges does not
-#     fail the suite.
-#     """
-#     from fimbox import run_branch_crosswalk
-
-#     if not USGS_SUBSET_BZERO.exists():
-#         log.warning(
-#             "skipping USGS crosswalk — usgs_subset_gages_0.gpkg missing "
-#             "(run step_C20 + step_C21 first to produce it)"
-#         )
-#         return
-#     bzero_gages = USGS_SUBSET_BZERO
-
-#     # dem_meters_{B}.tif is the inundation-mapping name; fimbox writes dem_{B}.tif
-#     # via BranchZero. Use whichever exists.
-#     dem_b = BRANCH_DIR / f"dem_meters_{BRANCH_ID}.tif"
-#     if not dem_b.exists():
-#         dem_b = DEM_BRANCH
-
-#     for p in (XWALK_CATCH, FILT_FLOWS, dem_b, THALWEG_COND):
-#         assert p.exists(), f"missing: {p}"
-
-#     out = run_branch_crosswalk(
-#         aoi_gages_gpkg=bzero_gages,
-#         branch_catchments_gpkg=XWALK_CATCH,
-#         branch_flows_gpkg=FILT_FLOWS,
-#         dem_path=dem_b,
-#         dem_thalweg_path=THALWEG_COND,
-#         branch_id=BRANCH_ID,
-#         out_dir=BRANCH_DIR,
-#     )
-#     usgs_table = BRANCH_DIR / "usgs_elev_table.csv"
-#     log.info(f"USGS crosswalk wrote: {[p for p in out.values() if p]}")
-#     # usgs_elev_table.csv only exists when the AOI has gages — log either way.
-#     if usgs_table.exists():
-#         import pandas as pd
-
-#         df = pd.read_csv(usgs_table)
-#         log.info(f"usgs_elev_table.csv rows: {len(df)}")
-
-
-# def test_step_C23_outputs_cleanup_branch_zero():
-#     """Apply the deny-list cleanup to ``branches/0/``.
-
-#     Default behaviour deletes every intermediate raster + vector listed in
-#     --> fimbox/config/deny_branch_zero.lst.
-#     """
-#     import os
-
-#     from fimbox import remove_deny_list_files
-
-#     deny_path = (
-#         Path(__file__).resolve().parent.parent / "config" / "deny_branch_zero.lst"
-#     )
-#     assert deny_path.is_file(), f"deny list missing: {deny_path}"
-
-#     # API sanity checks that always run (never touch real files).
-#     assert remove_deny_list_files(BRANCH_DIR, "NONE", BRANCH_ID) == 0
-#     assert remove_deny_list_files(BRANCH_DIR, "none", BRANCH_ID) == 0
-
-#     if os.environ.get("FIMBOX_KEEP_BRANCH_ZERO"):
-#         n_patterns = sum(
-#             1
-#             for L in deny_path.read_text().splitlines()
-#             if L.strip() and not L.lstrip().startswith("#")
-#         )
-#         log.info(
-#             f"step_C23: skipping cleanup (FIMBOX_KEEP_BRANCH_ZERO set). "
-#             f"{deny_path.name} has {n_patterns} active patterns; "
-#             "unset the env var to enable cleanup."
-#         )
-#         return
-
-#     # The branch-0 directory may be empty when only later steps have been
-#     # populated, or when an earlier C23 run already cleaned it. Skip cleanly
-#     # if there's nothing to do.
-#     if not BRANCH_DIR.exists():
-#         log.warning(f"skipping cleanup — branch dir {BRANCH_DIR} missing")
-#         return
-
-#     n = remove_deny_list_files(
-#         src_dir=BRANCH_DIR,
-#         deny_list=deny_path,
-#         branch_id=BRANCH_ID,
-#         verbose=True,
-#     )
-#     log.info(f"step_C23: removed {n} files from {BRANCH_DIR}")
-
-
-# def test_step_C24_calculate_allbranches(tmp_path):
-#     """Fast wrapper check without launching real branch workers."""
-#     from fimbox import AOIProcessingConfig, calculate_allbranches
-
-#     aoi_dir = tmp_path / "aoi"
-#     aoi_dir.mkdir()
-#     # Match BranchDerivation's actual output: branch_ids.lst (one id per line).
-#     # Empty file = branch-zero-only run, which is what this wrapper test exercises.
-#     branch_list_path = aoi_dir / "branch_ids.lst"
-#     branch_list_path.write_text("")
-
-#     deny_unit_list = tmp_path / "deny_unit.lst"
-#     deny_unit_list.write_text("temporary_{}.tif\n")
-#     removable = aoi_dir / f"temporary_{AOI_CODE}.tif"
-#     removable.write_bytes(b"x")
-
-#     result = calculate_allbranches(
-#         AOIProcessingConfig(
-#             aoi_dir=aoi_dir,
-#             aoi_id=AOI_CODE,
-#             branch_list_path=branch_list_path,
-#             n_workers=1,
-#         ),
-#         delete_deny_list=True,
-#         deny_unit_list=deny_unit_list,
-#         branch_ids_csv=aoi_dir / "branch_ids.csv",
-#     )
-
-#     assert result.n_branch_zero_recorded == 1
-#     assert result.n_non_zero_recorded == 0
-#     assert result.n_unit_files_removed == 1
-#     assert not removable.exists()
-
-
-# def test_step_C25_calculate_allbranches_live_run():
-#     """Live run for the real non-zero branch loop.
-
-#     Set FIMBOX_KEEP_UNIT=1 to skip AOI-level cleanup.
-#     Set FIMBOX_SKIP_ALLBRANCHES=1 to skip this test (e.g. during quick CI
-#     smoke runs); by default it always runs.
-#     """
-#     from fimbox import AOIProcessingConfig, calculate_allbranches
-
-#     if os.environ.get("FIMBOX_SKIP_ALLBRANCHES"):
-#         pytest.skip("FIMBOX_SKIP_ALLBRANCHES set — skipping live branch loop")
-
-#     # BranchDerivation writes branch_ids.lst
-#     branch_list_path = OUT_DIR / "branch_ids.lst"
-
-#     deny_unit_list = Path(__file__).resolve().parent.parent / "config" / "deny_unit.lst"
-#     assert deny_unit_list.is_file(), f"deny_unit.lst missing: {deny_unit_list}"
-
-#     cfg = AOIProcessingConfig(
-#         aoi_dir=OUT_DIR,
-#         aoi_id=AOI_CODE,
-#         branch_list_path=branch_list_path,
-#         n_workers=int(os.environ.get("FIMBOX_BRANCH_WORKERS", "1")),
-#         delete_deny_list=True,
-#     )
-
-#     delete_deny_list = True
-#     result = calculate_allbranches(
-#         cfg,
-#         delete_deny_list=delete_deny_list,
-#         deny_unit_list=deny_unit_list if delete_deny_list else None,
-#         branch_ids_csv=OUT_DIR / "branch_ids.csv",
-#     )
-
-#     assert result.n_branch_zero_recorded == 1
-#     assert result.branch_ids_csv.exists(), "branch_ids.csv was not created"
-#     assert result.n_non_zero_recorded == sum(
-#         1 for r in result.branch_results if r.status == "ok"
-#     )
+def test_step_B14_filter_catchments():
+    """CreateHAND step 14: drop slivers + attach flow attributes per HydroID."""
+    from fimbox import FilterCatchments
+
+    for p in (CATCH_POLY, SPLIT_REACHES):
+        assert p.exists(), f"missing: {p}"
+    out_catch, out_flows = FilterCatchments(
+        catchments_gpkg=CATCH_POLY,
+        flows_gpkg=SPLIT_REACHES,
+        out_catchments=FILT_CATCH,
+        out_flows=FILT_FLOWS,
+        aoi_code=AOI_CODE,
+        boundary_gpkg=WBD8_CLP if WBD8_CLP.exists() else None,
+    ).run()
+    import geopandas as gpd
+
+    catches = gpd.read_file(str(out_catch))
+    flows = gpd.read_file(str(out_flows))
+    log.info(f"filtered catchments: {len(catches)}  flows: {len(flows)}")
+    assert len(catches) > 0 and "areasqkm" in catches.columns
+    assert len(flows) > 0 and "HydroID" in flows.columns
+
+
+def test_step_B15_rasterize_filtered_catchments():
+    """CreateHAND step 15: burn HydroID back onto the reference raster grid."""
+    from fimbox.preprocessing.calculate_branch.create_hand import (
+        _rasterize_catchments,
+    )
+
+    for p in (FILT_CATCH, GW_REACHES):
+        assert p.exists(), f"missing: {p}"
+    _rasterize_catchments(FILT_CATCH, GW_REACHES, FILT_TIF)
+    assert FILT_TIF.exists()
+
+
+def test_step_B16_mask_slopes_to_catchments():
+    """CreateHAND step 16: clip D8 slopes to the filtered catchment mask."""
+    from fimbox import mask_slopes_to_catchments
+
+    for p in (SLOPES_D8, FILT_TIF):
+        assert p.exists(), f"missing: {p}"
+    mask_slopes_to_catchments(SLOPES_D8, FILT_TIF, SLOPES_MASKED)
+    assert SLOPES_MASKED.exists()
+
+
+def test_step_B17_stages_and_catchlist():
+    """CreateHAND step 17: write the stage ladder + per-HydroID metadata text files."""
+    from fimbox import make_stages_and_catchlist
+
+    for p in (FILT_FLOWS, FILT_CATCH):
+        assert p.exists(), f"missing: {p}"
+    make_stages_and_catchlist(
+        flows_gpkg=FILT_FLOWS,
+        catchments_gpkg=FILT_CATCH,
+        out_stages=STAGE_TXT,
+        out_catchlist=CATCHLIST_TXT,
+        stages_min=0.0,
+        stages_interval=0.3048,
+        stages_max=25.2984,
+    )
+    assert STAGE_TXT.exists() and CATCHLIST_TXT.exists()
+
+
+def test_step_B18_build_src_base():
+    """CreateHAND step 18: synthetic rating curve base table (TauDEM-style geometry)."""
+    from fimbox import build_src_base
+
+    for p in (REM_ZEROED, FILT_TIF, SLOPES_MASKED, CATCHLIST_TXT, STAGE_TXT):
+        assert p.exists(), f"missing: {p}"
+    build_src_base(
+        hand_raster=REM_ZEROED,
+        catch_raster=FILT_TIF,
+        slope_raster=SLOPES_MASKED,
+        catchlist_txt=CATCHLIST_TXT,
+        stages_txt=STAGE_TXT,
+        out_csv=SRC_BASE_CSV,
+    )
+    import pandas as pd
+
+    df = pd.read_csv(SRC_BASE_CSV)
+    log.info(f"src_base: {len(df)} rows  HydroIDs={df['CatchId'].nunique()}")
+    assert SRC_BASE_CSV.exists() and len(df) > 0
+
+
+def test_step_B19_add_crosswalk():
+    """CreateHAND step 19: NWM crosswalk + Manning's hydraulics + hydroTable."""
+    from fimbox import add_crosswalk
+
+    for p in (FILT_CATCH, FILT_FLOWS, SRC_BASE_CSV, STREAMS):
+        assert p.exists(), f"missing: {p}"
+    add_crosswalk(
+        catchments_gpkg=FILT_CATCH,
+        flows_gpkg=FILT_FLOWS,
+        src_base_csv=SRC_BASE_CSV,
+        nwm_streams_gpkg=STREAMS,
+        out_catchments_gpkg=XWALK_CATCH,
+        out_flows_gpkg=XWALK_FLOWS,
+        out_src_csv=SRC_FULL_CSV,
+        out_src_json=SRC_JSON,
+        out_crosswalk_csv=XWALK_CSV,
+        out_hydro_csv=HYDRO_TABLE,
+        aoi_code=AOI_CODE,
+        boundary_gpkg=WBD8_CLP if WBD8_CLP.exists() else None,
+        mannings_n=0.06,
+        min_catchment_area=0.25,
+        min_stream_length=0.5,
+        max_distance_m=100.0,
+        small_segments_csv=BRANCH_DIR / f"small_segments_{BRANCH_ID}.csv",
+    )
+    import pandas as pd
+
+    ht = pd.read_csv(HYDRO_TABLE, dtype={"aoi_code": str, "HydroID": str})
+    log.info(f"hydroTable: {len(ht)} rows  HydroIDs={ht['HydroID'].nunique()}")
+    assert HYDRO_TABLE.exists() and (ht["discharge_cms"] >= 0).all()
+
+
+def test_step_B20_heal_bridges_osm():
+    """CreateHAND step 20: raise HAND at OSM bridge decks (in-place REM update)."""
+    from fimbox import heal_bridges_osm
+
+    bridges_gpkg = OUT_DIR / "osm_bridges_subset.gpkg"
+    if not bridges_gpkg.exists():
+        log.warning("skipping bridge heal — no OSM bridges gpkg")
+        return
+    for p in (REM_ZEROED, XWALK_CATCH):
+        assert p.exists(), f"missing: {p}"
+    bridge_diff = OUT_DIR / "bridge_elev_diff.tif"
+    heal_bridges_osm(
+        hand_raster=REM_ZEROED,
+        bridges_gpkg=bridges_gpkg,
+        catchments_gpkg=XWALK_CATCH,
+        out_centroids_gpkg=BRIDGES_GPKG,
+        bridge_diff_raster=bridge_diff if bridge_diff.exists() else None,
+    )
+    assert BRIDGES_GPKG.exists()
+
+
+def test_step_B21_process_roads_fimpact():
+    """CreateHAND step 21: sample HAND along OSM roads to derive flood thresholds."""
+    from fimbox import process_roads_fimpact
+
+    roads_gpkg = OUT_DIR / "osm_roads_subset.gpkg"
+    if not roads_gpkg.exists():
+        log.warning("skipping road FIMpact — no OSM roads gpkg")
+        return
+    for p in (REM_ZEROED, XWALK_CATCH):
+        assert p.exists(), f"missing: {p}"
+    process_roads_fimpact(
+        hand_raster=REM_ZEROED,
+        roads_gpkg=roads_gpkg,
+        catchments_gpkg=XWALK_CATCH,
+        out_csv=ROADS_CSV,
+    )
+    assert ROADS_CSV.exists()
+
+
+# Stage C — branch-zero post-CreateHAND steps
+# (download USGS gauges --> AOI-level assignment --> branch-zero crosswalk --> cleanup)
+
+# AOI-level path to the staged USGS gages gpkg
+USGS_GAGES = OUT_DIR / "usgs_gages.gpkg"
+USGS_SUBSET = OUT_DIR / "usgs_subset_gages.gpkg"
+USGS_SUBSET_BZERO = OUT_DIR / f"usgs_subset_gages_{BRANCH_ID}.gpkg"
+NWM_LEVELPATHS = OUT_DIR / f"{IDENTIFIER}_subset_streams_levelPaths.gpkg"
+
+
+def test_step_C20_download_usgs_gages():
+    """Download USGS gauge points inside the AOI from the ArcGIS Online
+    FeatureServer. Writes ``usgs_gages.gpkg`` at the AOI root, with the columns
+    ``assign_gages_to_branches`` expects: ``location_id``, ``feature_id``,
+    ``aoi_id``, ``source``, geometry.
+    """
+    from fimbox import DownloadUSGSGages
+
+    # Use the buffered boundary so gauges just outside the WBD are still
+    # captured (they may snap to streams that drain into the AOI).
+    boundary = BOUNDARY_BUF if BOUNDARY_BUF.exists() else WBD8_CLP
+    assert boundary.exists(), f"missing boundary: {boundary}"
+
+    gdf = DownloadUSGSGages().download(
+        boundary=boundary,
+        aoi_id=AOI_CODE,
+        out_dir=OUT_DIR,
+        out_name="usgs_gages.gpkg",
+        out_layer="usgs_gages",
+    )
+    log.info(f"USGS gauges downloaded: {len(gdf)} features --> {USGS_GAGES.name}")
+    # Empty AOI (no gauges in CONUS layer) is acceptable; only assert the
+    # file exists when at least one feature came back.
+    if len(gdf) > 0:
+        assert USGS_GAGES.exists()
+        assert {"location_id", "feature_id", "aoi_id", "source"}.issubset(gdf.columns)
+
+
+def test_step_C21_assign_gages_to_branches():
+    """Stage 1 of the gage crosswalk: tag every gage with a ``feature_id`` +
+    ``levpa_id`` (= branch id) and write the AOI-wide + branch-zero gpkgs.
+
+    Skips if either ``usgs_gages.gpkg`` (from C20) or
+    ``nwm_subset_streams_levelPaths.gpkg`` (from BranchDerivation in Z0) is
+    missing — both prerequisites get logged so a failure points at the
+    right upstream step.
+    """
+    from fimbox import assign_gages_to_branches
+
+    if not USGS_GAGES.exists():
+        log.warning(
+            "skipping gage assignment — usgs_gages.gpkg missing (run step_C20 first)"
+        )
+        return
+    if not NWM_LEVELPATHS.exists():
+        log.warning(
+            "skipping gage assignment — nwm_subset_streams_levelPaths.gpkg missing "
+            "(run step_Z0_branch_derivation first)"
+        )
+        return
+
+    assign_gages_to_branches(
+        usgs_gages_gpkg=USGS_GAGES,
+        nwm_streams_levelpaths_gpkg=NWM_LEVELPATHS,
+        aoi_id=AOI_CODE,
+        out_dir=OUT_DIR,
+        # DownloadUSGSGages writes "aoi_id"; the default filter column ("HUC8")
+        # would not find anything in that gpkg.
+        aoi_filter_column="aoi_id",
+        branch_zero_id=BRANCH_ID,
+    )
+    # When the AOI actually contains gauges both files exist; on empty AOIs
+    # neither is written and the function returns None (logged a warning).
+    if USGS_SUBSET.exists():
+        log.info(
+            f"AOI-wide gages --> {USGS_SUBSET.name} | "
+            f"branch-zero --> {USGS_SUBSET_BZERO.name}"
+        )
+        assert USGS_SUBSET_BZERO.exists()
+
+
+def test_step_C22_usgs_crosswalk_branch_zero():
+    """Stage 2 of the gage crosswalk for branch zero.
+
+    Snaps every branch-zero gage to its DEM-derived thalweg and samples the
+    DEM + thalweg-conditioned DEM to populate ``dem_elevation`` and
+    ``dem_adj_elevation`` on the gage table. Output:
+    ``branches/0/usgs_elev_table.csv``.
+
+    Prerequisites: ``usgs_subset_gages_0.gpkg`` (from C21) and the per-branch
+    CreateHAND outputs (from Z1 + the B-series). Skips silently when the
+    branch-zero gage gpkg isn't on disk, so an AOI with no gauges does not
+    fail the suite.
+    """
+    from fimbox import run_branch_crosswalk
+
+    if not USGS_SUBSET_BZERO.exists():
+        log.warning(
+            "skipping USGS crosswalk — usgs_subset_gages_0.gpkg missing "
+            "(run step_C20 + step_C21 first to produce it)"
+        )
+        return
+    bzero_gages = USGS_SUBSET_BZERO
+
+    # dem_meters_{B}.tif is the inundation-mapping name; fimbox writes dem_{B}.tif
+    # via BranchZero. Use whichever exists.
+    dem_b = BRANCH_DIR / f"dem_meters_{BRANCH_ID}.tif"
+    if not dem_b.exists():
+        dem_b = DEM_BRANCH
+
+    for p in (XWALK_CATCH, FILT_FLOWS, dem_b, THALWEG_COND):
+        assert p.exists(), f"missing: {p}"
+
+    out = run_branch_crosswalk(
+        aoi_gages_gpkg=bzero_gages,
+        branch_catchments_gpkg=XWALK_CATCH,
+        branch_flows_gpkg=FILT_FLOWS,
+        dem_path=dem_b,
+        dem_thalweg_path=THALWEG_COND,
+        branch_id=BRANCH_ID,
+        out_dir=BRANCH_DIR,
+    )
+    usgs_table = BRANCH_DIR / "usgs_elev_table.csv"
+    log.info(f"USGS crosswalk wrote: {[p for p in out.values() if p]}")
+    # usgs_elev_table.csv only exists when the AOI has gages — log either way.
+    if usgs_table.exists():
+        import pandas as pd
+
+        df = pd.read_csv(usgs_table)
+        log.info(f"usgs_elev_table.csv rows: {len(df)}")
+
+
+def test_step_C23_outputs_cleanup_branch_zero():
+    """Apply the deny-list cleanup to ``branches/0/``.
+
+    Default behaviour deletes every intermediate raster + vector listed in
+    --> fimbox/config/deny_branch_zero.lst.
+    """
+    import os
+
+    from fimbox import remove_deny_list_files
+
+    deny_path = (
+        Path(__file__).resolve().parent.parent / "config" / "deny_branch_zero.lst"
+    )
+    assert deny_path.is_file(), f"deny list missing: {deny_path}"
+
+    # API sanity checks that always run (never touch real files).
+    assert remove_deny_list_files(BRANCH_DIR, "NONE", BRANCH_ID) == 0
+    assert remove_deny_list_files(BRANCH_DIR, "none", BRANCH_ID) == 0
+
+    if os.environ.get("FIMBOX_KEEP_BRANCH_ZERO"):
+        n_patterns = sum(
+            1
+            for L in deny_path.read_text().splitlines()
+            if L.strip() and not L.lstrip().startswith("#")
+        )
+        log.info(
+            f"step_C23: skipping cleanup (FIMBOX_KEEP_BRANCH_ZERO set). "
+            f"{deny_path.name} has {n_patterns} active patterns; "
+            "unset the env var to enable cleanup."
+        )
+        return
+
+    # The branch-0 directory may be empty when only later steps have been
+    # populated, or when an earlier C23 run already cleaned it. Skip cleanly
+    # if there's nothing to do.
+    if not BRANCH_DIR.exists():
+        log.warning(f"skipping cleanup — branch dir {BRANCH_DIR} missing")
+        return
+
+    n = remove_deny_list_files(
+        src_dir=BRANCH_DIR,
+        deny_list=deny_path,
+        branch_id=BRANCH_ID,
+        verbose=True,
+    )
+    log.info(f"step_C23: removed {n} files from {BRANCH_DIR}")
+
+
+def test_step_C24_calculate_allbranches(tmp_path):
+    """Fast wrapper check without launching real branch workers."""
+    from fimbox import AOIProcessingConfig, calculate_allbranches
+
+    aoi_dir = tmp_path / "aoi"
+    aoi_dir.mkdir()
+    # Match BranchDerivation's actual output: branch_ids.lst (one id per line).
+    # Empty file = branch-zero-only run, which is what this wrapper test exercises.
+    branch_list_path = aoi_dir / "branch_ids.lst"
+    branch_list_path.write_text("")
+
+    deny_unit_list = tmp_path / "deny_unit.lst"
+    deny_unit_list.write_text("temporary_{}.tif\n")
+    removable = aoi_dir / f"temporary_{AOI_CODE}.tif"
+    removable.write_bytes(b"x")
+
+    result = calculate_allbranches(
+        AOIProcessingConfig(
+            aoi_dir=aoi_dir,
+            aoi_id=AOI_CODE,
+            branch_list_path=branch_list_path,
+            n_workers=1,
+        ),
+        delete_deny_list=True,
+        deny_unit_list=deny_unit_list,
+        branch_ids_csv=aoi_dir / "branch_ids.csv",
+    )
+
+    assert result.n_branch_zero_recorded == 1
+    assert result.n_non_zero_recorded == 0
+    assert result.n_unit_files_removed == 1
+    assert not removable.exists()
+
+
+def test_step_C25_calculate_allbranches_live_run():
+    """Live run for the real non-zero branch loop.
+
+    Set FIMBOX_KEEP_UNIT=1 to skip AOI-level cleanup.
+    Set FIMBOX_SKIP_ALLBRANCHES=1 to skip this test (e.g. during quick CI
+    smoke runs); by default it always runs.
+    """
+    from fimbox import AOIProcessingConfig, calculate_allbranches
+
+    if os.environ.get("FIMBOX_SKIP_ALLBRANCHES"):
+        pytest.skip("FIMBOX_SKIP_ALLBRANCHES set — skipping live branch loop")
+
+    # BranchDerivation writes branch_ids.lst
+    branch_list_path = OUT_DIR / "branch_ids.lst"
+
+    deny_unit_list = Path(__file__).resolve().parent.parent / "config" / "deny_unit.lst"
+    assert deny_unit_list.is_file(), f"deny_unit.lst missing: {deny_unit_list}"
+
+    cfg = AOIProcessingConfig(
+        aoi_dir=OUT_DIR,
+        aoi_id=AOI_CODE,
+        branch_list_path=branch_list_path,
+        n_workers=int(os.environ.get("FIMBOX_BRANCH_WORKERS", "1")),
+        delete_deny_list=True,
+    )
+
+    delete_deny_list = True
+    result = calculate_allbranches(
+        cfg,
+        delete_deny_list=delete_deny_list,
+        deny_unit_list=deny_unit_list if delete_deny_list else None,
+        branch_ids_csv=OUT_DIR / "branch_ids.csv",
+    )
+
+    assert result.n_branch_zero_recorded == 1
+    assert result.branch_ids_csv.exists(), "branch_ids.csv was not created"
+    assert result.n_non_zero_recorded == sum(
+        1 for r in result.branch_results if r.status == "ok"
+    )

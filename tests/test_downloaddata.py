@@ -2,8 +2,7 @@
 import logging
 import fimbox
 
-NHDboundary = "/Users/Supath/Downloads/SDML/FIMBOX/data_s3/BoundaryUnit.shp"  # will go to the AWS S3 later [for new nhddownload-no need]
-test_boundary = "/Users/Supath/Downloads/SDML/FIMBOX/Sample_Data/Big_Boundary_MS.shp"
+test_boundary = "././docs/test_boundary/test_smallB.shp"
 
 # # Testing the entire NHDPlus data extraction process along with National Flood Hazard Layer data extraction
 # # This is OLDER VERSION using EPA AWS S3 Bucket which will get for whole HUC6 region--> not very effective
@@ -36,6 +35,7 @@ test_boundary = "/Users/Supath/Downloads/SDML/FIMBOX/Sample_Data/Big_Boundary_MS
 #         polys_name="NLD_Polygons.gpkg",    # default; override as needed
 #     )
 
+##This is for the medium range
 # def test_get_nhddata():
 #     fimbox.NWMFlowlinesDownloader().download(
 #         boundary=test_boundary,
@@ -44,6 +44,7 @@ test_boundary = "/Users/Supath/Downloads/SDML/FIMBOX/Sample_Data/Big_Boundary_MS
 #         out_layer="flowlines",
 #     )
 
+##Medium range
 # def test_get_catchments():
 #     fimbox.NWMCatchmentsDownloader().download(
 #         boundary=test_boundary,
@@ -60,16 +61,44 @@ test_boundary = "/Users/Supath/Downloads/SDML/FIMBOX/Sample_Data/Big_Boundary_MS
 #         out_layer="lakes",
 #     )
 
-# #Get all NHD Plus Data
-# def test_get_nhd_all():
-#     fimbox.getNHDPlusData(
+#Get all NHD Plus Data
+def test_get_nhd_all():
+    fimbox.getNHDPlusData(
+        boundary=test_boundary,
+        out_dir="../out",
+        download_flowlines=True,
+        download_catchments=True,
+        download_lakes=True,
+        resolution="medium",  # "high" -> NHDPlus HR flowlines/catchments via pynhd; "medium" (default) -> NWM. Lakes always NWM.
+        identifier="nwm",  # filename prefix; default "nwm" -> nwm_subset_streams.gpkg etc.
+    )
+
+
+# High-resolution flowlines + catchments only (NHDPlus HR via pynhd).
+# def test_get_nhd_hr():
+#     fimbox.getNHDPlusHRData(
 #         boundary=test_boundary,
 #         out_dir="../out",
 #         download_flowlines=True,
 #         download_catchments=True,
-#         download_lakes=True,
+#         identifier="nwm",  # prefix for saved files
 #     )
 
+
+# Bring-your-own flowlines/catchments: map your column names to the canonical
+# schema (streams: ID, order_, levpa_id, feature_id[=ID]; catchments: ID).
+# def test_normalize_byo_flowlines_catchments():
+#     fl = fimbox.normalize_flowlines(
+#         "path/to/my_flowlines.gpkg",
+#         field_map={"ID": "nhdplusid", "order_": "streamorde", "levpa_id": "levelpathi"},
+#     )
+#     cat = fimbox.normalize_catchments(
+#         "path/to/my_catchments.gpkg", field_map={"ID": "nhdplusid"}
+#     )
+#     assert {"ID", "order_", "levpa_id", "feature_id"}.issubset(fl.columns)
+#     assert "ID" in cat.columns
+
+# Download + process a 3DEP DEM (reproject, clip, hole-fill).
 # def test_get_dem():
 #     fimbox.DEMProcessor(
 #         boundary=test_boundary,
@@ -78,13 +107,24 @@ test_boundary = "/Users/Supath/Downloads/SDML/FIMBOX/Sample_Data/Big_Boundary_MS
 #         resolution=10,
 #     )
 
-def test_get_osm_roads():
-    fimbox.DownloadOSMRoads().download(
-        boundary=test_boundary,
-        out_dir="../out",
-        out_name="osm_roads.gpkg",
-        out_layer="osm_roads",
-    )
+# Bring your own DEM: pass dem_file and it gets the SAME conditioning as a
+# downloaded one (reproject -> clip to boundary -> fill interior nodata holes).
+# def test_process_byo_dem():
+#     fimbox.DEMProcessor(
+#         boundary=test_boundary,
+#         output_dir="../out",
+#         out_name="dem.tif",
+#         resolution=10,
+#         dem_file="path/to/my_dem.tif",
+#     )
+
+# def test_get_osm_roads():
+#     fimbox.DownloadOSMRoads().download(
+#         boundary=test_boundary,
+#         out_dir="../out",
+#         out_name="osm_roads.gpkg",
+#         out_layer="osm_roads",
+#     )
 
 # def test_get_osm_bridges():
 #     fimbox.DownloadOSMBridges().download(

@@ -7,6 +7,9 @@ from .utils import NHDBoundaryFinder, HUC8Finder, getHUC8Info
 # Get NHDPlus Dataset
 from .nhdplus import (
     getNHDPlusData,
+    getNHDPlusHRData,
+    normalize_flowlines,
+    normalize_catchments,
     NWMFlowlinesDownloader,
     NWMCatchmentsDownloader,
     NWMLakesDownloader,
@@ -34,6 +37,9 @@ __all__ = [
     "getHUC8Info",
     "DownloadFEMANFHL",
     "getNHDPlusData",
+    "getNHDPlusHRData",
+    "normalize_flowlines",
+    "normalize_catchments",
     "DownloadNLD",
     "NWMFlowlinesDownloader",
     "NWMCatchmentsDownloader",

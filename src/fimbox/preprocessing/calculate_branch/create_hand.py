@@ -47,6 +47,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
+from ..source_naming import resolve_source
+
 log = logging.getLogger(__name__)
 
 
@@ -108,9 +110,10 @@ class CreateHAND:
         if self.headwaters_path is None:
             self.headwaters_path = self.branch_dir / f"headwaters_{bid}.tif"
         if self.streams_gpkg is None:
-            self.streams_gpkg = self.aoi_dir / "nwm_subset_streams.gpkg"
+            # resolve by stable suffix so a custom identifier prefix is honored
+            self.streams_gpkg = resolve_source(self.aoi_dir, "streams")
         if self.catchments_gpkg is None:
-            self.catchments_gpkg = self.aoi_dir / "nwm_catchments_proj_subset.gpkg"
+            self.catchments_gpkg = resolve_source(self.aoi_dir, "catchments")
 
         for attr in (
             "dem_path",

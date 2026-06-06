@@ -129,6 +129,10 @@ class DEMProcessor:
                 resampling=Resampling.bilinear,
             )
             dem = dem.rio.clip(gdf_projected.geometry, gdf_projected.crs, drop=True)
+            # Same conditioning as the downloaded path: heal thin interior nodata
+            # holes/seams before flow routing, then set the standard nodata value.
+            dem = self._heal_seams(dem)
+            dem = dem.where(dem > -90000, -999999)
             dem = dem.rio.write_nodata(-999999, encoded=True)
             dem.rio.to_raster(save_path, **export_kwargs)
         else:

@@ -60,6 +60,7 @@ from pathlib import Path
 from typing import Optional, Sequence, Union
 
 from ...logging_utils import attach_case_log
+from ..source_naming import detect_identifier, resolve_source, source_name
 from .adjust_floodplains import adjust_floodplains
 from .calculate_branchzero import BranchZero
 from .create_hand import CreateHAND
@@ -408,19 +409,19 @@ def _resolve_paths(cfg: AOIProcessingConfig) -> AOIProcessingConfig:
         else:
             cfg.branch_list_path = d / "branch_ids.lst"
     cfg.dem_path = cfg.dem_path or d / "dem.tif"
-    cfg.streams_gpkg = cfg.streams_gpkg or d / "nwm_subset_streams.gpkg"
+    # Source files carry an identifier prefix (default "nwm"); resolve by suffix
+    # so a custom-identifier staging directory works without extra config.
+    cfg.streams_gpkg = cfg.streams_gpkg or resolve_source(d, "streams")
     cfg.boundary_gpkg = cfg.boundary_gpkg or d / "wbd8_clp.gpkg"
-    cfg.catchments_gpkg = cfg.catchments_gpkg or d / "nwm_catchments_proj_subset.gpkg"
-    cfg.levelpaths_gpkg = (
-        cfg.levelpaths_gpkg or d / "nwm_subset_streams_levelPaths.gpkg"
-    )
+    cfg.catchments_gpkg = cfg.catchments_gpkg or resolve_source(d, "catchments")
+    cfg.levelpaths_gpkg = cfg.levelpaths_gpkg or resolve_source(d, "lp_streams")
     cfg.branch_polygons_gpkg = cfg.branch_polygons_gpkg or d / "branch_polygons.gpkg"
     if cfg.headwaters_gpkg is None:
-        for name in ("nwm_headwater_points_subset.gpkg", "nwm_headwaters.gpkg"):
-            cand = d / name
-            if cand.exists():
-                cfg.headwaters_gpkg = cand
-                break
+        hw = resolve_source(d, "headwaters_points")
+        cfg.headwaters_gpkg = hw if hw.exists() else None
+        if cfg.headwaters_gpkg is None:
+            hw = resolve_source(d, "headwaters")
+            cfg.headwaters_gpkg = hw if hw.exists() else None
     if cfg.levee_gpkg_path is None:
         lg = d / "3d_nld_subset_levees_burned.gpkg"
         cfg.levee_gpkg_path = lg if lg.exists() else None
@@ -527,6 +528,10 @@ def _process_single_branch(cfg: AOIProcessingConfig, branch_id: str) -> BranchRe
     branch_dir.mkdir(parents=True, exist_ok=True)
 
     try:
+        # Source-file prefix (default "nwm"), detected from the staged data so
+        # per-branch derivative filenames match the AOI-level ones.
+        identifier = detect_identifier(cfg.aoi_dir)
+
         # Non-zero branches clip to their own polygon (level-path buffer)
         # rather than the full AOI boundary. Branch 0 keeps the AOI
         # boundary because it covers the whole area.
@@ -547,44 +552,44 @@ def _process_single_branch(cfg: AOIProcessingConfig, branch_id: str) -> BranchRe
                     f"branch {branch_id} — falling back to AOI boundary"
                 )
 
-            streams_src = cfg.aoi_dir / "nwm_subset_streams_levelPaths.gpkg"
+            streams_src = resolve_source(cfg.aoi_dir, "lp_streams", identifier)
             filtered_streams = _filter_by_levpa_id(
                 streams_src,
                 branch_id,
                 branch_dir,
-                f"nwm_subset_streams_levelPaths_{branch_id}.gpkg",
+                source_name("lp_streams", identifier, branch_id),
             )
             if filtered_streams is not None:
                 branch_streams = filtered_streams
 
-            ext_src = cfg.aoi_dir / "nwm_subset_streams_levelPaths_extended.gpkg"
+            ext_src = resolve_source(cfg.aoi_dir, "lp_streams_extended", identifier)
             filtered_ext = _filter_by_levpa_id(
                 ext_src,
                 branch_id,
                 branch_dir,
-                f"nwm_subset_streams_levelPaths_extended_{branch_id}.gpkg",
+                source_name("lp_streams_extended", identifier, branch_id),
             )
             if filtered_ext is not None:
                 branch_levelpaths_extended = filtered_ext
 
-            hw_src = (
-                cfg.aoi_dir / "nwm_subset_streams_levelPaths_dissolved_headwaters.gpkg"
+            hw_src = resolve_source(
+                cfg.aoi_dir, "lp_streams_dissolved_headwaters", identifier
             )
             filtered_hw = _filter_by_levpa_id(
                 hw_src,
                 branch_id,
                 branch_dir,
-                f"nwm_subset_streams_levelPaths_dissolved_headwaters_{branch_id}.gpkg",
+                source_name("lp_streams_dissolved_headwaters", identifier, branch_id),
             )
             if filtered_hw is not None:
                 branch_headwaters = filtered_hw
 
-            cat_src = cfg.aoi_dir / "nwm_catchments_proj_subset_levelPaths.gpkg"
+            cat_src = resolve_source(cfg.aoi_dir, "lp_catchments", identifier)
             _filter_by_levpa_id(
                 cat_src,
                 branch_id,
                 branch_dir,
-                f"nwm_catchments_proj_subset_levelPaths_{branch_id}.gpkg",
+                source_name("lp_catchments", identifier, branch_id),
             )
 
         # BranchZero raster prep
@@ -646,8 +651,8 @@ def _process_single_branch(cfg: AOIProcessingConfig, branch_id: str) -> BranchRe
             levee_protected_areas_gpkg=None,  # set by user if needed
             levee_levelpaths_csv=None,
             lakes_gpkg=(
-                cfg.aoi_dir / "nwm_lakes_proj_subset.gpkg"
-                if (cfg.aoi_dir / "nwm_lakes_proj_subset.gpkg").exists()
+                resolve_source(cfg.aoi_dir, "lakes", identifier)
+                if resolve_source(cfg.aoi_dir, "lakes", identifier).exists()
                 else None
             ),
             boundary_gpkg=cfg.boundary_gpkg,
@@ -690,8 +695,8 @@ def _process_single_branch(cfg: AOIProcessingConfig, branch_id: str) -> BranchRe
                 branch_dir
                 / f"demDerived_reaches_split_filtered_addedAttributes_crosswalked_{branch_id}.gpkg"
             )
-            hw = cfg.headwaters_gpkg or (
-                cfg.aoi_dir / "nwm_headwater_points_subset.gpkg"
+            hw = cfg.headwaters_gpkg or resolve_source(
+                cfg.aoi_dir, "headwaters_points", identifier
             )
             if xw_flows.exists() and hw and Path(hw).exists():
                 try:

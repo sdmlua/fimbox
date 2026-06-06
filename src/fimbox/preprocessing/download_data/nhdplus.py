@@ -22,6 +22,8 @@ import requests
 from shapely.geometry import box
 from shapely.ops import unary_union
 
+from ..source_naming import DEFAULT_IDENTIFIER, source_name
+
 logger = logging.getLogger(__name__)
 
 
@@ -322,6 +324,103 @@ class NWMLakesDownloader(ArcGISDownloader):
         )
 
 
+# NHDPlus High Resolution (pynhd) — flowlines + catchments
+_HIGH_RES_ALIASES = {"high", "high-resolution", "hr", "highres", "nhdhr", "nhdplushr"}
+
+
+def _is_high_resolution(resolution: Optional[str]) -> bool:
+    """True when ``resolution`` requests NHDPlus High Resolution."""
+    return str(resolution).strip().lower().replace("_", "-") in _HIGH_RES_ALIASES
+
+
+def _boundary_to_geom(boundary, boundary_layer=None, boundary_crs=None):
+    """Return a single shapely geometry in EPSG:4326 for any boundary input."""
+    if isinstance(boundary, (str, Path)):
+        bp = Path(boundary)
+        if bp.suffix.lower() == ".gpkg":
+            layer = boundary_layer or gpd.list_layers(bp).iloc[0]["name"]
+            gdf = gpd.read_file(bp, layer=layer)
+        else:
+            gdf = gpd.read_file(bp)
+        geom = unary_union(gdf.to_crs(4326).geometry)
+    elif isinstance(boundary, (gpd.GeoDataFrame, gpd.GeoSeries)):
+        geom = unary_union(boundary.to_crs(4326).geometry)
+    elif isinstance(boundary, (tuple, list)) and len(boundary) == 4:
+        geom = box(*boundary)
+        if boundary_crs:
+            geom = gpd.GeoSeries([geom], crs=boundary_crs).to_crs(4326).iloc[0]
+    else:
+        geom = boundary
+        if boundary_crs:
+            geom = gpd.GeoSeries([geom], crs=boundary_crs).to_crs(4326).iloc[0]
+
+    # keep the WFS query payload small for complex AOIs
+    try:
+        if len(geom.exterior.coords) > 1000:
+            geom = geom.simplify(0.0001, preserve_topology=True)
+    except AttributeError:
+        pass
+    return geom
+
+
+def getNHDPlusHRData(
+    boundary: Union[str, Path, gpd.GeoDataFrame],
+    boundary_layer: Optional[str] = None,
+    out_dir: Optional[Union[str, Path]] = None,
+    epsg: int = 5070,
+    download_flowlines: bool = True,
+    download_catchments: bool = True,
+    identifier: str = DEFAULT_IDENTIFIER,
+) -> dict:
+    """
+    Download NHDPlus High Resolution flowlines and catchments for a boundary via
+    ``pynhd.NHDPlusHR`` (USGS NHDPlus_HR MapServer), using the AOI geometry.
+
+    Outputs use the same filenames/layers as the NWM downloads so the rest of
+    the pipeline is unchanged. The HR attribute schema differs from NWM
+    (e.g. ``nhdplusid``/``levelpathi`` instead of ``ID``/``levpa_id``); map the
+    fields downstream if branch derivation needs them.
+
+    Returns
+    -------
+    dict with keys "flowlines", "catchments" (GeoDataFrames or None)
+    """
+    import pynhd
+
+    geom = _boundary_to_geom(boundary, boundary_layer)
+    out_dir = Path(out_dir) if out_dir else None
+    if out_dir:
+        out_dir.mkdir(parents=True, exist_ok=True)
+
+    # (pynhd layer, result key, output filename, output layer, wanted?)
+    layers = [
+        ("flowline", "flowlines", source_name("streams", identifier), "flowlines", download_flowlines),
+        ("catchment", "catchments", source_name("catchments", identifier), "catchments", download_catchments),
+    ]
+    results = {"flowlines": None, "catchments": None}
+
+    for hr_layer, key, out_name, out_layer, wanted in layers:
+        if not wanted:
+            continue
+        logger.info(f"--- NHDPlus HR {hr_layer} ---")
+        try:
+            gdf = pynhd.NHDPlusHR(hr_layer).bygeom(geom, geo_crs=4326)
+            if gdf is None or gdf.empty:
+                logger.warning(f"NHDPlus HR {hr_layer}: no features in boundary.")
+                continue
+            # pynhd returns EPSG:4326; reproject to match the NWM downloads.
+            gdf = gdf.to_crs(epsg)
+            logger.info(f"Downloaded {len(gdf)} {key} records")
+            results[key] = gdf
+            if out_dir:
+                gdf.to_file(out_dir / out_name, layer=out_layer, driver="GPKG")
+                logger.info(f"{out_layer} --> {out_name}")
+        except Exception as exc:
+            logger.error(f"NHDPlus HR {hr_layer} download failed: {exc}", exc_info=True)
+
+    return results
+
+
 # Unified entry point
 def getNHDPlusData(
     boundary: Union[str, Path, gpd.GeoDataFrame],
@@ -331,10 +430,12 @@ def getNHDPlusData(
     download_flowlines: bool = True,
     download_catchments: bool = True,
     download_lakes: bool = True,
+    resolution: str = "medium",
+    identifier: str = DEFAULT_IDENTIFIER,
     n_workers: int = 8,
 ) -> dict:
     """
-    Download NWM Flowlines, Catchments, and Lakes for a given boundary.
+    Download flowlines, catchments, and lakes for a given boundary.
 
     Features that intersect the boundary are returned whole — no mid-polygon
     clipping. Use ``download_*`` flags to skip datasets you don't need.
@@ -345,10 +446,17 @@ def getNHDPlusData(
     boundary_layer : layer name when boundary is a GeoPackage
     out_dir : directory to save outputs; if None data is returned but not saved
     epsg : output CRS (default 5070 CONUS Albers)
-    download_flowlines : include NWM flowlines (default True)
-    download_catchments : include NWM catchments (default True)
-    download_lakes : include NWM lakes (default True)
-    n_workers : max parallel page-fetch threads per dataset (default 8)
+    download_flowlines : include flowlines (default True)
+    download_catchments : include catchments (default True)
+    download_lakes : include lakes (default True; always from NWM)
+    resolution : ``"medium"`` (default) downloads NWM flowlines/catchments from
+        the ArcGIS FeatureServer; ``"high"`` (aliases: ``high-resolution``,
+        ``hr``) downloads NHDPlus High Resolution flowlines/catchments via
+        ``pynhd`` for the AOI. Lakes always come from NWM either way.
+    identifier : filename prefix for the saved files (default ``"nwm"``). Pass a
+        custom value to stage data under a non-NWM label, e.g. ``"3dhp"`` ->
+        ``3dhp_subset_streams.gpkg``.
+    n_workers : max parallel page-fetch threads per dataset (NWM path)
 
     Returns
     -------
@@ -362,34 +470,137 @@ def getNHDPlusData(
         out_dir=out_dir,
     )
 
-    if download_flowlines:
-        logger.info("--- NWM Flowlines ---")
-        try:
-            results["flowlines"] = NWMFlowlinesDownloader(
-                out_sr=epsg, n_workers=n_workers
-            ).download(**common)
-        except Exception as exc:
-            logger.error(f"Flowlines download failed: {exc}", exc_info=True)
+    if _is_high_resolution(resolution):
+        logger.info("Resolution = high --> NHDPlus High Resolution flowlines/catchments (pynhd)")
+        hr = getNHDPlusHRData(
+            boundary=boundary,
+            boundary_layer=boundary_layer,
+            out_dir=out_dir,
+            epsg=epsg,
+            download_flowlines=download_flowlines,
+            download_catchments=download_catchments,
+            identifier=identifier,
+        )
+        results["flowlines"] = hr.get("flowlines")
+        results["catchments"] = hr.get("catchments")
+    else:
+        if download_flowlines:
+            logger.info("--- NWM Flowlines ---")
+            try:
+                results["flowlines"] = NWMFlowlinesDownloader(
+                    out_sr=epsg, n_workers=n_workers
+                ).download(out_name=source_name("streams", identifier), **common)
+            except Exception as exc:
+                logger.error(f"Flowlines download failed: {exc}", exc_info=True)
 
-    if download_catchments:
-        logger.info("--- NWM Catchments ---")
-        try:
-            results["catchments"] = NWMCatchmentsDownloader(
-                out_sr=epsg, n_workers=n_workers
-            ).download(**common)
-        except Exception as exc:
-            logger.error(f"Catchments download failed: {exc}", exc_info=True)
+        if download_catchments:
+            logger.info("--- NWM Catchments ---")
+            try:
+                results["catchments"] = NWMCatchmentsDownloader(
+                    out_sr=epsg, n_workers=n_workers
+                ).download(out_name=source_name("catchments", identifier), **common)
+            except Exception as exc:
+                logger.error(f"Catchments download failed: {exc}", exc_info=True)
 
+    # Lakes always come from NWM, regardless of resolution.
     if download_lakes:
         logger.info("--- NWM Lakes ---")
         try:
             results["lakes"] = NWMLakesDownloader(
                 out_sr=epsg, n_workers=n_workers
-            ).download(**common)
+            ).download(out_name=source_name("lakes", identifier), **common)
         except Exception as exc:
             logger.error(f"Lakes download failed: {exc}", exc_info=True)
 
     return results
+
+
+# Bring-your-own flowlines / catchments
+#
+# The rest of the pipeline reads these canonical columns off the input data:
+#   flowlines  : ID (reach id), order_ (stream order), levpa_id (level path),
+#                feature_id (NWM id; defaults to ID when absent)
+#   catchments : ID (joins to the flowline reach id)
+# If your data uses other names, pass a field map (canonical -> your column) and
+# these helpers rename them so no downstream code needs changing.
+STREAM_CANONICAL_FIELDS = ("ID", "order_", "levpa_id", "feature_id")
+CATCHMENT_CANONICAL_FIELDS = ("ID",)
+
+
+def _read_vector(data, layer: Optional[str] = None) -> gpd.GeoDataFrame:
+    if isinstance(data, (gpd.GeoDataFrame, gpd.GeoSeries)):
+        return gpd.GeoDataFrame(data).copy()
+    return gpd.read_file(str(data), layer=layer)
+
+
+def _apply_field_map(gdf: gpd.GeoDataFrame, field_map: Optional[dict]) -> gpd.GeoDataFrame:
+    """Rename user columns to canonical names. ``field_map`` is canonical -> your column."""
+    if not field_map:
+        return gdf
+    rename = {
+        user: canon
+        for canon, user in field_map.items()
+        if user in gdf.columns and user != canon
+    }
+    return gdf.rename(columns=rename)
+
+
+def normalize_flowlines(
+    flowlines: Union[str, Path, gpd.GeoDataFrame],
+    field_map: Optional[dict] = None,
+    layer: Optional[str] = None,
+    epsg: int = 5070,
+) -> gpd.GeoDataFrame:
+    """
+    Load bring-your-own flowlines and map their columns to the canonical schema
+    (``ID``, ``order_``, ``levpa_id``, ``feature_id``) the pipeline expects.
+
+    Parameters
+    ----------
+    flowlines : path or GeoDataFrame of your flowlines
+    field_map : canonical -> your column, e.g.
+        ``{"ID": "nhdplusid", "order_": "streamorde", "levpa_id": "levelpathi"}``.
+        ``feature_id`` defaults to ``ID`` when not provided.
+    layer : layer name when ``flowlines`` is a multi-layer GeoPackage
+    epsg : output CRS (default 5070)
+    """
+    gdf = _apply_field_map(_read_vector(flowlines, layer), field_map)
+    if "feature_id" not in gdf.columns and "ID" in gdf.columns:
+        gdf["feature_id"] = gdf["ID"]
+
+    missing = [c for c in ("ID", "order_") if c not in gdf.columns]
+    if missing:
+        raise ValueError(
+            f"flowlines missing required column(s) {missing}. Pass a field map, "
+            f"e.g. stream_fields={{'ID': 'your_reach_id', 'order_': 'your_order'}}."
+        )
+    if "levpa_id" not in gdf.columns:
+        logger.warning(
+            "flowlines have no 'levpa_id' (level path) column — branch derivation "
+            "requires it; map it via stream_fields={'levpa_id': 'your_levelpath'}."
+        )
+    return gdf.to_crs(epsg)
+
+
+def normalize_catchments(
+    catchments: Union[str, Path, gpd.GeoDataFrame],
+    field_map: Optional[dict] = None,
+    layer: Optional[str] = None,
+    epsg: int = 5070,
+) -> gpd.GeoDataFrame:
+    """
+    Load bring-your-own catchments and map the join id to the canonical ``ID``.
+
+    ``field_map`` is canonical -> your column, e.g. ``{"ID": "nhdplusid"}``. The
+    ``ID`` must match the flowline reach id so catchments join to reaches.
+    """
+    gdf = _apply_field_map(_read_vector(catchments, layer), field_map)
+    if "ID" not in gdf.columns:
+        raise ValueError(
+            "catchments missing required 'ID' column. Pass a field map, e.g. "
+            "catchment_fields={'ID': 'your_catchment_id'} (matches the flowline reach id)."
+        )
+    return gdf.to_crs(epsg)
 
 
 # CLI
@@ -399,7 +610,7 @@ if __name__ == "__main__":
 
     configure_cli_logging()
     parser = argparse.ArgumentParser(
-        description="Download NWM flowlines / catchments / lakes for a boundary."
+        description="Download flowlines / catchments / lakes for a boundary."
     )
     parser.add_argument("--boundary", required=True)
     parser.add_argument("--boundary-layer", default=None)
@@ -408,6 +619,11 @@ if __name__ == "__main__":
     parser.add_argument("--no-flowlines", action="store_true")
     parser.add_argument("--no-catchments", action="store_true")
     parser.add_argument("--no-lakes", action="store_true")
+    parser.add_argument(
+        "--resolution",
+        default="medium",
+        help="'medium' (NWM, default) or 'high' (NHDPlus HR flowlines/catchments via pynhd)",
+    )
     parser.add_argument("--workers", type=int, default=8)
     args = parser.parse_args()
     getNHDPlusData(
@@ -418,6 +634,7 @@ if __name__ == "__main__":
         download_flowlines=not args.no_flowlines,
         download_catchments=not args.no_catchments,
         download_lakes=not args.no_lakes,
+        resolution=args.resolution,
         n_workers=args.workers,
     )
 
