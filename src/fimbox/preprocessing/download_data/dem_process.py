@@ -39,11 +39,8 @@ class DEMProcessor:
         self.layer = layer
         self.dem_file = dem_file
         self.resolution = resolution
-        # Parallel-tile fetch knobs. tile_size_deg controls how the AOI is split
-        # for concurrent py3dep.get_dem calls; ~0.25 degrees keeps each tile
-        # well under 3DEP's per-request limits while staying chunky enough to
-        # avoid per-request overhead. max_workers defaults to os.cpu_count()
-        # bounded by 8 (3DEP rate-limits aggressive parallelism).
+        
+        # Tile size for parallel DEM requests; max_workers defaults to min(cpu_count, 8)
         self.tile_size_deg = tile_size_deg
         self.max_workers = max_workers or min(8, (os.cpu_count() or 4))
 
@@ -154,9 +151,20 @@ class DEMProcessor:
                         resampling=Resampling.bilinear,
                     )
 
+                # Heal thin interior nodata seams left by tile merge/reproject
+                # before they reach flow routing. Done on the final grid.
+                dem_data = self._heal_seams(dem_data)
+
                 # Mask and set standard nodata value
                 dem_data = dem_data.where(dem_data > -90000, -999999)
                 dem_data.rio.write_nodata(-999999, inplace=True)
+
+                # Clip to the AOI. Tiles are fetched as overlapping rectangles
+                # (to avoid seams), so the merged grid extends well beyond the
+                # boundary — clip it back so the output matches the AOI.
+                dem_data = dem_data.rio.clip(
+                    gdf_projected.geometry, gdf_projected.crs, drop=True, all_touched=True
+                )
 
                 dem_data.rio.to_raster(save_path, **export_kwargs)
                 self.logger.info(f"DEM successfully saved to {save_path}")
@@ -177,15 +185,25 @@ class DEMProcessor:
         if (maxx - minx) <= step and (maxy - miny) <= step:
             return [self.boundary_geom]
 
+        # Overlap each tile by a few cells so neighbours fully cover the shared
+        # edge — without overlap, py3dep returns each tile on its own grid and
+        # merge leaves a 1-cell nodata seam along every boundary. Tiles are kept
+        # as full rectangles (not intersected with the boundary) for the same
+        # reason; the final result is clipped to the boundary once, after merge.
+        overlap = max(self.resolution * 5 / 111_320.0, step * 0.02)  # deg
         tiles: List[Polygon] = []
         y = miny
         while y < maxy:
             x = minx
             while x < maxx:
-                cell = box(x, y, min(x + step, maxx), min(y + step, maxy))
-                clipped = cell.intersection(self.boundary_geom)
-                if not clipped.is_empty:
-                    tiles.append(clipped)
+                cell = box(
+                    x - overlap,
+                    y - overlap,
+                    min(x + step, maxx) + overlap,
+                    min(y + step, maxy) + overlap,
+                )
+                if cell.intersects(self.boundary_geom):
+                    tiles.append(cell)
                 x += step
             y += step
         return tiles
@@ -229,3 +247,30 @@ class DEMProcessor:
 
         merged = merge_arrays(results)
         return merged
+
+    def _heal_seams(self, dem: xr.DataArray) -> xr.DataArray:
+        """Fill thin interior nodata seams left along tile boundaries.
+
+        Only narrow gaps are filled (max_search_distance a few cells), so real
+        nodata outside the data footprint is untouched — just the 1-cell seams.
+        """
+        from rasterio.fill import fillnodata
+
+        nodata = dem.rio.nodata
+        arr = dem.squeeze().to_numpy()
+        mask = np.isfinite(arr) if nodata is None else (arr != nodata) & np.isfinite(arr)
+        n_gap = int((~mask).sum())
+        if n_gap == 0:
+            return dem
+        filled = fillnodata(
+            arr.astype("float32"), mask=mask.astype(np.uint8), max_search_distance=3.0
+        )
+        n_left = int(np.isnan(filled).sum()) if nodata is None else int(
+            (filled == nodata).sum()
+        )
+        self.logger.info(
+            f"Healed DEM seams: {n_gap - n_left} of {n_gap} nodata cells filled"
+        )
+        out = dem.copy()
+        out.data = filled.reshape(dem.shape)
+        return out

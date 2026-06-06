@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import logging
 import os
+import shutil
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -33,14 +34,16 @@ class BridgeDEMDiff:
 
     Parameters
     ----------
-    dem_path        : path to the base DEM .tif (3DEP or project DEM)
-    lidar_tif_dir   : directory containing per-bridge .tif files (output of generateBridgeRaster)
-    bridge_gpkg     : bridge lines GeoPackage (OSM or custom)
-    out_dir         : output directory; saves bridge_elev_diff.tif here
-    out_name        : output filename (default bridge_elev_diff.tif)
-    id_col          : column used as unique bridge ID to match tif filenames.
-                      Auto-detects 'osmid'; falls back to row index if missing.
-    n_workers       : parallel worker threads (default: min(cpu_count, 8))
+    dem_path            : path to the base DEM .tif (3DEP or project DEM)
+    lidar_tif_dir       : directory containing per-bridge .tif files (output of generateBridgeRaster)
+    bridge_gpkg         : bridge lines GeoPackage (OSM or custom)
+    out_dir             : output directory; saves bridge_elev_diff.tif here
+    out_name            : output filename (default bridge_elev_diff.tif)
+    id_col              : column used as unique bridge ID to match tif filenames.
+                          Auto-detects 'osmid'; falls back to row index if missing.
+    n_workers           : parallel worker threads (default: min(cpu_count, 8))
+    cleanup_lidar_tifs  : if True (default), remove the per-bridge lidar_tif_dir after the
+                          diff raster is successfully written.
     """
 
     dem_path: Union[str, Path]
@@ -50,6 +53,7 @@ class BridgeDEMDiff:
     out_name: str = "bridge_elev_diff.tif"
     n_workers: int = field(default_factory=lambda: min(os.cpu_count() or 4, 8))
     id_col: Optional[str] = "osmid"
+    cleanup_lidar_tifs: bool = True
 
     def __post_init__(self):
         self.dem_path = Path(self.dem_path)
@@ -94,9 +98,9 @@ class BridgeDEMDiff:
 
         bridges_dem_crs = bridges.to_crs(dem_crs)
 
-        # One shared accumulator — float32, same footprint as the DEM.
-        # Workers return sparse (rows, cols, vals) so only one full array lives in memory.
-        diff_array = np.zeros(dem_shape, dtype=np.float32)
+        # NaN accumulator — areas with no bridge coverage stay NaN and are written as nodata.
+        # Using NaN (not 0) prevents non-bridge areas from appearing as valid zero-diff pixels.
+        diff_array = np.full(dem_shape, np.nan, dtype=np.float64)
 
         with ThreadPoolExecutor(max_workers=self.n_workers) as executor:
             fmap = {
@@ -125,7 +129,7 @@ class BridgeDEMDiff:
                         result = future.result()
                         if result is not None:
                             rows, cols, vals = result
-                            diff_array[rows, cols] = vals.astype(np.float32)
+                            diff_array[rows, cols] = vals
                         ok += 1
                     except Exception as exc:
                         log.warning(f"bridge {bid}: diff failed — {exc}")
@@ -135,19 +139,26 @@ class BridgeDEMDiff:
 
         log.info(f"Diff accumulation done — {ok} ok, {failed} failed")
 
-        # Apply DEM nodata mask using uint8 dataset_mask (4× less RAM than read(1)).
-        if dem_nodata is not None:
-            with rasterio.open(self.dem_path) as dem_src:
-                mask = dem_src.dataset_mask()  # 255=valid, 0=nodata
-            diff_array[mask == 0] = dem_nodata
-            del mask
+        # Convert NaN → dem_nodata (or a sentinel if DEM has no nodata value).
+        out_nodata = dem_nodata if dem_nodata is not None else -999999.0
+        diff_out = np.where(np.isnan(diff_array), out_nodata, diff_array).astype(np.float32)
+
+        # Apply DEM nodata mask so pixels outside the watershed are nodata.
+        with rasterio.open(self.dem_path) as dem_src:
+            dem_mask = dem_src.dataset_mask()  # 255=valid, 0=nodata
+        diff_out[dem_mask == 0] = out_nodata
 
         out_path = self.out_dir / self.out_name
-        dem_meta.update({"dtype": "float32", "compress": "lzw", "count": 1})
+        dem_meta.update({"dtype": "float32", "compress": "lzw", "count": 1, "nodata": out_nodata})
         with rasterio.open(out_path, "w", **dem_meta) as dst:
-            dst.write(diff_array, 1)
+            dst.write(diff_out, 1)
 
         log.info(f"Saved bridge_elev_diff raster --> {out_path}")
+
+        if self.cleanup_lidar_tifs and self.lidar_tif_dir.exists():
+            shutil.rmtree(self.lidar_tif_dir, ignore_errors=True)
+            log.info(f"Removed per-bridge LiDAR tifs: {self.lidar_tif_dir}")
+
         return out_path
 
     def _load_bridges(self) -> gpd.GeoDataFrame:

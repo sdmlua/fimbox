@@ -241,8 +241,12 @@ def _drop_tiny_outlet_stubs(
 
 def _drop_smaller_duplicates(gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
     """
-    When the same HydroID appears more than once (can occur at HUC boundary
-    overlap after the spatial join), keep only the largest polygon.
+    When the same HydroID appears more than once (HUC-boundary overlap after the
+    spatial join, or a divide split by the D8 sawtooth), keep only the largest
+    polygon — exactly one feature per HydroID.
+
+    Equal-area ties are broken on the first occurrence so a HydroID is never left
+    with two polygons (a plain ``area != area.max()`` mask would drop neither).
     """
     counts = gdf["HydroID"].value_counts()
     dup_ids = counts[counts > 1].index.tolist()
@@ -255,6 +259,7 @@ def _drop_smaller_duplicates(gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
     for hid in dup_ids:
         idx = np.where(hids == hid)[0]
         areas = gdf.iloc[idx].geometry.area.values
-        drop_indices.extend(idx[areas != areas.max()].tolist())
+        keep = idx[int(np.argmax(areas))]  # argmax keeps the first on a tie
+        drop_indices.extend(i for i in idx if i != keep)
 
     return gdf.drop(gdf.index[drop_indices]).copy()

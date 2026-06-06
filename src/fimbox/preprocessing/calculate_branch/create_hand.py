@@ -34,8 +34,8 @@ wbd8_clp_gpkg              : wbd8_clp.gpkg
 Parameters
 -------------------------------------------------------------------------
 cost_distance_tolerance     : 50.0 m
-lateral_elevation_threshold : 3    m
-max_split_distance_m        : 2000 m
+lateral_elevation_threshold : 10   m
+max_split_distance_m        : 1500 m
 slope_min                   : 0.0001
 lakes_buffer_dist_m         : 100  m
 """
@@ -77,8 +77,8 @@ class CreateHAND:
 
     # tuning parameters
     cost_distance_tolerance: float = 50.0
-    lateral_elevation_threshold: int = 3
-    max_split_distance_m: float = 2000.0
+    lateral_elevation_threshold: int = 10
+    max_split_distance_m: float = 1500.0
     slope_min: float = 0.0001
     lakes_buffer_dist_m: float = 100.0
     wbt_path: Optional[str] = None
@@ -365,10 +365,13 @@ class CreateHAND:
         elif split_pts_gpkg.exists():
             _progress(7, "gage watershed (reaches)")
             log.info("Gage watershed for reaches")
+            # Declutter only the reach catchments (they get polygonized); pixel
+            # catchments below keep the default off.
             GageCatchments(
                 flowdir=self.flowdir_path,
                 outlet_points=split_pts_gpkg,
                 out_path=gw_reaches,
+                declutter=True,
             ).run()
             outputs["gw_catchments_reaches"] = gw_reaches
         else:
@@ -397,10 +400,12 @@ class CreateHAND:
         elif pixel_pts_gpkg.exists():
             _progress(9, "gage watershed (pixels)")
             log.info("Gage watershed for pixels")
+            # No declutter: pixel catchments are legitimately single-cell.
             GageCatchments(
                 flowdir=self.flowdir_path,
                 outlet_points=pixel_pts_gpkg,
                 out_path=gw_pixels,
+                declutter=False,
             ).run()
             outputs["gw_catchments_pixels"] = gw_pixels
         else:

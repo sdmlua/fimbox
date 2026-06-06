@@ -54,7 +54,7 @@ def split_derived_reaches(
     out_points_gpkg: Path,
     wbd8_clp_gpkg: Optional[Path] = None,
     lakes_gpkg: Optional[Path] = None,
-    max_length: float = 2000.0,
+    max_length: float = 1500.0,
     slope_min: float = 0.0001,
     lakes_buffer_dist: float = 100.0,
 ) -> tuple[Path, Path]:
