@@ -19,6 +19,27 @@ import rasterio.transform
 log = logging.getLogger(__name__)
 
 
+def _line_cells(r0: int, c0: int, r1: int, c1: int) -> list[tuple[int, int]]:
+    # Bresenham: all integer cells on the line from (r0,c0) to (r1,c1) inclusive.
+    r0, c0, r1, c1 = int(r0), int(c0), int(r1), int(c1)
+    dr, dc = abs(r1 - r0), abs(c1 - c0)
+    sr, sc = (1 if r0 < r1 else -1), (1 if c0 < c1 else -1)
+    err = dr - dc
+    cells = []
+    while True:
+        cells.append((r0, c0))
+        if r0 == r1 and c0 == c1:
+            break
+        e2 = 2 * err
+        if e2 > -dc:
+            err -= dc
+            r0 += sr
+        if e2 < dr:
+            err += dr
+            c0 += sc
+    return cells
+
+
 def rasterize_3d_levee_lines(
     levees_gpkg: Path,
     dem_path: Path,
@@ -50,6 +71,8 @@ def rasterize_3d_levee_lines(
     out = np.full((nrows, ncols), nodata, dtype=np.float32)
     skipped_2d = 0
 
+    # Mark every cell the line crosses (not just where samples land) so the
+    # levee is a continuous ridge, not a dotted line. Max elevation wins per cell.
     for geom in levees.geometry:
         if geom is None or geom.is_empty:
             continue
@@ -63,17 +86,27 @@ def rasterize_3d_levee_lines(
                 x0, y0, z0 = coords[i][0], coords[i][1], coords[i][2]
                 x1, y1, z1 = coords[i + 1][0], coords[i + 1][1], coords[i + 1][2]
                 seg_len = np.hypot(x1 - x0, y1 - y0)
-                n = max(2, int(np.ceil(seg_len / (res * 0.5)))) if seg_len > 0 else 1
+                n = max(2, int(np.ceil(seg_len / (res * 0.25)))) if seg_len > 0 else 1
                 t = np.linspace(0, 1, n)
                 xs = x0 + t * (x1 - x0)
                 ys = y0 + t * (y1 - y0)
                 zs = (z0 + t * (z1 - z0)).astype(np.float32)
                 rows, cols = rasterio.transform.rowcol(transform, xs, ys)
                 rows, cols = np.asarray(rows), np.asarray(cols)
-                valid = (rows >= 0) & (rows < nrows) & (cols >= 0) & (cols < ncols)
-                for r, c, z in zip(rows[valid], cols[valid], zs[valid]):
-                    if out[r, c] == nodata or z > out[r, c]:
-                        out[r, c] = z
+                for k in range(len(rows)):
+                    # connect consecutive samples to fill any gap between cells
+                    cells = (
+                        [(rows[k], cols[k])]
+                        if k == 0
+                        else _line_cells(rows[k - 1], cols[k - 1], rows[k], cols[k])
+                    )
+                    z = zs[k]
+                    if z <= 0.0:  # NLD encodes missing crest elevation as 0
+                        continue
+                    for r, c in cells:
+                        if 0 <= r < nrows and 0 <= c < ncols:
+                            if out[r, c] == nodata or z > out[r, c]:
+                                out[r, c] = z
 
     if skipped_2d:
         log.warning("  %d line segments skipped (no Z coordinates)", skipped_2d)
@@ -110,6 +143,20 @@ def burn_levee_elevations(
         burned = np.maximum(dem_data, nld_masked)
         changed = int(np.sum(burned != dem_data))
         profile = dem.profile.copy()
+
+        # Sanity check: if most levee cells sit below the underlying DEM, the
+        # burn is a near no-op — usually a vertical datum/unit mismatch (e.g.
+        # NLD in NAVD88 ft vs DEM in m). Warn rather than silently do nothing.
+        lev = nld_data != nodata
+        if lev.any():
+            below = int(np.sum(nld_masked[lev] < dem_data[lev]))
+            if below > 0.5 * int(lev.sum()):
+                log.warning(
+                    "  %d/%d levee cells are below the DEM — burn nearly a no-op; "
+                    "check levee vertical datum/units vs DEM",
+                    below,
+                    int(lev.sum()),
+                )
     with rasterio.open(str(out_path), "w", **profile) as dst:
         dst.write(burned, 1)
     log.info("  DEM burned --> %s  (%d cells raised)", Path(out_path).name, changed)

@@ -189,10 +189,22 @@ class BranchZero:
             burn_levee_elevations(dem_branch, self.levee_raster_path, dem_branch)
             log.info("Levees burned into DEM")
 
-        # rasterize streams to boolean grid (branch 0 — all NWM streams)
+        # Boolean grid AGREE burns: branch 0 uses all NWM streams; non-zero
+        # branches use their extended level path (matches NOAA run_by_branch).
         flows_bool = branch_dir / f"flows_grid_boolean_{bid}.tif"
-        StreamBooleanRasterizer(self.streams_gpkg, dem_branch, flows_bool).run()
-        log.info("Stream boolean grid --> %s", flows_bool.name)
+        use_levelpaths = (
+            not is_branch_zero
+            and self.levelpaths_extended_gpkg
+            and self.levelpaths_extended_gpkg.exists()
+        )
+        if use_levelpaths:
+            LevelPathBooleanRasterizer(
+                self.levelpaths_extended_gpkg, dem_branch, flows_bool
+            ).run()
+            log.info("Level path boolean grid --> %s", flows_bool.name)
+        else:
+            StreamBooleanRasterizer(self.streams_gpkg, dem_branch, flows_bool).run()
+            log.info("Stream boolean grid --> %s", flows_bool.name)
 
         # rasterize headwater points if provided
         headwaters_bool = None
@@ -200,15 +212,6 @@ class BranchZero:
             headwaters_bool = branch_dir / f"headwaters_{bid}.tif"
             HeadwaterRasterizer(self.headwaters_gpkg, dem_branch, headwaters_bool).run()
             log.info("Headwaters boolean grid --> %s", headwaters_bool.name)
-
-        # rasterize extended level path streams if provided (used by non-zero branches)
-        levelpaths_bool = None
-        if self.levelpaths_extended_gpkg and self.levelpaths_extended_gpkg.exists():
-            levelpaths_bool = branch_dir / f"flows_grid_boolean_levelpaths_{bid}.tif"
-            LevelPathBooleanRasterizer(
-                self.levelpaths_extended_gpkg, dem_branch, levelpaths_bool
-            ).run()
-            log.info("Level path boolean grid --> %s", levelpaths_bool.name)
 
         # AGREE DEM conditioning
         dem_burned = branch_dir / f"dem_burned_{bid}.tif"
@@ -250,8 +253,6 @@ class BranchZero:
             outputs["bridge_elev_diff_branch"] = bridge_branch
         if headwaters_bool:
             outputs["headwaters"] = headwaters_bool
-        if levelpaths_bool:
-            outputs["flows_grid_boolean_levelpaths"] = levelpaths_bool
 
         log.info("=== BRANCH ZERO COMPLETE ===")
         return outputs
@@ -267,7 +268,7 @@ class BranchZero:
 def _rasterio_clip_reproject(
     src: Path, boundary: Path, dst: Path, *, crs: str, res: float
 ) -> None:
-    """Clip and reproject a raster to a polygon boundary using rasterio (no GDAL CLI)."""
+    """Clip and reproject a raster to a polygon boundary using rasterio."""
     import geopandas as gpd
 
     src, dst = Path(src), Path(dst)
@@ -345,14 +346,14 @@ def _rasterio_clip_reproject(
 
 
 def _fill_depressions(dem: Path, out: Path, wbt_path: Optional[str] = None) -> None:
-    """Fill depressions and remove flat areas using WhiteboxTools.
+    """Fill sinks and remove flat areas with WhiteboxTools.
 
-    AGREE burns all stream cells by a constant 1000 m, creating a flat channel
-    bed at ~-1010 m depth.  WBT fix_flats adds tiny per-cell gradients to resolve
-    those flats, but the increments (~1/N_cells ≈ 1e-8 m) are far below float32
-    precision at that depth (~1.2e-4 m ULP).  Converting to float64 before WBT
-    processes the DEM preserves the gradients so d8_pointer assigns valid D8 codes
-    to every stream cell.
+    Processed in float64 so flat-routing increments stay representable at the
+    burned-channel depth, with a fixed flat increment instead of WBT's default.
+    A FillSingleCellPits pass precedes the fill: FillDepressions otherwise leaves
+    isolated 1-cell pits, which become D8 sinks with no downslope neighbour.
+    Afterwards the result is checked for any remaining interior pits (cells at
+    the nodata boundary are legitimately unroutable and excluded).
     """
     import shutil
     import rasterio
@@ -360,8 +361,13 @@ def _fill_depressions(dem: Path, out: Path, wbt_path: Optional[str] = None) -> N
 
     from ._wbt_safe import run_wbt_tool
 
+    # Explicit flat-routing increment: safely above float64 ULP at -1010 m depth
+    # while small enough to not lift flat interiors above surrounding terrain.
+    flat_increment = 1e-7
+
     # Write a float64 copy so WBT's flat-routing increments are representable
     dem_f64 = dem.with_suffix(".f64_tmp.tif")
+    pits_f64 = dem.with_suffix(".pits_tmp.tif")
     try:
         with rasterio.open(str(dem)) as src:
             prof64 = src.profile.copy()
@@ -370,22 +376,63 @@ def _fill_depressions(dem: Path, out: Path, wbt_path: Optional[str] = None) -> N
         with rasterio.open(str(dem_f64), "w", **prof64) as dst:
             dst.write(data.astype(np.float64), 1)
 
-        # Use the concurrency-safe WBT runner (see _wbt_safe). WBT's own
-        # fill_depressions goes through run_tool, which does a process-global
-        # os.chdir and reports success even when it wrote nothing — under
-        # parallel branches that left dem_burned_filled silently absent and
-        # the next step crashed reading the missing flowdir/fill output.
+        # Remove isolated single-cell pits first, then fill depressions. Both
+        # run via the concurrency-safe runner (no global chdir, verified output).
+        run_wbt_tool(
+            "FillSingleCellPits",
+            [
+                f"--dem={Path(dem_f64).resolve()}",
+                f"--output={Path(pits_f64).resolve()}",
+            ],
+            out_path=Path(pits_f64),
+            wbt_path=wbt_path,
+        )
         run_wbt_tool(
             "FillDepressions",
             [
-                f"--dem={Path(dem_f64).resolve()}",
+                f"--dem={Path(pits_f64).resolve()}",
                 f"--output={Path(out).resolve()}",
                 "--fix_flats",
+                f"--flat_increment={flat_increment}",
             ],
             out_path=Path(out),
             wbt_path=wbt_path,
         )
+
+        # Post-check: an interior cell whose 8 neighbours are all strictly higher
+        # has no D8 descent. Cells touching nodata sit at the DEM boundary and
+        # legitimately have nowhere to drain, so they are excluded.
+        with rasterio.open(str(out)) as src:
+            filled = src.read(1).astype(np.float64)
+            nodata = src.nodata
+        valid = np.ones(filled.shape, dtype=bool) if nodata is None else (filled != nodata)
+        higher = np.ones(filled.shape, dtype=bool)
+        for dr in (-1, 0, 1):
+            for dc in (-1, 0, 1):
+                if dr == 0 and dc == 0:
+                    continue
+                shifted = np.full(filled.shape, -np.inf)
+                rs = slice(max(dr, 0), filled.shape[0] + min(dr, 0))
+                cs = slice(max(dc, 0), filled.shape[1] + min(dc, 0))
+                rd = slice(max(-dr, 0), filled.shape[0] + min(-dr, 0))
+                cd = slice(max(-dc, 0), filled.shape[1] + min(-dc, 0))
+                shifted[rd, cd] = np.where(valid[rs, cs], filled[rs, cs], -np.inf)
+                higher &= shifted > filled
+        from scipy import ndimage  # noqa: PLC0415 — local import; optional dep
+
+        nd_adj = ndimage.binary_dilation(~valid, iterations=1)
+        pits = valid & higher & ~nd_adj
+        n_pits = int(pits.sum())
+        if n_pits > 0:
+            log.warning(
+                "FillDepressions left %d interior pit(s) in %s; "
+                "their upstream cells will be unrouted in D8.",
+                n_pits,
+                out.name,
+            )
     finally:
+        if pits_f64.exists():
+            pits_f64.unlink()
         if dem_f64.exists():
             dem_f64.unlink()
 

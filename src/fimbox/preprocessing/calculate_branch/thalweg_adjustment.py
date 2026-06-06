@@ -76,7 +76,7 @@ class ThalwegAdjustment:
     out_flowdir_streams       : flowdir_d8_burned_filled_flows_{id}.tif
     out_thalweg_cond          : dem_thalwegCond_{id}.tif
     cost_distance_tolerance   : max distance (m) for lateral zone search (default 50)
-    lateral_elevation_threshold: max elev difference (m) for lateral replacement (default 3)
+    lateral_elevation_threshold: max elev difference (m) for lateral replacement (default 10)
     """
 
     dem: Path
@@ -86,7 +86,7 @@ class ThalwegAdjustment:
     out_flowdir_streams: Path
     out_thalweg_cond: Path
     cost_distance_tolerance: float = 50.0
-    lateral_elevation_threshold: int = 3
+    lateral_elevation_threshold: int = 10
     wbt_path: Optional[str] = None
 
     def __post_init__(self):

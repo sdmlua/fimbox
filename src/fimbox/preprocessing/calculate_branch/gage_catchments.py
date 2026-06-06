@@ -98,12 +98,19 @@ class GageCatchments:
     outlet_points  : GeoPackage with point geometries and integer 'id' column
     out_path       : output watershed raster
     max_iter       : safety cap on propagation iterations (default 5000)
+    declutter      : solidify the raster before writing (default False). Fills
+                     interior pits, removes the diagonal "checkerboard" along
+                     divides, and reduces each HydroID to one connected piece, so
+                     it polygonizes into clean, hole-free catchments the SRC step
+                     can integrate. Reach catchments opt in; pixel catchments are
+                     legitimately single-cell and leave it off.
     """
 
     flowdir: Path
     outlet_points: Path
     out_path: Path
     max_iter: int = 5000
+    declutter: bool = False
 
     def __post_init__(self):
         for attr in ("flowdir", "outlet_points", "out_path"):
@@ -138,6 +145,15 @@ class GageCatchments:
             d8, outlet_rc_ids, nodata_d8=nodata_d8, max_iter=self.max_iter
         )
 
+        # Solidify the reach raster so it polygonizes into clean, hole-free,
+        # one-piece-per-HydroID catchments (the SRC step integrates these pixels
+        # directly, so the raster must be sound). Order matters: declutter can
+        # detach a cell into a new island, so connectivity enforcement runs last.
+        if self.declutter:
+            result = _fill_interior_holes(result)
+            result = _declutter_boundaries(result)
+            result = _enforce_connectivity(result)
+
         # int32 matches FIM output and is supported by all GIS tools.
         # HydroIDs using fimid prefix (4 digits + 4 seq = 8 digits) fit in int32.
         profile.update(
@@ -157,6 +173,170 @@ class GageCatchments:
         return self.out_path
 
 
+def _fill_interior_holes(labels: np.ndarray) -> np.ndarray:
+    """Fill unlabelled cells that are fully enclosed by catchments.
+
+    Reverse-D8 propagation leaves a few cells unlabelled — D8 pits/sinks and
+    short flow paths that terminate before reaching a seeded outlet. Inside a
+    catchment these become 0-valued holes that vectorise into polygon holes.
+    (TauDEM does not show them because every cell drains somewhere.)
+
+    Each interior hole (a background component not touching the raster edge) is
+    filled with its nearest labelled cell. The outside background is left at 0.
+    """
+    from scipy import ndimage
+
+    out = labels.astype(np.int32).copy()
+    background = out == 0
+    if not background.any():
+        return out
+
+    # interior holes = background components that do not reach the raster edge.
+    cross = np.array([[0, 1, 0], [1, 1, 1], [0, 1, 0]])
+    comp, n = ndimage.label(background, structure=cross)
+    edge_labels = set(
+        np.unique(np.concatenate([comp[0, :], comp[-1, :], comp[:, 0], comp[:, -1]]))
+    )
+    edge_labels.discard(0)
+    interior = np.isin(comp, [i for i in range(1, n + 1) if i not in edge_labels])
+    if not interior.any():
+        return out
+
+    # nearest labelled cell for every background pixel, then apply to holes only.
+    nearest = ndimage.distance_transform_edt(
+        background, return_distances=False, return_indices=True
+    )
+    out[interior] = out[tuple(nearest)][interior]
+
+    log.info("GageCatchments: filled %d interior hole cells", int(interior.sum()))
+    return out
+
+
+def _declutter_boundaries(labels: np.ndarray, max_iter: int = 50) -> np.ndarray:
+    """
+    Remove artefacts along catchment boundaries.
+    Reassign corner-only cells to the dominant 4-neighbour label until stable.
+    """
+    lab = labels.astype(np.int32).copy()
+    background = lab == 0
+
+    for iteration in range(max_iter):
+        up = np.roll(lab, -1, 0)
+        dn = np.roll(lab, 1, 0)
+        lf = np.roll(lab, -1, 1)
+        rt = np.roll(lab, 1, 1)
+        # rolled wrap-around edges are not real neighbours — treat as background.
+        up[-1, :] = 0
+        dn[0, :] = 0
+        lf[:, -1] = 0
+        rt[:, 0] = 0
+
+        # "teeth": labelled cells sharing no edge (only corners) with their own label.
+        same_label_edge = (up == lab) | (dn == lab) | (lf == lab) | (rt == lab)
+        teeth = (~background) & (~same_label_edge)
+        if not teeth.any():
+            break
+
+        # Majority vote over the 4 orthogonal neighbours, ignoring background.
+        neighbours = np.stack([up, dn, lf, rt])
+        valid = neighbours > 0
+        best_label = np.zeros_like(lab)
+        best_count = np.zeros_like(lab)
+        for k in range(4):
+            candidate = neighbours[k]
+            count = ((neighbours == candidate) & valid).sum(axis=0) * (candidate > 0)
+            take = count > best_count
+            best_count = np.where(take, count, best_count)
+            best_label = np.where(take, candidate, best_label)
+
+        apply = teeth & (best_count > 0)
+        if not apply.any():
+            break  # remaining teeth are fully isolated (no labelled edge neighbour).
+        new_lab = lab.copy()
+        new_lab[apply] = best_label[apply]
+        if np.array_equal(new_lab, lab):
+            break
+        lab = new_lab
+
+    n_changed = int((lab != labels).sum())
+    log.info(
+        "GageCatchments: declutter relabelled %d boundary cells (%d passes)",
+        n_changed,
+        iteration + 1,
+    )
+    return lab
+
+
+def _enforce_connectivity(labels: np.ndarray, max_iter: int = 8) -> np.ndarray:
+    """Reduce every HydroID to a single 8-connected component.
+
+    Off-channel seeds and declutter can strand small fragments of a HydroID
+    inside a neighbour; filter_catchments later drops them, leaving gaps that
+    corrupt the SRC area. For each HydroID the largest component is kept; every
+    other fragment is reassigned to the majority label on its boundary ring.
+    A fragment is 8-disconnected from its own id, so the ring is the enclosing
+    catchment(s) — one solid piece per HydroID, no gaps, area conserved.
+
+    Reassignments are repeated until stable: when two fragments border each
+    other, one pass can leave a residue that the next pass mops up.
+    """
+    from scipy import ndimage
+
+    lab = labels.astype(np.int32).copy()
+    rows, cols = lab.shape
+    structure_8 = np.ones((3, 3), dtype=int)
+
+    n_merged = 0
+    for _ in range(max_iter):
+        bboxes = ndimage.find_objects(lab)
+        merge_idx: list[np.ndarray] = []
+        merge_val: list[np.ndarray] = []
+        for hid in np.unique(lab[lab > 0]):
+            sl = bboxes[hid - 1] if hid - 1 < len(bboxes) else None
+            if sl is None:
+                continue
+            comp, n_comp = ndimage.label(lab[sl] == hid, structure=structure_8)
+            if n_comp <= 1:
+                continue
+            largest = int(np.bincount(comp.ravel())[1:].argmax()) + 1
+
+            # pad the bbox by one cell so the fragment's boundary ring is visible
+            r0 = max(sl[0].start - 1, 0)
+            r1 = min(sl[0].stop + 1, rows)
+            c0 = max(sl[1].start - 1, 0)
+            c1 = min(sl[1].stop + 1, cols)
+            win = lab[r0:r1, c0:c1]
+            comp_win = np.zeros(win.shape, dtype=np.int32)
+            comp_win[
+                sl[0].start - r0 : sl[0].stop - r0, sl[1].start - c0 : sl[1].stop - c0
+            ] = comp
+
+            for k in range(1, n_comp + 1):
+                if k == largest:
+                    continue
+                fragment = comp_win == k
+                ring = ndimage.binary_dilation(fragment, structure_8) & ~fragment
+                ring_labels = win[ring]
+                ring_labels = ring_labels[(ring_labels > 0) & (ring_labels != hid)]
+                if ring_labels.size == 0:
+                    continue  # fully isolated fragment (only borders nodata) — leave it
+                values, counts = np.unique(ring_labels, return_counts=True)
+                rr, cc = np.where(fragment)
+                merge_idx.append((rr + r0) * cols + (cc + c0))
+                merge_val.append(
+                    np.full(rr.size, int(values[counts.argmax()]), dtype=np.int32)
+                )
+
+        if not merge_idx:
+            break
+        idx = np.concatenate(merge_idx)
+        lab.flat[idx] = np.concatenate(merge_val)
+        n_merged += idx.size
+
+    log.info("GageCatchments: connectivity merged %d island cells", n_merged)
+    return lab
+
+
 def _gage_watershed(
     d8: np.ndarray,
     outlet_rc_ids: list[tuple[int, int, int]],
@@ -164,9 +344,6 @@ def _gage_watershed(
     max_iter: int = 5000,  # kept for API compatibility, unused
 ) -> np.ndarray:
     """
-    Assign each cell to its nearest downstream outlet — equivalent to
-    TauDEM gagewatershed.
-
     Algorithm: label propagation in topological downstream-->upstream order.
     Each cell inherits the label of its downstream neighbor.  We process
     cells in the order they are visited during a BFS seeded from the outlet
@@ -213,13 +390,21 @@ def _gage_watershed(
 
     result = np.zeros(n, dtype=np.int32)
     visited = np.zeros(n, dtype=bool)
+    is_seed = np.zeros(n, dtype=bool)
 
-    # Seed: label each outlet cell and enqueue its upstream neighbors
-    queue: deque[int] = deque()
+    # Seed pass 1: fix every outlet cell to its own id. Seeds are adjacent along
+    # the channel, so this must finish for ALL seeds before propagation — else
+    # an upstream seed gets overwritten by a downstream seed's label.
     for r, c, hid in outlet_rc_ids:
         idx = int(r) * cols + int(c)
         result[idx] = hid
         visited[idx] = True
+        is_seed[idx] = True
+
+    # Seed pass 2: enqueue the upstream neighbours of every seed.
+    queue: deque[int] = deque()
+    for r, c, _ in outlet_rc_ids:
+        idx = int(r) * cols + int(c)
         for upstream_cell in us.get(idx, []):
             if not visited[int(upstream_cell)]:
                 queue.append(int(upstream_cell))
@@ -228,17 +413,15 @@ def _gage_watershed(
     # which is already labeled because it was processed before i was enqueued.
     while queue:
         i = int(queue.popleft())
-        if visited[i]:
+        if visited[i] or is_seed[i]:
             continue
-        visited[i] = True
         j = int(ds[i])
         lbl = result[j]
         if lbl == 0:
-            # downstream not labeled yet — re-enqueue at the back and retry later
-            # (can happen at confluences where two branches meet)
+            # downstream not labeled yet — re-enqueue and retry (confluences).
             queue.append(i)
-            visited[i] = False
             continue
+        visited[i] = True
         result[i] = lbl
         for upstream_cell in us.get(i, []):
             if not visited[int(upstream_cell)]:

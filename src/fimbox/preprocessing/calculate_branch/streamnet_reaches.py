@@ -134,7 +134,7 @@ class StreamNetReaches:
         if nodata_d8 is not None:
             d8[d8 == int(nodata_d8)] = 0
 
-        # ── Build downstream flat-index (self-loop = outlet / nodata) ──────────
+        # Build downstream flat-index (self-loop = outlet / nodata)
         flat_d8 = d8.ravel()
         ds = np.arange(n, dtype=np.int64)
         r_all = np.arange(n, dtype=np.int64) // cols
@@ -149,7 +149,7 @@ class StreamNetReaches:
             valid = sel & (r_ds >= 0) & (r_ds < rows) & (c_ds >= 0) & (c_ds < cols)
             ds[valid] = (r_ds * cols + c_ds)[valid]
 
-        # ── Count stream-cell in-degrees (fully vectorised) ─────────────────────
+        # Count stream-cell in-degrees
         stream_flat = stream_mask.ravel()
         stream_idx = np.where(stream_flat)[0].astype(np.int64)
 
@@ -169,11 +169,9 @@ class StreamNetReaches:
             int((in_deg[stream_idx] >= 2).sum()),
         )
 
-        # No stream cells means the branch DEM never derived a flow network
-        # (e.g. the headwater seed for flow accumulation fell outside the DEM,
-        # so demDerived_streamPixels is all-nodata). Fail cleanly here instead
-        # of crashing on an empty array a few lines below — process_branches
-        # treats this as exit-code 61 and wipes the branch directory.
+        # No stream cells: flow network derivation failed (e.g. headwater seed
+        # outside DEM extent, demDerived_streamPixels is all-nodata).
+        # Exit cleanly to avoid crash; process_branches treats as exit-code 61.
         if stream_idx.size == 0:
             raise NoFlowlinesError(
                 f"Branch {self.branch_id}: no valid flowlines "
@@ -181,14 +179,9 @@ class StreamNetReaches:
                 "headwater raster has pixels inside the branch DEM extent."
             )
 
-        # ── Assign reach IDs in topological (upstream-->downstream) order ─────────
-        # Rules:
-        #   • headwater cell (in_deg == 0) --> start reach R
-        #   • single-upstream cell (in_deg == 1) --> continue reach from upstream
-        #   • junction cell (in_deg >= 2) --> end all incoming reaches HERE;
-        #     the junction cell itself starts a NEW reach going downstream
-        #
-        # We process cells in topological order using a BFS queue seeded from
+        # Assign reach IDs upstream to downstream: headwaters start a reach,
+        # single-upstream cells continue it, and junctions end incoming reaches
+        # and start a new one downstream. Process cells with a BFS queue from
         # headwaters, decrementing in-degree as we go.
 
         reach_of: np.ndarray = np.zeros(n, dtype=np.int32)  # cell --> reach ID
@@ -241,7 +234,7 @@ class StreamNetReaches:
                 # j has exactly one upstream (this cell) — continue same reach
                 pq.append((j, rid))
 
-        # ── Vectorise: build one LineString per reach ───────────────────────────
+        # Vectorise: build one LineString per reach
         # Group cells by reach ID
         assigned = np.where(reach_of > 0)[0]
         rids = reach_of[assigned]
@@ -291,30 +284,21 @@ class StreamNetReaches:
             if len(path) < 2:
                 continue
 
-            # Extend path by ONE extra cell (the junction / outlet cell that
-            # this reach terminates at). Without this the reach end sits at the
-            # centre of the last *owned* cell, one pixel short of where the next
-            # reach starts — producing a 1-pixel gap at every confluence.
+            # Extend by ONE cell to the junction/outlet so the reach ends where
+            # the next one begins (no 1-pixel gap at confluences).
             tail = path[-1]
             nxt = int(ds[tail])
             if nxt != tail:  # not a self-loop outlet
                 path.append(nxt)
 
-            # Build coords and simplify to remove the D8 staircase effect.
-            # RDP with tolerance = 0.5 pixel collapses diagonal stair-steps into
-            # straight diagonals while preserving all true bends.
             coords = [cell_xy(c) for c in path]
-            line = LineString(coords).simplify(
-                pixel_size * 0.5, preserve_topology=False
-            )
-            if line.is_empty or line.geom_type != "LineString":
-                line = LineString(coords)
+            line = _smooth_reach(coords, pixel_size)
             reach_geoms.append(line)
             reach_ids_out.append(int(rid))
 
         log.info("StreamNet: %d reaches vectorised", len(reach_geoms))
 
-        # ── Write sn_catchments raster ──────────────────────────────────────────
+        # Write sn_catchments raster
         sn_profile = profile.copy()
         sn_profile.update(
             dtype="int32",
@@ -329,7 +313,7 @@ class StreamNetReaches:
             dst.write(reach_of.reshape(rows, cols).astype(np.int32), 1)
         log.info("StreamNet: reach ID raster --> %s", sn_catchments.name)
 
-        # ── Strahler stream order via WBT (concurrency-safe runner) ─────────────
+        # Strahler stream order via WBT
         log.info("StreamNet: Strahler order --> %s", stream_order_path.name)
         try:
             from ._wbt_safe import run_wbt_tool
@@ -360,7 +344,7 @@ class StreamNetReaches:
             with rasterio.open(str(stream_order_path), "w", **so_profile) as dst:
                 dst.write(np.zeros((rows, cols), dtype=np.int32), 1)
 
-        # ── Write GeoPackage ────────────────────────────────────────────────────
+        # Write GeoPackage
         gdf = gpd.GeoDataFrame(
             {"STRM_VAL": reach_ids_out},
             geometry=reach_geoms,
@@ -390,6 +374,33 @@ class StreamNetReaches:
             wbt.set_whitebox_dir(wbt_dir)
         wbt.set_working_dir(str(Path(self.out_dir)))
         return wbt
+
+
+def _smooth_reach(coords: list[tuple[float, float]], pixel_size: float):
+    """Turn a D8 pixel-centroid path into a smooth reach polyline.
+
+    1. RDP simplify (1.0 px) removes most of the D8 staircase while keeping the
+       channel's real bends.
+    2. One Chaikin corner-cutting pass lightly rounds the remaining bends.
+    Endpoints are preserved exactly so reaches still meet at junctions.
+    """
+    from shapely.geometry import LineString
+
+    line = LineString(coords).simplify(pixel_size * 1.0, preserve_topology=True)
+    if line.is_empty or line.geom_type != "LineString":
+        line = LineString(coords)
+
+    pts = list(line.coords)
+    if len(pts) < 3:
+        return line
+
+    # One Chaikin pass; keep first/last vertices fixed to hold confluences.
+    new_pts = [pts[0]]
+    for (x0, y0), (x1, y1) in zip(pts[:-1], pts[1:]):
+        new_pts.append((0.75 * x0 + 0.25 * x1, 0.75 * y0 + 0.25 * y1))
+        new_pts.append((0.25 * x0 + 0.75 * x1, 0.25 * y0 + 0.75 * y1))
+    new_pts.append(pts[-1])
+    return LineString(new_pts)
 
 
 def _recompress_lzw(path: Path) -> None:

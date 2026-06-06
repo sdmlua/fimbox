@@ -42,14 +42,14 @@ from fimbox import (
 # AOI parameters — point this at any user-supplied AOI working directory.
 # aoi_code is recorded on every hydroTable row; a generic string is fine
 # (HUC IDs work unchanged for legacy datasets).
-OUT_DIR = Path(".././out/HUC08060202")
+OUT_DIR = Path(".././out/test_smallB")
 AOI_CODE = "08060202"
 
 # Tunable CreateHAND parameters- All have sensible defaults in CreateHAND itself.
 PARAMS_CREATE_HAND = dict(
     cost_distance_tolerance=50.0,  # m, lateral cost distance
-    lateral_elevation_threshold=3,  # m, lateral thalweg drop cap
-    max_split_distance_m=2000.0,  # m, split-reach max length
+    lateral_elevation_threshold=10,  # m, lateral thalweg drop cap
+    max_split_distance_m=1500.0,  # m, split-reach max length
     slope_min=0.0001,  # rise/run floor
     lakes_buffer_dist_m=100.0,  # m, lake-boundary buffer
     # SRC / crosswalk
@@ -298,294 +298,298 @@ def test_step_Z0_branch_derivation():
     log.info(f"branch count: {len(result.branch_dataframe)}")
 
 
-# def test_step_Z1_branch_zero_full():
-#     """Run BranchZero: DEM clip, stream rasterize, optional headwater/levelpath/levee
-#     rasters, AGREE conditioning, pit-fill, and D8 flowdir for branch 0.
+def test_step_Z1_branch_zero_full():
+    """Run BranchZero: DEM clip, stream rasterize, optional headwater/levelpath/levee
+    rasters, AGREE conditioning, pit-fill, and D8 flowdir for branch 0.
 
-#     This single call wraps the substeps BranchZero already folds together
-#     (StreamBooleanRasterizer, HeadwaterRasterizer, optional
-#     LevelPathBooleanRasterizer, optional rasterize_3d_levee_lines +
-#     burn_levee_elevations, HydroenforceDEM, WhiteboxTools pit-fill,
-#     FlowdirDEM). Calling the substeps individually would duplicate work the
-#     class already orchestrates correctly.
-#     """
-#     outputs = BranchZero(
-#         dem_path=DEM,
-#         streams_gpkg=STREAMS,
-#         boundary_gpkg=BOUNDARY_BUF,
-#         out_dir=OUT_DIR,
-#         bridge_elev_diff_path=BRIDGE_DIFF if BRIDGE_DIFF.exists() else None,
-#         levee_gpkg_path=NLD_LEVEES if NLD_LEVEES.exists() else None,
-#         headwaters_gpkg=HEADWATERS if HEADWATERS.exists() else None,
-#         levelpaths_extended_gpkg=LEVELPATH_EXT if LEVELPATH_EXT.exists() else None,
-#         agree_buffer_m=15.0,
-#         agree_smooth_drop=10.0,
-#         agree_sharp_drop=1000.0,
-#         branch_zero_id=BRANCH_ID,
-#     ).run()
-#     for key, p in outputs.items():
-#         log.info(f"  {key:35s} --> {p.name}")
-#     assert DEM_BRANCH.exists(), "dem_0.tif missing"
-#     assert STREAM_BOOL.exists(), "flows_grid_boolean_0.tif missing"
-#     assert DEM_BURNED.exists(), "dem_burned_0.tif missing"
-#     assert DEM_FILLED.exists(), "dem_burned_filled_0.tif missing"
-#     assert FLOWDIR.exists(), "flowdir_d8_burned_filled_0.tif missing"
-
-
-# # Stage B — CreateHAND steps 2..21, one isolated test each.
-# def test_step_B02_flow_accumulation():
-#     """CreateHAND step 2: D8 flow accumulation + stream-pixel mask."""
-#     assert FLOWDIR.exists(), "FLOWDIR missing — run step_A6 first"
-#     if not HW_RASTER.exists():
-#         log.warning("skipping flow accumulation — no headwater raster")
-#         return
-#     fa_out, sp_out = FlowAccDEM(
-#         flowdir=FLOWDIR,
-#         headwaters=HW_RASTER,
-#         out_flowaccum=FLOWACCUM,
-#         out_stream_pixels=STREAM_PIX,
-#         threshold=1.0,
-#     ).run()
-#     import rasterio
-
-#     with rasterio.open(str(sp_out)) as src:
-#         stream_count = int((src.read(1) == 1).sum())
-#     log.info(f"stream pixels: {stream_count}")
-#     assert fa_out.exists() and sp_out.exists() and stream_count > 0
+    This single call wraps the substeps BranchZero already folds together
+    (StreamBooleanRasterizer, HeadwaterRasterizer, optional
+    LevelPathBooleanRasterizer, optional rasterize_3d_levee_lines +
+    burn_levee_elevations, HydroenforceDEM, WhiteboxTools pit-fill,
+    FlowdirDEM). Calling the substeps individually would duplicate work the
+    class already orchestrates correctly.
+    """
+    outputs = BranchZero(
+        dem_path=DEM,
+        streams_gpkg=STREAMS,
+        boundary_gpkg=BOUNDARY_BUF,
+        out_dir=OUT_DIR,
+        bridge_elev_diff_path=BRIDGE_DIFF if BRIDGE_DIFF.exists() else None,
+        levee_gpkg_path=NLD_LEVEES if NLD_LEVEES.exists() else None,
+        headwaters_gpkg=HEADWATERS if HEADWATERS.exists() else None,
+        levelpaths_extended_gpkg=LEVELPATH_EXT if LEVELPATH_EXT.exists() else None,
+        agree_buffer_m=15.0,
+        agree_smooth_drop=10.0,
+        agree_sharp_drop=1000.0,
+        branch_zero_id=BRANCH_ID,
+    ).run()
+    for key, p in outputs.items():
+        log.info(f"  {key:35s} --> {p.name}")
+    assert DEM_BRANCH.exists(), "dem_0.tif missing"
+    assert STREAM_BOOL.exists(), "flows_grid_boolean_0.tif missing"
+    assert DEM_BURNED.exists(), "dem_burned_0.tif missing"
+    assert DEM_FILLED.exists(), "dem_burned_filled_0.tif missing"
+    assert FLOWDIR.exists(), "flowdir_d8_burned_filled_0.tif missing"
 
 
-# def test_step_B03_thalweg_adjustment():
-#     """CreateHAND step 3: lateral thalweg minimum + flow-conditioned DEM."""
-#     for p in (DEM_BRANCH, STREAM_PIX, FLOWDIR):
-#         assert p.exists(), f"missing: {p}"
-#     result = ThalwegAdjustment(
-#         dem=DEM_BRANCH,
-#         stream_pixels=STREAM_PIX,
-#         flowdir=FLOWDIR,
-#         out_thalweg_adj=THALWEG_ADJ,
-#         out_flowdir_streams=FLOWDIR_STR,
-#         out_thalweg_cond=THALWEG_COND,
-#         cost_distance_tolerance=50.0,
-#         lateral_elevation_threshold=3,
-#     ).run()
-#     assert result["thalweg_adj"].exists() and result["thalweg_cond"].exists()
+# Stage B — CreateHAND steps 2..21, one isolated test each.
+def test_step_B02_flow_accumulation():
+    """CreateHAND step 2: D8 flow accumulation + stream-pixel mask."""
+    assert FLOWDIR.exists(), "FLOWDIR missing — run step_A6 first"
+    if not HW_RASTER.exists():
+        log.warning("skipping flow accumulation — no headwater raster")
+        return
+    fa_out, sp_out = FlowAccDEM(
+        flowdir=FLOWDIR,
+        headwaters=HW_RASTER,
+        out_flowaccum=FLOWACCUM,
+        out_stream_pixels=STREAM_PIX,
+        threshold=1.0,
+    ).run()
+    import rasterio
+
+    with rasterio.open(str(sp_out)) as src:
+        stream_count = int((src.read(1) == 1).sum())
+    log.info(f"stream pixels: {stream_count}")
+    assert fa_out.exists() and sp_out.exists() and stream_count > 0
 
 
-# def test_step_B04_d8_slopes():
-#     """CreateHAND step 4: D8 slope raster (rise/run from thalweg-adjusted DEM)."""
-#     assert THALWEG_ADJ.exists() and FLOWDIR.exists()
-#     import numpy as np, rasterio
-
-#     out = D8SlopeDEM(
-#         dem=THALWEG_ADJ, flowdir=FLOWDIR, out_path=SLOPES_D8, slope_min=0.0001
-#     ).run()
-#     with rasterio.open(str(out)) as src:
-#         d = src.read(1)
-#         nd = src.nodata
-#         valid = d[(d != nd) & np.isfinite(d)] if nd is not None else d[np.isfinite(d)]
-#     log.info(f"slope range: [{valid.min():.6f}, {valid.max():.6f}]")
-#     # slope_min is clamped at 1e-4 in float32; allow a single-precision epsilon
-#     # of tolerance (~1e-7) so the test doesn't fail on the float32 representation
-#     # of 1e-4 (which is 9.9999997e-05).
-#     assert float(valid.min()) >= 0.0001 - 1e-7
+def test_step_B03_thalweg_adjustment():
+    """CreateHAND step 3: lateral thalweg minimum + flow-conditioned DEM."""
+    for p in (DEM_BRANCH, STREAM_PIX, FLOWDIR):
+        assert p.exists(), f"missing: {p}"
+    result = ThalwegAdjustment(
+        dem=DEM_BRANCH,
+        stream_pixels=STREAM_PIX,
+        flowdir=FLOWDIR,
+        out_thalweg_adj=THALWEG_ADJ,
+        out_flowdir_streams=FLOWDIR_STR,
+        out_thalweg_cond=THALWEG_COND,
+        cost_distance_tolerance=50.0,
+        lateral_elevation_threshold=10,
+    ).run()
+    assert result["thalweg_adj"].exists() and result["thalweg_cond"].exists()
 
 
-# def test_step_B05_streamnet_reaches():
-#     """CreateHAND step 5: vectorise stream network into reach polylines."""
-#     for p in (FLOWDIR, THALWEG_COND, FLOWACCUM, STREAM_PIX):
-#         assert p.exists(), f"missing: {p}"
-#     result = StreamNetReaches(
-#         flowdir=FLOWDIR,
-#         dem_thalweg_cond=THALWEG_COND,
-#         flowaccum=FLOWACCUM,
-#         stream_pixels=STREAM_PIX,
-#         out_dir=BRANCH_DIR,
-#         branch_id=BRANCH_ID,
-#     ).run()
-#     import geopandas as gpd
+def test_step_B04_d8_slopes():
+    """CreateHAND step 4: D8 slope raster (rise/run from thalweg-adjusted DEM)."""
+    assert THALWEG_ADJ.exists() and FLOWDIR.exists()
+    import numpy as np, rasterio
 
-#     reaches = gpd.read_file(str(result["demDerived_reaches"]))
-#     log.info(f"reaches: {len(reaches)}")
-#     assert len(reaches) > 0
+    out = D8SlopeDEM(
+        dem=THALWEG_ADJ, flowdir=FLOWDIR, out_path=SLOPES_D8, slope_min=0.0001
+    ).run()
+    with rasterio.open(str(out)) as src:
+        d = src.read(1)
+        nd = src.nodata
+        valid = d[(d != nd) & np.isfinite(d)] if nd is not None else d[np.isfinite(d)]
+    log.info(f"slope range: [{valid.min():.6f}, {valid.max():.6f}]")
+    # slope_min is clamped at 1e-4 in float32; allow a single-precision epsilon
+    # of tolerance (~1e-7) so the test doesn't fail on the float32 representation
+    # of 1e-4 (which is 9.9999997e-05).
+    assert float(valid.min()) >= 0.0001 - 1e-7
 
+def test_step_B05_streamnet_reaches():
+    """CreateHAND step 5: vectorise stream network into reach polylines."""
+    for p in (FLOWDIR, THALWEG_COND, FLOWACCUM, STREAM_PIX):
+        assert p.exists(), f"missing: {p}"
+    result = StreamNetReaches(
+        flowdir=FLOWDIR,
+        dem_thalweg_cond=THALWEG_COND,
+        flowaccum=FLOWACCUM,
+        stream_pixels=STREAM_PIX,
+        out_dir=BRANCH_DIR,
+        branch_id=BRANCH_ID,
+    ).run()
+    import geopandas as gpd
 
-# def test_step_B06_split_reaches():
-#     """CreateHAND step 6: split reaches at length limit + lake boundaries."""
-#     for p in (DEM_REACHES, THALWEG_COND, STREAMS):
-#         assert p.exists(), f"missing: {p}"
-#     split_gpkg, pts_gpkg = split_derived_reaches(
-#         reaches_gpkg=DEM_REACHES,
-#         dem_thalweg_cond=THALWEG_COND,
-#         nwm_streams_gpkg=STREAMS,
-#         out_split_gpkg=SPLIT_REACHES,
-#         out_points_gpkg=SPLIT_PTS,
-#         wbd8_clp_gpkg=WBD8_CLP if WBD8_CLP.exists() else None,
-#         lakes_gpkg=LAKES if LAKES.exists() else None,
-#         max_length=2000.0,
-#         slope_min=0.0001,
-#         lakes_buffer_dist=100.0,
-#     )
-#     import geopandas as gpd
-
-#     split = gpd.read_file(str(split_gpkg))
-#     log.info(f"split reaches: {len(split)} columns={list(split.columns)}")
-#     assert (
-#         len(split) > 0 and "HydroID" in split.columns and "NextDownID" in split.columns
-#     )
+    reaches = gpd.read_file(str(result["demDerived_reaches"]))
+    log.info(f"reaches: {len(reaches)}")
+    assert len(reaches) > 0
 
 
-# def test_step_B07_gage_watershed_reaches():
-#     """CreateHAND step 7: reverse-D8 walk labelling each pixel by its HydroID."""
-#     from fimbox import GageCatchments
+def test_step_B06_split_reaches():
+    """CreateHAND step 6: split reaches at length limit + lake boundaries."""
+    for p in (DEM_REACHES, THALWEG_COND, STREAMS):
+        assert p.exists(), f"missing: {p}"
+    split_gpkg, pts_gpkg = split_derived_reaches(
+        reaches_gpkg=DEM_REACHES,
+        dem_thalweg_cond=THALWEG_COND,
+        nwm_streams_gpkg=STREAMS,
+        out_split_gpkg=SPLIT_REACHES,
+        out_points_gpkg=SPLIT_PTS,
+        wbd8_clp_gpkg=WBD8_CLP if WBD8_CLP.exists() else None,
+        lakes_gpkg=LAKES if LAKES.exists() else None,
+        #This could be interesting point where based on slope or anyother logic, you can segment the reach--> ultimately gives the corresponsing
+        #catchment, meaning shorter the reach length- denser the catchment
+        max_length=1500.0,
+        slope_min=0.0001,
+        lakes_buffer_dist=100.0,
+    )
+    import geopandas as gpd
 
-#     for p in (FLOWDIR, SPLIT_PTS):
-#         assert p.exists(), f"missing: {p}"
-#     GageCatchments(
-#         flowdir=FLOWDIR,
-#         outlet_points=SPLIT_PTS,
-#         out_path=GW_REACHES,
-#     ).run()
-#     assert GW_REACHES.exists()
-
-
-# def test_step_B08_stream_pixel_points():
-#     """CreateHAND step 8: vectorise stream-pixel centroids (one point per stream pixel)."""
-#     from fimbox import stream_pixel_points
-
-#     assert STREAM_PIX.exists()
-#     stream_pixel_points(stream_pixels=STREAM_PIX, out_gpkg=PIXEL_PTS)
-#     assert PIXEL_PTS.exists()
-
-
-# def test_step_B09_gage_watershed_pixels():
-#     """CreateHAND step 9: reverse-D8 walk labelling each pixel by NWM feature_id."""
-#     from fimbox import GageCatchments
-
-#     for p in (FLOWDIR, PIXEL_PTS):
-#         assert p.exists(), f"missing: {p}"
-#     GageCatchments(
-#         flowdir=FLOWDIR,
-#         outlet_points=PIXEL_PTS,
-#         out_path=GW_PIXELS,
-#     ).run()
-#     assert GW_PIXELS.exists()
+    split = gpd.read_file(str(split_gpkg))
+    log.info(f"split reaches: {len(split)} columns={list(split.columns)}")
+    assert (
+        len(split) > 0 and "HydroID" in split.columns and "NextDownID" in split.columns
+    )
 
 
-# def test_step_B10_outlet_backpool_mitigation():
-#     """CreateHAND step 10: trim oversized outlet catchments (no-op for branch 0)."""
-#     from fimbox import OutletBackpoolMitigate
+def test_step_B07_gage_watershed_reaches():
+    """CreateHAND step 7: reverse-D8 walk labelling each pixel by its HydroID."""
+    from fimbox import GageCatchments
 
-#     for p in (SPLIT_REACHES, GW_PIXELS, GW_REACHES, SPLIT_PTS, STREAMS, THALWEG_COND):
-#         assert p.exists(), f"missing: {p}"
-#     OutletBackpoolMitigate(
-#         branch_dir=BRANCH_DIR,
-#         catchment_pixels_path=GW_PIXELS,
-#         catchment_reaches_path=GW_REACHES,
-#         split_flows_gpkg=SPLIT_REACHES,
-#         split_points_gpkg=SPLIT_PTS,
-#         nwm_streams_gpkg=STREAMS,
-#         dem_path=THALWEG_COND,
-#         slope_min=0.0001,
-#     ).run()
-#     # No new file is asserted — backpool mitigation modifies the existing
-#     # gw_catchments_pixels/reaches rasters in place for non-zero branches only.
-#     assert GW_PIXELS.exists() and GW_REACHES.exists()
+    for p in (FLOWDIR, SPLIT_PTS):
+        assert p.exists(), f"missing: {p}"
+    # declutter=True mirrors CreateHAND step 7: solidify the reach raster
+    # (fill pits, de-checkerboard, one piece per HydroID) so it polygonizes clean.
+    GageCatchments(
+        flowdir=FLOWDIR,
+        outlet_points=SPLIT_PTS,
+        out_path=GW_REACHES,
+        declutter=True,
+    ).run()
+    assert GW_REACHES.exists()
 
 
-# def test_step_B11_make_rem():
-#     """CreateHAND step 11: HAND = pixel_elev - nearest_stream_pixel_elev.
+def test_step_B08_stream_pixel_points():
+    """CreateHAND step 8: vectorise stream-pixel centroids (one point per stream pixel)."""
+    from fimbox import stream_pixel_points
 
-#     Note: the raw REM **can** be negative (pixels lower than the nearest
-#     downstream stream pixel — happens near floodplain edges and where the
-#     D8 walk crosses meander cutoffs). Negative values get clipped to zero
-#     in step 12 (``rem_zeroed_masked``). This test only asserts the raster
-#     was produced and contains finite values — it does NOT enforce
-#     non-negativity, which is a step-12 invariant.
-#     """
-#     from fimbox import MakeREM
-
-#     for p in (THALWEG_COND, GW_PIXELS, STREAM_PIX):
-#         assert p.exists(), f"missing: {p}"
-#     out = MakeREM(
-#         dem_thalweg_cond=THALWEG_COND,
-#         gw_catchments_pixels=GW_PIXELS,
-#         stream_pixels=STREAM_PIX,
-#         out_rem=REM,
-#     ).run()
-#     import rasterio, numpy as np
-
-#     with rasterio.open(str(out)) as src:
-#         data = src.read(1)
-#         nd = src.nodata
-#         valid = data[data != nd] if nd is not None else data.ravel()
-#     log.info(
-#         f"REM range: [{float(valid.min()):.2f}, {float(valid.max()):.2f}] "
-#         f"({(valid < 0).sum()} negative pixels — clipped by step 12)"
-#     )
-#     assert out.exists() and valid.size > 0 and np.isfinite(valid).all()
+    assert STREAM_PIX.exists()
+    stream_pixel_points(stream_pixels=STREAM_PIX, out_gpkg=PIXEL_PTS)
+    assert PIXEL_PTS.exists()
 
 
-# def test_step_B11b_rem_nonnegative_after_zero_mask():
-#     """Cross-check: after step 12 (rem_zeroed_masked), the REM raster must be
-#     non-negative and contain no NaN pixels. The reference formula
-#     ``(A * (A>=0) * (B>0))`` with an explicit NoDataValue treats NaN inputs as
-#     zero; the fimbox port now matches that behaviour by rewriting NaN to the
-#     nodata sentinel before the multiply.
+def test_step_B09_gage_watershed_pixels():
+    """CreateHAND step 9: reverse-D8 walk labelling each pixel by NWM feature_id."""
+    from fimbox import GageCatchments
 
-#     Lives next to B11 so a failure here points at the zero-mask logic, not at
-#     MakeREM itself. Skipped silently if step 12 hasn't run yet (run B12 first).
-#     """
-#     import numpy as np
-#     import rasterio
-
-#     if not REM_ZEROED.exists():
-#         log.warning("skipping non-negativity check — run step_B12 first")
-#         return
-#     with rasterio.open(str(REM_ZEROED)) as src:
-#         data = src.read(1)
-#         nd = src.nodata
-#         # Strip both the nodata sentinel and any NaN before the min() so the
-#         # test catches the actual data range, not an IEEE NaN propagating.
-#         if nd is not None:
-#             valid_mask = (data != nd) & ~np.isnan(data)
-#         else:
-#             valid_mask = ~np.isnan(data)
-#         valid = data[valid_mask]
-#     nan_count = int(np.isnan(data).sum())
-#     log.info(f"REM zero-mask: {valid.size} valid pixels, {nan_count} NaN pixels")
-#     assert valid.size > 0
-#     assert (
-#         nan_count == 0
-#     ), f"step 12 leaked {nan_count} NaN pixels into the masked REM raster"
-#     assert (
-#         float(valid.min()) >= 0.0
-#     ), f"step 12 left negatives in REM: min={valid.min()}"
+    for p in (FLOWDIR, PIXEL_PTS):
+        assert p.exists(), f"missing: {p}"
+    GageCatchments(
+        flowdir=FLOWDIR,
+        outlet_points=PIXEL_PTS,
+        out_path=GW_PIXELS,
+    ).run()
+    assert GW_PIXELS.exists()
 
 
-# def test_step_B12_rem_zeroed_masked():
-#     """CreateHAND step 12: clip negative HAND to 0 + mask outside catchments."""
-#     from fimbox import rem_zeroed_masked
+def test_step_B10_outlet_backpool_mitigation():
+    """CreateHAND step 10: trim oversized outlet catchments (no-op for branch 0)."""
+    from fimbox import OutletBackpoolMitigate
 
-#     for p in (REM, GW_REACHES):
-#         assert p.exists(), f"missing: {p}"
-#     rem_zeroed_masked(REM, GW_REACHES, REM_ZEROED)
-#     assert REM_ZEROED.exists()
+    for p in (SPLIT_REACHES, GW_PIXELS, GW_REACHES, SPLIT_PTS, STREAMS, THALWEG_COND):
+        assert p.exists(), f"missing: {p}"
+    OutletBackpoolMitigate(
+        branch_dir=BRANCH_DIR,
+        catchment_pixels_path=GW_PIXELS,
+        catchment_reaches_path=GW_REACHES,
+        split_flows_gpkg=SPLIT_REACHES,
+        split_points_gpkg=SPLIT_PTS,
+        nwm_streams_gpkg=STREAMS,
+        dem_path=THALWEG_COND,
+        slope_min=0.0001,
+    ).run()
+    # No new file is asserted — backpool mitigation modifies the existing
+    # gw_catchments_pixels/reaches rasters in place for non-zero branches only.
+    assert GW_PIXELS.exists() and GW_REACHES.exists()
 
 
-# def test_step_B13_polygonize_catchments():
-#     """CreateHAND step 13: rasterised catchments --> per-HydroID polygon gpkg."""
-#     # Helper lives inside create_hand.py as a private function; import it explicitly.
-#     from fimbox.preprocessing.calculate_branch.create_hand import (
-#         _polygonize_catchments,
-#     )
+def test_step_B11_make_rem():
+    """CreateHAND step 11: HAND = pixel_elev - nearest_stream_pixel_elev.
 
-#     assert GW_REACHES.exists()
-#     _polygonize_catchments(GW_REACHES, CATCH_POLY)
-#     import geopandas as gpd
+    Note: the raw REM **can** be negative (pixels lower than the nearest
+    downstream stream pixel — happens near floodplain edges and where the
+    D8 walk crosses meander cutoffs). Negative values get clipped to zero
+    in step 12 (``rem_zeroed_masked``). This test only asserts the raster
+    was produced and contains finite values — it does NOT enforce
+    non-negativity, which is a step-12 invariant.
+    """
+    from fimbox import MakeREM
 
-#     gdf = gpd.read_file(str(CATCH_POLY))
-#     log.info(f"polygonised: {len(gdf)} catchments")
-#     assert CATCH_POLY.exists() and "HydroID" in gdf.columns and len(gdf) > 0
+    for p in (THALWEG_COND, GW_PIXELS, STREAM_PIX):
+        assert p.exists(), f"missing: {p}"
+    out = MakeREM(
+        dem_thalweg_cond=THALWEG_COND,
+        gw_catchments_pixels=GW_PIXELS,
+        stream_pixels=STREAM_PIX,
+        out_rem=REM,
+    ).run()
+    import rasterio, numpy as np
+
+    with rasterio.open(str(out)) as src:
+        data = src.read(1)
+        nd = src.nodata
+        valid = data[data != nd] if nd is not None else data.ravel()
+    log.info(
+        f"REM range: [{float(valid.min()):.2f}, {float(valid.max()):.2f}] "
+        f"({(valid < 0).sum()} negative pixels — clipped by step 12)"
+    )
+    assert out.exists() and valid.size > 0 and np.isfinite(valid).all()
+
+
+def test_step_B11b_rem_nonnegative_after_zero_mask():
+    """Cross-check: after step 12 (rem_zeroed_masked), the REM raster must be
+    non-negative and contain no NaN pixels. The reference formula
+    ``(A * (A>=0) * (B>0))`` with an explicit NoDataValue treats NaN inputs as
+    zero; the fimbox port now matches that behaviour by rewriting NaN to the
+    nodata sentinel before the multiply.
+
+    Lives next to B11 so a failure here points at the zero-mask logic, not at
+    MakeREM itself. Skipped silently if step 12 hasn't run yet (run B12 first).
+    """
+    import numpy as np
+    import rasterio
+
+    if not REM_ZEROED.exists():
+        log.warning("skipping non-negativity check — run step_B12 first")
+        return
+    with rasterio.open(str(REM_ZEROED)) as src:
+        data = src.read(1)
+        nd = src.nodata
+        # Strip both the nodata sentinel and any NaN before the min() so the
+        # test catches the actual data range, not an IEEE NaN propagating.
+        if nd is not None:
+            valid_mask = (data != nd) & ~np.isnan(data)
+        else:
+            valid_mask = ~np.isnan(data)
+        valid = data[valid_mask]
+    nan_count = int(np.isnan(data).sum())
+    log.info(f"REM zero-mask: {valid.size} valid pixels, {nan_count} NaN pixels")
+    assert valid.size > 0
+    assert (
+        nan_count == 0
+    ), f"step 12 leaked {nan_count} NaN pixels into the masked REM raster"
+    assert (
+        float(valid.min()) >= 0.0
+    ), f"step 12 left negatives in REM: min={valid.min()}"
+
+
+def test_step_B12_rem_zeroed_masked():
+    """CreateHAND step 12: clip negative HAND to 0 + mask outside catchments."""
+    from fimbox import rem_zeroed_masked
+
+    for p in (REM, GW_REACHES):
+        assert p.exists(), f"missing: {p}"
+    rem_zeroed_masked(REM, GW_REACHES, REM_ZEROED)
+    assert REM_ZEROED.exists()
+
+
+def test_step_B13_polygonize_catchments():
+    """CreateHAND step 13: rasterised catchments --> per-HydroID polygon gpkg."""
+    # Helper lives inside create_hand.py as a private function; import it explicitly.
+    from fimbox.preprocessing.calculate_branch.create_hand import (
+        _polygonize_catchments,
+    )
+
+    assert GW_REACHES.exists()
+    _polygonize_catchments(GW_REACHES, CATCH_POLY)
+    import geopandas as gpd
+
+    gdf = gpd.read_file(str(CATCH_POLY))
+    log.info(f"polygonised: {len(gdf)} catchments")
+    assert CATCH_POLY.exists() and "HydroID" in gdf.columns and len(gdf) > 0
 
 
 # def test_step_B14_filter_catchments():
