@@ -17,8 +17,29 @@ def test_preprocess_all_from_boundary():
         headwater_buffer_cells=8,  # pixels to shrink buffer for headwater clip
         get_flowlines=True,  # set False to use your own flowlines and corresponding catchments
         get_catchments=True,  # set False to skip NWM catchments--> use
+        resolution="medium",  # "high" -> NHDPlus HR flowlines/catchments via pynhd; "medium" (default) -> NWM. Lakes always NWM.
+        identifier="nwm",  # filename prefix for ALL source files; flows download->processing. Default "nwm".
     )
     pp.run()
+
+
+# Bring your own flowlines / catchments / DEM (any column names, any source).
+# Pass the file paths + field maps; flowlines/catchments are normalised to the
+# pipeline schema (streams: ID, order_, levpa_id, feature_id[=ID]; catchments: ID),
+# the DEM is reprojected/clipped/hole-filled, and all files are saved under the
+# chosen identifier prefix so the whole pipeline picks them up automatically.
+# def test_preprocess_byo_inputs():
+#     pp = fimbox.getAllInputData(
+#         boundary=test_boundary,
+#         out_dir="../out",
+#         flowlines="path/to/my_flowlines.gpkg",
+#         catchments="path/to/my_catchments.gpkg",
+#         stream_fields={"ID": "nhdplusid", "order_": "streamorde", "levpa_id": "levelpathi"},
+#         catchment_fields={"ID": "nhdplusid"},  # must match the flowline reach id
+#         dem="path/to/my_dem.tif",  # reprojected, clipped, and hole-filled like a downloaded DEM
+#         identifier="3dhp",  # files saved as 3dhp_subset_streams.gpkg etc.; whole pipeline follows it
+#     )
+#     pp.run()
 
 
 # # Run full pipeline from a HUC8 ID
@@ -33,6 +54,7 @@ def test_preprocess_all_from_boundary():
 #         headwater_buffer_cells=8,
 #         get_flowlines=True,  # set False to use your own flowlines and corresponding catchments
 #         get_catchments=True,  # set False to skip NWM catchments--> use your own in later steps
+#      resolution="medium",  # "high" -> NHDPlus HR flowlines/catchments via pynhd; "medium" (default) -> NWM. Lakes always NWM.
 #     )
 #     pp.run()
 

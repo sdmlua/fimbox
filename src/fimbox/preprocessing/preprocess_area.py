@@ -39,7 +39,13 @@ from ..logging_utils import attach_case_log, get_logger
 from .download_data.dem_process import DEMProcessor
 from .download_data.area_masks import DownloadDEMDomain, DownloadLandSea
 from .download_data.nfhl_data import DownloadFEMANFHL
-from .download_data.nhdplus import getNHDPlusData
+from .download_data.nhdplus import (
+    getNHDPlusData,
+    _is_high_resolution,
+    normalize_flowlines,
+    normalize_catchments,
+)
+from .source_naming import DEFAULT_IDENTIFIER, source_name
 from .download_data.nld_data import DownloadNLD
 from .download_data.osm_data import DownloadOSMBridges, DownloadOSMRoads
 from .download_data.utils import HUC8Finder, find_headwater_points
@@ -248,6 +254,32 @@ class getAllInputData:
         Default True. Set False to skip.
     get_catchments : bool, optional
         Download NWM/NHDPlus catchments. Default True. Set False to skip.
+    resolution : str, optional
+        Flowline/catchment source. ``"medium"`` (default) uses the NWM ArcGIS
+        FeatureServer; ``"high"`` (aliases ``high-resolution``, ``hr``) fetches
+        NHDPlus High Resolution flowlines/catchments via ``pynhd`` for the AOI.
+        Lakes always come from NWM.
+    flowlines, catchments : str or Path, optional
+        Bring-your-own flowlines / catchments (path to a vector file). When
+        given, the file is normalised and saved instead of downloading that
+        dataset. Supply ``stream_fields`` / ``catchment_fields`` if its column
+        names differ from the canonical schema.
+    stream_fields, catchment_fields : dict, optional
+        Field maps (canonical -> your column) for the BYO data. Streams need
+        ``ID``, ``order_``, ``levpa_id`` (``feature_id`` defaults to ``ID``);
+        catchments need ``ID``. Example:
+        ``stream_fields={"ID": "nhdplusid", "order_": "streamorde", "levpa_id": "levelpathi"}``.
+    identifier : str, optional
+        Filename prefix for the source-derived datasets (streams/catchments/
+        lakes/headwaters and their level-path derivatives). Default ``"nwm"``,
+        which preserves the legacy filenames. Pass a custom value (e.g.
+        ``"3dhp"``) when your data is not NWM, so files are saved as
+        ``{identifier}_subset_streams.gpkg`` etc. The whole pipeline auto-detects
+        and reuses this prefix downstream.
+    dem : str or Path, optional
+        Bring-your-own DEM. When given it is reprojected, clipped to the buffer,
+        and hole-filled (the same conditioning a downloaded 3DEP DEM gets) and
+        saved as ``dem.tif`` instead of fetching from 3DEP.
 
     Either ``huc8`` or ``boundary`` must be provided.
     """
@@ -264,6 +296,13 @@ class getAllInputData:
         headwater_buffer_cells: int = 8,
         get_flowlines: bool = True,
         get_catchments: bool = True,
+        resolution: str = "medium",
+        flowlines: Optional[Union[str, Path]] = None,
+        catchments: Optional[Union[str, Path]] = None,
+        stream_fields: Optional[dict] = None,
+        catchment_fields: Optional[dict] = None,
+        identifier: str = DEFAULT_IDENTIFIER,
+        dem: Optional[Union[str, Path]] = None,
     ):
         if huc8 is None and boundary is None:
             raise ValueError("Provide either huc8 or boundary.")
@@ -277,6 +316,23 @@ class getAllInputData:
         self.headwater_buffer_cells = headwater_buffer_cells
         self.get_flowlines = get_flowlines
         self.get_catchments = get_catchments
+        self.resolution = resolution
+        # bring-your-own flowlines/catchments + their field maps
+        self.byo_flowlines = Path(flowlines) if flowlines else None
+        self.byo_catchments = Path(catchments) if catchments else None
+        self.stream_fields = stream_fields
+        self.catchment_fields = catchment_fields
+        # bring-your-own DEM (reprojected, clipped, and hole-filled like a
+        # downloaded one); when None the DEM is fetched from 3DEP.
+        self.byo_dem = Path(dem) if dem else None
+
+        # source-derived filenames carry an identifier prefix (default "nwm").
+        self.identifier = identifier
+        self._filenames = dict(_FILENAMES)
+        self._filenames["nwm_streams"] = source_name("streams", identifier)
+        self._filenames["nwm_catchments"] = source_name("catchments", identifier)
+        self._filenames["nwm_lakes"] = source_name("lakes", identifier)
+        self._filenames["nwm_headwaters"] = source_name("headwaters_points", identifier)
 
         self.case_name = f"HUC{huc8}" if huc8 else self.boundary_path.stem
 
@@ -302,7 +358,9 @@ class getAllInputData:
 
     # helpers
     def _out(self, key: str) -> Path:
-        return self.case_dir / _FILENAMES[key]
+        # self._filenames overrides the source-derived names with the identifier
+        # prefix; everything else falls back to the module-level defaults.
+        return self.case_dir / self._filenames[key]
 
     def _setup_logger(self):
         # All fimbox modules log under `fimbox.*` via getLogger(__name__);
@@ -433,59 +491,107 @@ class getAllInputData:
     def run_dem(self):
         if self._skip("dem"):
             return
-        self.logger.info("--- DEM ---")
+        src = f"BYO {self.byo_dem.name}" if self.byo_dem else "3DEP"
+        self.logger.info(f"--- DEM ({src}) ---")
         try:
+            # dem_file set -> reproject/clip/hole-fill the user's DEM; else fetch 3DEP.
             DEMProcessor(
                 boundary=self.buffer_gdf,
                 output_dir=str(self.case_dir),
                 out_name=_FILENAMES["dem"],
                 resolution=self.dem_resolution,
                 epsg=self.epsg,
+                dem_file=str(self.byo_dem) if self.byo_dem else None,
             )
             self.logger.info(f"DEM --> {_FILENAMES['dem']}")
         except Exception as exc:
             self.logger.error(f"DEM failed: {exc}", exc_info=True)
 
     def run_nhd(self):
-        # Lakes always download; flowlines/catchments are user-toggleable.
+        # Lakes always download; flowlines/catchments are user-toggleable and
+        # may be supplied directly (BYO) instead of downloaded.
+        want_flowlines = self.get_flowlines or self.byo_flowlines is not None
+        want_catchments = self.get_catchments or self.byo_catchments is not None
+
         expected_keys = ["nwm_lakes"]
-        if self.get_flowlines:
+        if want_flowlines:
             expected_keys.append("nwm_streams")
-        if self.get_catchments:
+        if want_catchments:
             expected_keys.append("nwm_catchments")
 
-        all_exist = all(self._out(k).exists() for k in expected_keys)
-        if all_exist:
-            self.logger.info(f"SKIP (exists): nwm_subset_streams/catchments/lakes")
+        if all(self._out(k).exists() for k in expected_keys):
+            self.logger.info("SKIP (exists): nwm_subset_streams/catchments/lakes")
             return
 
-        if not self.get_flowlines:
-            self.logger.info("get_flowlines=False --> skipping NWM flowlines/headwaters")
-        if not self.get_catchments:
-            self.logger.info("get_catchments=False --> skipping NWM catchments")
+        # 1) Bring-your-own flowlines / catchments: normalise + save (no download).
+        self._ingest_byo()
 
-        self.logger.info("--- NWM Flowlines / Catchments / Lakes ---")
+        # 2) Download whatever was not supplied directly.
+        dl_flowlines = self.get_flowlines and self.byo_flowlines is None
+        dl_catchments = self.get_catchments and self.byo_catchments is None
+
+        if not self.get_flowlines and self.byo_flowlines is None:
+            self.logger.info("get_flowlines=False --> skipping flowlines/headwaters")
+        if not self.get_catchments and self.byo_catchments is None:
+            self.logger.info("get_catchments=False --> skipping catchments")
+
+        src = "NHDPlus HR" if _is_high_resolution(self.resolution) else "NWM"
+        self.logger.info(f"--- {src} Flowlines / Catchments + NWM Lakes ---")
         try:
             results = getNHDPlusData(
                 boundary=self.buffer_gdf,
                 out_dir=str(self.case_dir),
                 epsg=self.epsg,
-                download_flowlines=self.get_flowlines,
-                download_catchments=self.get_catchments,
+                download_flowlines=dl_flowlines,
+                download_catchments=dl_catchments,
                 download_lakes=True,
+                resolution=self.resolution,
+                identifier=self.identifier,
             )
             if results.get("flowlines") is not None and not results["flowlines"].empty:
-                self.logger.info(f"NWM streams --> {_FILENAMES['nwm_streams']}")
+                self.logger.info(f"streams --> {self._filenames['nwm_streams']}")
                 self._run_headwaters(results["flowlines"])
             if (
                 results.get("catchments") is not None
                 and not results["catchments"].empty
             ):
-                self.logger.info(f"NWM catchments --> {_FILENAMES['nwm_catchments']}")
+                self.logger.info(f"catchments --> {self._filenames['nwm_catchments']}")
             if results.get("lakes") is not None and not results["lakes"].empty:
-                self.logger.info(f"NWM lakes --> {_FILENAMES['nwm_lakes']}")
+                self.logger.info(f"lakes --> {self._filenames['nwm_lakes']}")
         except Exception as exc:
             self.logger.error(f"NHD failed: {exc}", exc_info=True)
+
+    def _ingest_byo(self):
+        """Normalise bring-your-own flowlines / catchments to the canonical
+        schema and save them under the standard filenames the pipeline reads."""
+        if self.byo_flowlines is not None:
+            self.logger.info(f"--- BYO flowlines: {self.byo_flowlines.name} ---")
+            try:
+                fl = normalize_flowlines(
+                    self.byo_flowlines, field_map=self.stream_fields, epsg=self.epsg
+                )
+                fl = self._drop_fid(fl)
+                fl.to_file(self._out("nwm_streams"), driver="GPKG", index=False)
+                self.logger.info(
+                    f"BYO streams ({len(fl)}) --> {self._filenames['nwm_streams']}"
+                )
+                self._run_headwaters(fl)
+            except Exception as exc:
+                self.logger.error(f"BYO flowlines failed: {exc}", exc_info=True)
+
+        if self.byo_catchments is not None:
+            self.logger.info(f"--- BYO catchments: {self.byo_catchments.name} ---")
+            try:
+                cat = normalize_catchments(
+                    self.byo_catchments, field_map=self.catchment_fields, epsg=self.epsg
+                )
+                cat = self._drop_fid(cat)
+                cat.to_file(self._out("nwm_catchments"), driver="GPKG", index=False)
+                self.logger.info(
+                    f"BYO catchments ({len(cat)}) --> {self._filenames['nwm_catchments']}"
+                )
+            except Exception as exc:
+                self.logger.error(f"BYO catchments failed: {exc}", exc_info=True)
 
     def _run_headwaters(self, flowlines_gdf: gpd.GeoDataFrame):
         """Derive headwater points from flowlines, clipped to inner buffer."""
@@ -505,7 +611,7 @@ class getAllInputData:
             if not hw.empty:
                 hw.to_file(self._out("nwm_headwaters"), driver="GPKG", index=False)
                 self.logger.info(
-                    f"Headwaters ({len(hw)} points) --> {_FILENAMES['nwm_headwaters']}"
+                    f"Headwaters ({len(hw)} points) --> {self._filenames['nwm_headwaters']}"
                 )
             else:
                 self.logger.warning("Headwaters: no points found.")
@@ -665,6 +771,23 @@ if __name__ == "__main__":
         action="store_true",
         help="Skip NWM catchment download (bring your own).",
     )
+    parser.add_argument(
+        "--resolution",
+        default="medium",
+        help="Flowline/catchment source: 'medium' (NWM, default) or 'high' "
+        "(NHDPlus HR via pynhd).",
+    )
+    parser.add_argument(
+        "--identifier",
+        default=DEFAULT_IDENTIFIER,
+        help="Filename prefix for source-derived data (default 'nwm').",
+    )
+    parser.add_argument(
+        "--dem",
+        default=None,
+        help="Bring-your-own DEM path (reprojected/clipped/hole-filled); "
+        "omit to fetch 3DEP.",
+    )
     args = parser.parse_args()
 
     pp = getAllInputData(
@@ -678,5 +801,8 @@ if __name__ == "__main__":
         headwater_buffer_cells=args.headwater_buffer_cells,
         get_flowlines=not args.no_flowlines,
         get_catchments=not args.no_catchments,
+        resolution=args.resolution,
+        identifier=args.identifier,
+        dem=args.dem,
     )
     pp.run()
