@@ -1,12 +1,21 @@
 """
+Author: Supath Dhital
+Date Updated: June 2026
+
+
 Shared logging setup
 All modules use `log = logging.getLogger(__name__)` (so every logger sits
 under the `fimbox.*` namespace). When a pipeline run starts, the orchestrator
 calls `attach_case_log(case_dir)` which adds two handlers to the root
 `fimbox` logger:
 
-    1. a FileHandler writing to <case_dir>/preprocess.log
+    1. a FileHandler writing to <AOI_root>/processing.log
     2. a StreamHandler writing to stdout
+
+The log always lands at the AOI root. Downstream stages (branch processing,
+FIM generation, calibration) operate on the ``watershed-data/`` subfolder and
+pass it as their ``aoi_dir``; ``attach_case_log`` detects that and hops up to
+the parent so every stage writes to the single ``<AOI_root>/processing.log``.
 
 Format (terminal + log file):
     HH:MM:SS [LEVEL] message
@@ -29,6 +38,24 @@ _ROOT_NAME = "fimbox"
 _FORMAT = "%(asctime)s [%(levelname)s] %(message)s"
 _DATEFMT = "%H:%M:%S"
 
+# Name of the watershed-data subfolder that holds all input data + branches.
+WATERSHED_DIR_NAME = "watershed-data"
+
+
+def aoi_root(case_dir: Union[str, Path]) -> Path:
+    """Resolve the AOI root from any directory a stage operates on.
+
+    Preprocessing writes input data + ``branches/`` into
+    ``<AOI_root>/watershed-data/`` and downstream stages take that subfolder as
+    their ``aoi_dir``. The single combined log, ``feature_id.csv``,
+    ``discharge-inputs/`` and ``fim-outputs/`` all live at the AOI root — one
+    level up. When ``case_dir`` is the ``watershed-data`` folder, return its
+    parent; otherwise return ``case_dir`` unchanged (so legacy flat layouts and
+    direct AOI-root callers still work).
+    """
+    p = Path(case_dir)
+    return p.parent if p.name == WATERSHED_DIR_NAME else p
+
 
 def get_logger(name: Optional[str] = None) -> logging.Logger:
     """Return a logger under the `fimbox` namespace.
@@ -43,19 +70,23 @@ def get_logger(name: Optional[str] = None) -> logging.Logger:
 def attach_case_log(
     case_dir: Union[str, Path],
     *,
-    filename: str = "preprocess.log",
+    filename: str = "processing.log",
     level: int = logging.INFO,
     stream: bool = True,
 ) -> logging.Logger:
     """Attach a per-case file handler (and optional stream handler) to the
     `fimbox` root logger.
 
+    The log always lands at the AOI root (see :func:`aoi_root`): when
+    ``case_dir`` is a ``watershed-data`` folder the handler writes one level up
+    so every stage shares the same ``<AOI_root>/processing.log``.
+
     Safe to call multiple times: handlers are tagged so duplicate attachments
-    for the same case_dir are skipped.
+    for the same log file are skipped.
     """
-    case_dir = Path(case_dir)
-    case_dir.mkdir(parents=True, exist_ok=True)
-    log_path = case_dir / filename
+    log_dir = aoi_root(case_dir)
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_path = log_dir / filename
 
     root = logging.getLogger(_ROOT_NAME)
     root.setLevel(level)

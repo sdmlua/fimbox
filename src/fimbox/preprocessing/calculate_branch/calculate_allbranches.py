@@ -98,12 +98,11 @@ def calculate_allbranches(
 ) -> AllBranchesResult:
     """Run the per-AOI branch loop + AOI-level cleanup.
 
-    Equivalent to running this shell sequence by hand::
-
-        generate_branch_list_csv  -o branch_ids.csv  -u <aoi_id>  -b 0
-        process_branch.sh    <huc> <branch_id>         (in parallel for every non-0 branch)
-        # ↑ each successful branch also appends to branch_ids.csv
-        outputs_cleanup.py   -d <aoi_dir>  -l deny_unit_list  -b <aoi_id>
+    Steps:
+        1. Write branch_ids.csv with the full branch inventory (branch 0 first,
+           then every id from branch_ids.lst).
+        2. Process every non-zero branch in parallel.
+        3. Apply the AOI-level deny-list cleanup to remove intermediates.
 
     Returns an :class:`AllBranchesResult` summarising what got recorded and
     cleaned up.

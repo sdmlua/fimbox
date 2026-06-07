@@ -4,10 +4,25 @@ Date Updated: May 2026
 
 Top-level FIM generation pipeline.
 
+Layout
+------
+The branch HAND outputs live in the AOI's ``watershed-data/`` subfolder, while
+the discharge inputs and FIM outputs live at the AOI root::
+
+    <AOI_root>/
+      feature_id.csv               # written by extract_feature_ids
+      watershed-data/branches/...   # per-branch HAND outputs (read here)
+      discharge-inputs/*.csv        # discharge forecasts (FIM input)
+      fim-outputs/*.tif             # final depth / extent rasters
+
+``FimGenerator`` accepts either the AOI root or its ``watershed-data/`` folder
+as ``aoi_dir`` — it resolves ``branches/`` from watershed-data and writes the
+mosaic to the AOI root either way.
+
 Outcomes
 -----
-    print(result.depth_path)   # /out/AOI/inundation_depth.tif
-    print(result.extent_path)  # /out/AOI/inundation_extent.tif
+    print(result.depth_path)   # /out/AOI/fim-outputs/<name>_depth.tif
+    print(result.extent_path)  # /out/AOI/fim-outputs/<name>_inundation.tif
 """
 
 from __future__ import annotations
@@ -20,12 +35,28 @@ from typing import Optional, Sequence, Union
 
 import pandas as pd
 
+from ..logging_utils import WATERSHED_DIR_NAME, aoi_root
 from .inundator import InundationResult, Inundator, NoForecastMatch
 from .mosaic import BranchMosaic, MosaicResult
 
 PathLike = Union[str, Path]
 
 log = logging.getLogger(__name__)
+
+
+def _resolve_watershed_dir(aoi_dir: Path) -> Path:
+    """Return the folder that holds ``branches/`` for an AOI.
+
+    Accepts either the AOI root (in which case ``watershed-data/`` is used when
+    present) or the ``watershed-data/`` folder itself. Falls back to ``aoi_dir``
+    unchanged for legacy flat layouts where ``branches/`` sits at the root.
+    """
+    if aoi_dir.name == WATERSHED_DIR_NAME:
+        return aoi_dir
+    candidate = aoi_dir / WATERSHED_DIR_NAME
+    if (candidate / "branches").is_dir():
+        return candidate
+    return aoi_dir
 
 
 # Dask is optional. When available the branch loop dispatches to the
@@ -90,7 +121,7 @@ class FimGenerator:
     drop_lakes: bool = True
 
     # When True, depth rasters are written as int16 millimetres instead of
-    # float32 metres. Halves disk footprint and matches NOAA's int16 mode.
+    # float32 metres. Halves the disk footprint.
     int16_mode: bool = True
 
     depth_out: Optional[PathLike] = None
@@ -102,12 +133,15 @@ class FimGenerator:
 
     def __post_init__(self) -> None:
         self.aoi_dir = Path(self.aoi_dir)
+        # branches/ live in watershed-data; outputs live at the AOI root.
+        self.watershed_dir = _resolve_watershed_dir(self.aoi_dir)
+        self.aoi_root = aoi_root(self.watershed_dir)
 
     def run(self) -> FimGenerationResult:
         if not self.aoi_dir.is_dir():
             raise NotADirectoryError(self.aoi_dir)
 
-        branch_root = self.aoi_dir / "branches"
+        branch_root = self.watershed_dir / "branches"
         if not branch_root.is_dir():
             raise NotADirectoryError(branch_root)
 
@@ -115,16 +149,16 @@ class FimGenerator:
             p.name for p in branch_root.iterdir() if p.is_dir()
         )
         if not bids:
-            raise FileNotFoundError("No branches under {self.aoi_dir}")
+            raise FileNotFoundError(f"No branches under {branch_root}")
 
         # Normalise the forecast once so each worker doesn't re-read it.
         forecast_df = _load_forecast(self.forecast)
 
-        # Per-branch intermediates land here.
+        # Per-branch intermediates land under the AOI's fim-outputs folder.
         tmp_dir = (
             Path(self.intermediate_dir)
             if self.intermediate_dir is not None
-            else self.aoi_dir / "fimbox_output" / "tmp"
+            else self.aoi_root / "fim-outputs" / "tmp"
         )
         tmp_dir.mkdir(parents=True, exist_ok=True)
 
@@ -208,11 +242,16 @@ class FimGenerator:
             if not ok_bids:
                 log.warning("FimGenerator: no successful branches — skipping mosaic")
             else:
+                # Default mosaic outputs land in the AOI's fim-outputs folder;
+                # explicit depth_out/extent_out (CLI) override this.
+                fim_out_dir = self.aoi_root / "fim-outputs"
+                fim_out_dir.mkdir(parents=True, exist_ok=True)
                 mosaic_result = BranchMosaic(
-                    aoi_dir=self.aoi_dir,
+                    aoi_dir=self.watershed_dir,
                     branch_ids=ok_bids,
-                    depth_out=self.depth_out,
-                    extent_out=self.extent_out,
+                    depth_out=self.depth_out or fim_out_dir / "inundation_depth.tif",
+                    extent_out=self.extent_out
+                    or fim_out_dir / "inundation_extent.tif",
                     sources_dir=tmp_dir,
                 ).run()
 
@@ -310,13 +349,16 @@ def _run_one_branch(
 def _load_forecast(src: Union[PathLike, pd.DataFrame]) -> pd.DataFrame:
     # Read once at orchestrator level so workers receive a DataFrame.
     if isinstance(src, pd.DataFrame):
-        return src.copy()
-    p = Path(src)
-    if not p.is_file():
-        raise FileNotFoundError(f"forecast file not found: {p}")
-    if p.suffix.lower() in (".parquet", ".pq"):
-        return pd.read_parquet(p)
-    return pd.read_csv(p)
+        df = src.copy()
+    else:
+        p = Path(src)
+        if not p.is_file():
+            raise FileNotFoundError(f"forecast file not found: {p}")
+        df = pd.read_parquet(p) if p.suffix.lower() in (".parquet", ".pq") else pd.read_csv(p)
+    # Accept a FIMserv-style 'discharge' column as an alias for 'discharge_cms'.
+    if "discharge_cms" not in df.columns and "discharge" in df.columns:
+        df = df.rename(columns={"discharge": "discharge_cms"})
+    return df
 
 
 def extract_feature_ids(
@@ -326,10 +368,14 @@ def extract_feature_ids(
     import glob
 
     aoi = Path(aoi_dir)
-    pattern = str(aoi / "branches" / "*" / "hydroTable_*.csv")
+    # branches/ live in watershed-data/; feature_id.csv lands at the AOI root.
+    watershed = _resolve_watershed_dir(aoi)
+    pattern = str(watershed / "branches" / "*" / "hydroTable_*.csv")
     paths = sorted(glob.glob(pattern))
     if not paths:
-        raise FileNotFoundError(f"No hydroTable_*.csv files under {aoi}/branches/")
+        raise FileNotFoundError(
+            f"No hydroTable_*.csv files under {watershed}/branches/"
+        )
 
     frames = [pd.read_csv(p, usecols=["feature_id"]) for p in paths]
     fids = (
@@ -338,11 +384,86 @@ def extract_feature_ids(
         .sort_values()
         .reset_index(drop=True)
     )
-    target = Path(out_csv) if out_csv is not None else (aoi / "feature_id.csv")
+    target = (
+        Path(out_csv) if out_csv is not None else (aoi_root(watershed) / "feature_id.csv")
+    )
     target.parent.mkdir(parents=True, exist_ok=True)
     pd.DataFrame({"feature_id": fids}).to_csv(target, index=False)
     log.info(f"extract_feature_ids: {len(fids)} ids --> {target}")
     return target
+
+
+@dataclass
+class NWMFimPipeline:
+    """Default pipeline: NWM streamflow -> FIM-ready discharge CSVs -> rasters.
+
+    Input modes (pick one method): retrieve NWM retrospective for a date/range,
+    select a narrower window from the already-downloaded archive, run a specific
+    discharge CSV, or run everything already in <AOI>/discharge-inputs/. Each
+    FIM-ready CSV becomes a depth + extent raster in <AOI>/fim-outputs/ named
+    after the CSV. Streamflow retrieval lives in the ``fimbox.streamflow``
+    subpackage and is imported lazily so its heavy deps stay optional.
+    """
+
+    aoi_dir: PathLike
+    feature_id_csv: Optional[PathLike] = None
+    n_workers: int = 4
+    int16_mode: bool = True
+
+    def __post_init__(self) -> None:
+        self.aoi_dir = Path(self.aoi_dir)
+        self._root = aoi_root(_resolve_watershed_dir(self.aoi_dir))
+        self.feature_id_csv = (
+            Path(self.feature_id_csv)
+            if self.feature_id_csv is not None
+            else self._root / "feature_id.csv"
+        )
+
+    def _streamflow(self):
+        from ..streamflow.pipeline import StreamflowPipeline
+
+        return StreamflowPipeline(self.aoi_dir, self.feature_id_csv)
+
+    def from_retrospective(self, **kwargs) -> list[FimGenerationResult]:
+        """Fetch NWM retrospective (date=, or start=/end=, optional sortby=)."""
+        return self.generate(self._streamflow().retrospective(**kwargs))
+
+    def from_archive(self, **kwargs) -> list[FimGenerationResult]:
+        """Filter the already-downloaded archive (date=, or start=/end=, sortby=)."""
+        return self.generate(self._streamflow().select(**kwargs))
+
+    def from_csv(self, discharge_csv: PathLike) -> list[FimGenerationResult]:
+        """Run a single user-supplied discharge CSV."""
+        return self.generate([Path(discharge_csv)])
+
+    def from_discharge_inputs(self) -> list[FimGenerationResult]:
+        """Run every CSV already in <AOI>/discharge-inputs/."""
+        ddir = self._root / "discharge-inputs"
+        csvs = sorted(ddir.glob("*.csv"))
+        if not csvs:
+            raise FileNotFoundError(f"No discharge CSVs in {ddir}")
+        return self.generate(csvs)
+
+    def generate(self, discharge_csvs: Sequence[PathLike]) -> list[FimGenerationResult]:
+        """Run FimGenerator for each CSV -> a depth + extent raster per CSV."""
+        out_dir = self._root / "fim-outputs"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        results: list[FimGenerationResult] = []
+        for csv in discharge_csvs:
+            csv = Path(csv)
+            base = csv.stem
+            log.info(f"--- FIM generation: {csv.name} ---")
+            results.append(
+                FimGenerator(
+                    aoi_dir=self.aoi_dir,
+                    forecast=csv,  # _load_forecast handles the discharge alias
+                    n_workers=self.n_workers,
+                    int16_mode=self.int16_mode,
+                    depth_out=out_dir / f"{base}_depth.tif",
+                    extent_out=out_dir / f"{base}_inundation.tif",
+                ).run()
+            )
+        return results
 
 
 # CLI
@@ -362,7 +483,7 @@ if __name__ == "__main__":
         "--forecast",
         default=None,
         help="Step 2: a single discharge CSV. When omitted, every CSV under "
-        "<aoi_dir>/discharge_inputs/ is processed.",
+        "<aoi_dir>/discharge-inputs/ is processed.",
     )
     parser.add_argument("--workers", type=int, default=4)
     parser.add_argument(
@@ -383,11 +504,15 @@ if __name__ == "__main__":
         out = extract_feature_ids(aoi_dir)
         print(f"feature_id list -> {out}")
     else:
+        # discharge-inputs/ and fim-outputs/ live at the AOI root, alongside
+        # watershed-data/ (which holds the branches).
+        root = aoi_root(_resolve_watershed_dir(aoi_dir))
+
         # Resolve which discharge CSVs to run.
         if args.forecast:
             csvs = [Path(args.forecast)]
         else:
-            ddir = aoi_dir / "discharge_inputs"
+            ddir = root / "discharge-inputs"
             if not ddir.is_dir():
                 parser.error(
                     f"{ddir} not found — run --extract-only first, drop your "
@@ -397,8 +522,8 @@ if __name__ == "__main__":
             if not csvs:
                 parser.error(f"No discharge CSVs in {ddir}")
 
-        output_dir = aoi_dir / "fimbox_output"
-        output_dir.mkdir(exist_ok=True)
+        output_dir = root / "fim-outputs"
+        output_dir.mkdir(parents=True, exist_ok=True)
         for csv in csvs:
             base = csv.stem
             print(f"\n=== {csv.name} ===")

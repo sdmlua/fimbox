@@ -3,27 +3,39 @@ Author: Supath Dhital (sdhital@crimson.ua.edu)
 Date Created: May 2026
 
 Combined preprocessing pipeline. Given a HUC8 ID or a boundary file, downloads
-and preprocesses all datasets needed for FIM, saving everything flat into one
-case folder with the same filenames used by inundation-mapping's wbd pre-clip.
+and preprocesses all datasets needed for FIM, saving everything into an AOI
+folder (named after the HUC8 / boundary) with the canonical filenames the
+downstream branch and HAND steps expect.
 
 Output layout
 ------------
-    wbd.gpkg                         -- exact study boundary (HUC8 polygon or user file)
-    wbd_buffered.gpkg               -- buffered boundary used for all data downloads
-    DEM_Domain.gpkg                 -- DEM coverage intersecting the buffered boundary
-    LandSea_subset.gpkg             -- land/sea/Great Lakes mask intersecting the buffered boundary
-    dem.tif                          -- 3DEP DEM (10 m default), clipped to inner buffer
-    nwm_subset_streams.gpkg          -- NWM flowlines
-    nwm_catchments_proj_subset.gpkg  -- NWM catchments
-    nwm_lakes_proj_subset.gpkg       -- NWM lakes
-    nwm_headwater_points_subset.gpkg -- headwater points derived from flowlines
-    nld_subset_levees.gpkg           -- raw NLD levee lines (for levee-path association)
-    3d_nld_subset_levees_burned.gpkg -- elevation-filtered levee lines for DEM burning
-    LeveeProtectedAreas_subset.gpkg  -- NLD leveed / protected-area polygons
-    osm_roads_subset.gpkg            -- OSM roads (bridges excluded)
-    osm_bridges_subset.gpkg          -- OSM bridges
-    fema_nfhl_subset.gpkg            -- FEMA NFHL flood zones
-    preprocess.log                   -- single combined log
+    <AOI_name>/                      -- AOI root (HUC<huc8> or boundary stem)
+      processing.log                 -- single combined log (preprocess + branches + FIM)
+      feature_id.csv                 -- unique NWM feature_ids (written by FIM extract step)
+      watershed-data/                -- ALL input data + processing + branches
+        wbd.gpkg                         -- exact study boundary (HUC8 polygon or user file)
+        wbd_buffered.gpkg               -- buffered boundary used for all data downloads
+        DEM_Domain.gpkg                 -- DEM coverage intersecting the buffered boundary
+        LandSea_subset.gpkg             -- land/sea/Great Lakes mask intersecting the buffered boundary
+        dem.tif                          -- 3DEP DEM (10 m default), clipped to inner buffer
+        nwm_subset_streams.gpkg          -- NWM flowlines
+        nwm_catchments_proj_subset.gpkg  -- NWM catchments
+        nwm_lakes_proj_subset.gpkg       -- NWM lakes
+        nwm_headwater_points_subset.gpkg -- headwater points derived from flowlines
+        nld_subset_levees.gpkg           -- raw NLD levee lines (for levee-path association)
+        3d_nld_subset_levees_burned.gpkg -- elevation-filtered levee lines for DEM burning
+        LeveeProtectedAreas_subset.gpkg  -- NLD leveed / protected-area polygons
+        osm_roads_subset.gpkg            -- OSM roads (bridges excluded)
+        osm_bridges_subset.gpkg          -- OSM bridges
+        fema_nfhl_subset.gpkg            -- FEMA NFHL flood zones
+        branches/<B>/ ...                -- per-branch HAND processing (later stages)
+      discharge-inputs/              -- discharge forecast CSV(s) (FIM input)
+      fim-outputs/                   -- final inundation depth / extent rasters
+
+``watershed-data/`` is the directory downstream stages take as their
+``aoi_dir`` (branch derivation, branch processing, calibration, FIM
+generation). Use ``self.aoi_dir`` for the AOI root and ``self.watershed_dir``
+(== ``self.case_dir``) for the input-data folder.
 """
 
 import logging
@@ -35,7 +47,7 @@ from shapely.geometry import LineString, MultiLineString
 
 from shapely.geometry import box as shapely_box
 
-from ..logging_utils import attach_case_log, get_logger
+from ..logging_utils import WATERSHED_DIR_NAME, attach_case_log, get_logger
 from .download_data.dem_process import DEMProcessor
 from .download_data.area_masks import DownloadDEMDomain, DownloadLandSea
 from .download_data.nfhl_data import DownloadFEMANFHL
@@ -178,7 +190,7 @@ def preprocess_nld_lines(
     boundary_gdf: Optional[gpd.GeoDataFrame] = None,
 ) -> gpd.GeoDataFrame:
     """
-    Apply inundation-mapping NLD preprocessing to raw levee lines:
+    Preprocess raw NLD levee lines for DEM burning:
       1. Derive HUC2 from the boundary if not supplied.
       2. Remove / trim vertices with no usable Z elevation.
       3. Convert surviving Z values from feet to metres.
@@ -239,7 +251,9 @@ class getAllInputData:
     boundary_layer : str, optional
         Layer name when boundary is a GeoPackage with multiple layers.
     out_dir : str or Path, optional
-        Root output directory. Defaults to ``./fimbox_preprocess``.
+        Root output directory. Defaults to ``./fimbox_preprocess``. An AOI
+        folder (``<out_dir>/<AOI_name>``) is created underneath, and all input
+        data + branch processing land in its ``watershed-data/`` subfolder.
     epsg : int, optional
         Output CRS. Defaults to 5070 (CONUS Albers).
     dem_resolution : int, optional
@@ -336,8 +350,16 @@ class getAllInputData:
 
         self.case_name = f"HUC{huc8}" if huc8 else self.boundary_path.stem
 
+        # AOI root holds the log, feature_id.csv, discharge-inputs/ and
+        # fim-outputs/. All input data + branch processing live one level
+        # deeper, in watershed-data/ — which is the directory every downstream
+        # stage (branch derivation/processing, calibration, FIM) takes as its
+        # aoi_dir. case_dir is kept as an alias for that watershed-data folder
+        # so the rest of this class is unchanged.
         root = Path(out_dir) if out_dir else Path("fimbox_preprocess")
-        self.case_dir = root / self.case_name
+        self.aoi_dir = root / self.case_name
+        self.watershed_dir = self.aoi_dir / WATERSHED_DIR_NAME
+        self.case_dir = self.watershed_dir
         self.case_dir.mkdir(parents=True, exist_ok=True)
 
         self._setup_logger()
@@ -354,7 +376,10 @@ class getAllInputData:
         self._apply_dem_domain_and_landsea()
         self._save_boundaries()
 
-        self.logger.info(f"Case: {self.case_name}  |  Output: {self.case_dir}")
+        self.logger.info(
+            f"Case: {self.case_name}  |  AOI: {self.aoi_dir}  |  "
+            f"watershed-data: {self.case_dir}"
+        )
 
     # helpers
     def _out(self, key: str) -> Path:
@@ -365,7 +390,7 @@ class getAllInputData:
     def _setup_logger(self):
         # All fimbox modules log under `fimbox.*` via getLogger(__name__);
         # attaching handlers to the `fimbox` root makes every nested log
-        # call land in this case's preprocess.log as well as stdout.
+        # call land in this AOI's processing.log as well as stdout.
         attach_case_log(self.case_dir)
         self.logger = get_logger(f"fimbox.preprocess.{self.case_name}")
 
@@ -734,10 +759,12 @@ class getAllInputData:
         self._log_summary()
 
     def _log_summary(self):
+        # Data files live in watershed-data (self.case_dir); the combined log
+        # sits at the AOI root, so it is no longer alongside them.
         files = sorted(
             f
             for f in self.case_dir.iterdir()
-            if f.suffix in (".gpkg", ".tif", ".log") and f.is_file()
+            if f.suffix in (".gpkg", ".tif") and f.is_file()
         )
         self.logger.info(f"--- Summary: {self.case_name} ({len(files)} files) ---")
         for f in files:

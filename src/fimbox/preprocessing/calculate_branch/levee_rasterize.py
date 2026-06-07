@@ -174,15 +174,13 @@ def mask_levee_dem(
     branch_id_attribute: str = "levpa_id",
 ) -> None:
     """
-    Port of inundation-mapping/src/mask_dem.py.
-
-    Masks levee-protected areas from the DEM.  For branch-zero, masks all
+    Mask levee-protected areas out of the DEM.  For branch-zero, masks all
     levee polygons.  For other branches, only masks areas associated with the
     level path (requires levee_levelpaths.csv) and areas from levee polygons
     whose catchments do not belong to the branch.
 
-    Overwrites out_path in-place (caller should set out_path == dem_path to
-    replicate the reference behaviour).
+    Overwrites out_path in-place (set out_path == dem_path to edit the DEM
+    directly).
     """
     import pandas as pd
     from rasterio.mask import mask as rio_mask

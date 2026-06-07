@@ -30,7 +30,6 @@ src_base_csv    : src_base_{id}.csv     (output of build_src)
 boundary_gpkg   : AOI boundary file (optional metadata lookup, e.g. wbd8_clp.gpkg)
 nwm_streams     : reference flowlines gpkg containing 'ID' / 'feature_id',
                   optional 'order_'
-aoi_code        : user-defined AOI identifier — recorded on every hydroTable row
 
 Outputs
 -------
@@ -77,7 +76,6 @@ def add_crosswalk(
     out_src_json: PathLike,
     out_crosswalk_csv: PathLike,
     out_hydro_csv: PathLike,
-    aoi_code: str = "",
     boundary_gpkg: Optional[PathLike] = None,
     mannings_n: float = 0.06,
     min_catchment_area: float = 0.25,
@@ -136,8 +134,7 @@ def add_crosswalk(
     crosswalk = _build_crosswalk(flows, nwm, max_distance_m)
     if crosswalk.empty:
         raise NoCrosswalkError(
-            f"No DEM-derived reach is within {max_distance_m} m of a reference flowline "
-            f"for AOI {aoi_code!r}"
+            f"No DEM-derived reach is within {max_distance_m} m of a reference flowline"
         )
 
     catchments["HydroID"] = catchments["HydroID"].astype(int)
@@ -179,7 +176,7 @@ def add_crosswalk(
 
     crosswalk_table = src[["HydroID", "feature_id"]].drop_duplicates(ignore_index=True)
 
-    hydro_table = _build_hydro_table(src, output_flows, boundary, aoi_code)
+    hydro_table = _build_hydro_table(src, output_flows, boundary)
     src_json = _build_src_json(src)
 
     # Drop any pre-existing outputs so the writers can recreate them cleanly.
@@ -385,7 +382,6 @@ def _build_hydro_table(
     src: pd.DataFrame,
     flows: pd.DataFrame,
     boundary: Optional[gpd.GeoDataFrame],
-    aoi_code: str,
 ) -> pd.DataFrame:
     """Project the full SRC into the hydroTable schema."""
     cols = [
@@ -411,7 +407,6 @@ def _build_hydro_table(
     ht = src.loc[:, cols].rename(
         columns={"Stage": "stage", "Discharge (m3s-1)": "discharge_cms"}
     )
-    ht["aoi_code"] = str(aoi_code)
     # The boundary file is accepted for future per-AOI metadata enrichment;
     # keep the parameter wired so callers don't have to drop it later.
     _ = boundary

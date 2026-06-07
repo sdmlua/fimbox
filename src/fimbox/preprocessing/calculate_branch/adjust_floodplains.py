@@ -4,12 +4,11 @@ Date Updated: May 2026
 
 FEMA NFHL floodplain adjustment for branch-level burned DEMs.
 
-Port of inundation-mapping's ``adjust_floodplains.py``. After AGREE DEM
-burning, this step lowers DEM elevations *inside* the upstream catchment
-polygon of a branch's levelpaths, with the depression shape controlled by
-Euclidean distance from the burned stream raster. Areas mapped as FEMA
-flood zones (NFHL ``combined`` layer) are excluded so the adjustment does
-not double-count regulatory floodplain depressions.
+After AGREE DEM burning, this step lowers DEM elevations *inside* the upstream
+catchment polygon of a branch's levelpaths, with the depression shape
+controlled by Euclidean distance from the burned stream raster. Areas mapped
+as FEMA flood zones (NFHL ``combined`` layer) are excluded so the adjustment
+does not double-count regulatory floodplain depressions.
 
 Math
 ----
@@ -205,32 +204,45 @@ def _build_distance_mask(
     fema_flood_zones_file,
     fema_flood_zones_layer,
 ):
-    """Mask the distance raster to areas where the floodplain adjustment is
-    valid: outside FEMA-mapped flood zones but inside FEMA availability.
-    Returns ``None`` when nothing remains to be adjusted."""
+    """Mask the distance raster to the area where the floodplain adjustment is
+    allowed: inside the branch polygon, but excluding FEMA-mapped flood zones.
+    Returns ``distance`` unchanged when no NFHL file is given, or ``None`` when
+    the exclusion leaves nothing to adjust."""
     if not fema_flood_zones_file or not Path(fema_flood_zones_file).exists():
         return distance
 
     layers = gpd.list_layers(fema_flood_zones_file)["name"].tolist()
-    availability = gpd.read_file(fema_flood_zones_file, layer="combined")
 
+    # Build the polygon over which the adjustment is allowed. Start from the
+    # mapped flood zones (``combined``); the steps below carve it down to
+    # "where FEMA coverage exists but did NOT already map a flood zone".
+    adjust_zone = gpd.read_file(fema_flood_zones_file, layer="combined")
+
+    # If an ``availability`` layer is present, reduce to the symmetric
+    # difference (areas in exactly one of combined/availability) — i.e. the
+    # parts of the surveyed extent that are not already mapped flood zones.
     if "availability" in layers:
         avail = gpd.read_file(fema_flood_zones_file, layer="availability")
-        availability = (
-            pd.concat([availability, avail])
+        adjust_zone = (
+            pd.concat([adjust_zone, avail])
             .drop_duplicates(subset="geometry", keep=False)
             .dissolve()
         )
 
+    # Subtract the mapped flood-zone layer so the adjustment never overlaps an
+    # area FEMA has already designated as floodplain.
     if fema_flood_zones_layer in layers:
         zones = gpd.read_file(fema_flood_zones_file, layer=fema_flood_zones_layer)
-        availability = gpd.overlay(availability, zones, how="difference")
+        adjust_zone = gpd.overlay(adjust_zone, zones, how="difference")
 
-    availability = gpd.clip(availability, branch_poly)
-    if availability.empty:
+    adjust_zone = gpd.clip(adjust_zone, branch_poly)
+    if adjust_zone.empty:
         return None
 
-    geometries = [mapping(geom) for geom in availability.geometry]
+    # invert=True keeps the distance values OUTSIDE adjust_zone as-is and sets
+    # everything inside it to NaN, so adjustment is suppressed within the
+    # FEMA-mapped flood zones.
+    geometries = [mapping(geom) for geom in adjust_zone.geometry]
     masked, _ = mask(src, geometries, crop=False, nodata=np.nan, invert=True)
     return masked[0]
 

@@ -374,8 +374,7 @@ class BranchDerivation:
             buffered_stream_boundary_gdf, streams.crs
         )
 
-        # Drop level paths with no catchment (matches inundation-mapping's
-        # remove_branches_without_catchments). Done before
+        # Drop level paths with no catchment, before
         # dissolve/headwaters/polygons so a catchment-less branch never reaches
         # any output and never seeds an empty per-branch DEM.
         streams = _remove_branches_without_catchments(
@@ -516,7 +515,7 @@ class BranchDerivation:
 
     def _setup_logger(self) -> logging.Logger:
         # Attach the shared file+stream handlers to the fimbox root so this
-        # stage's logs appear in the same preprocess.log as the rest of the
+        # stage's logs appear in the same processing.log as the rest of the
         # pipeline, then return a child logger for branch derivation.
         from ...logging_utils import attach_case_log, get_logger
 
@@ -767,8 +766,7 @@ def _assign_levelpaths(
             ]
             if not candidates:
                 return
-            # Mainstem selection (matches inundation-mapping's
-            # derive_stream_branches): pick the upstream reach with the highest
+            # Mainstem selection: pick the upstream reach with the highest
             # stream order, breaking ties by arbolate sum, then reach id for
             # determinism.
             candidates = sorted(
@@ -815,8 +813,7 @@ def _remove_branches_without_catchments(
 ) -> gpd.GeoDataFrame:
     """Drop level paths whose reaches have no matching catchment.
 
-    Port of inundation-mapping ``StreamNetwork.remove_branches_without_catchments``:
-    a whole branch is removed only when *none* of its reach ids appear in the
+    A whole branch is removed only when *none* of its reach ids appear in the
     catchment layer, so a branch with at least one catchment is kept intact.
     """
     if catchment_reach_id_attribute not in catchments.columns:
@@ -913,10 +910,9 @@ def _build_headwaters(
     upstream_start_rows = streams.loc[~streams["_from_node"].isin(to_nodes)].copy()
 
     # One headwater per level path: the upstream-most vertex of its
-    # upstream-start reach (matches inundation-mapping's
-    # derive_headwater_points_with_inlets). Taking the point from the level-path
-    # geometry guarantees it lies ON the line and inside the per-branch DEM,
-    # which is what flow accumulation seeds from — a seed outside the DEM gives
+    # upstream-start reach. Taking the point from the level-path geometry
+    # guarantees it lies ON the line and inside the per-branch DEM, which is
+    # what flow accumulation seeds from — a seed outside the DEM gives
     # 0 stream cells and crashes StreamNetReaches.
     #
     # ``provided_headwaters`` (external NWM inventory), if given, only annotates
@@ -976,7 +972,8 @@ def _associate_levelpaths_with_levees(
     out_path: Path,
 ) -> bool:
     """
-    Port of inundation-mapping associate_levelpaths_with_levees.py.
+    Associate each levee system with the level paths it protects, writing the
+    mapping to CSV.
     Returns True if the CSV was written, False if no associations were found.
     """
     levees = gpd.read_file(levees_path, engine="pyogrio")

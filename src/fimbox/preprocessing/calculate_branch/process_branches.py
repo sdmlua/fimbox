@@ -17,7 +17,7 @@ Pipeline
        e. per-branch deny-list cleanup (default-on; uses
           ``fimbox/config/deny_branches.lst``)
        f. per-branch log file: ``<aoi_dir>/logs/branch/<aoi_id>_branch_<bid>.log``
-5. Per-branch error handling matching process_branch.sh:
+5. Per-branch error handling:
        - exit code 61 (no valid flowlines) --> branch dir wiped, run continues
        - exit code 64 (no crosswalks)      --> branch dir wiped, run continues
        - other unhandled exception          --> branch logged as failed,
@@ -25,8 +25,8 @@ Pipeline
 
 Logging
 -------
-Each worker process re-attaches the case logger so its records land in
-``<aoi_dir>/preprocess.log`` AND in a per-branch
+Each worker process re-attaches the case logger so its records land in the
+AOI's combined ``processing.log`` (at the AOI root) AND in a per-branch
 ``<aoi_dir>/logs/branch/<aoi_id>_branch_<bid>.log`` (attached for the
 duration of that worker only). The shared format is the standard fimbox
 ``HH:MM:SS [LEVEL] message``.
@@ -59,7 +59,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional, Sequence, Union
 
-from ...logging_utils import attach_case_log
+from ...logging_utils import aoi_root, attach_case_log
 from ..source_naming import detect_identifier, resolve_source, source_name
 from .adjust_floodplains import adjust_floodplains
 from .calculate_branchzero import BranchZero
@@ -71,7 +71,7 @@ log = logging.getLogger(__name__)
 PathLike = Union[str, Path]
 
 
-# Exit-code conventions kept identical to inundation-mapping's process_branch.sh
+# Per-branch exit-code conventions used by the error classifier below.
 EXIT_OK = 0
 EXIT_NO_FLOWLINES = 61
 EXIT_NO_CROSSWALK = 64
@@ -89,17 +89,15 @@ class BranchResult:
 class AOIProcessingConfig:
     """Inputs the orchestrator needs to run every branch.
 
-    The AOI identifier can be passed as either ``huc_id`` (when the AOI is a
-    USGS HUC8) or ``aoi_id`` (for any other drainage area). Both are accepted
-    and stored under ``self.aoi_id``; ``self.huc_id`` is exposed as an alias
-    that returns the same value. This lets you write either::
+    The AOI identifier is optional. When omitted it defaults to the AOI folder
+    name (the parent of ``watershed-data``), so it always matches the data being
+    processed. Pass it explicitly — as ``aoi_id`` (any drainage area) or
+    ``huc_id`` (a USGS HUC8) — only to record a specific id. It is stored under
+    ``self.aoi_id``; ``self.huc_id`` is an alias returning the same value::
 
-        AOIProcessingConfig(aoi_dir=..., huc_id="08060202", ...)
-        AOIProcessingConfig(aoi_dir=..., aoi_id="MyBasin", ...)
-
-    Field aliases applied the same way:
-        ``huc_dir`` is an alias for ``aoi_dir``
-        ``huc_code`` is an alias for ``aoi_code``
+        AOIProcessingConfig(aoi_dir=".../my_basin")              # id = "my_basin"
+        AOIProcessingConfig(aoi_dir=..., huc_id="08060202")      # id = "08060202"
+        AOIProcessingConfig(aoi_dir=..., aoi_id="MyBasin")       # id = "MyBasin"
     """
 
     def __init__(
@@ -131,7 +129,7 @@ class AOIProcessingConfig:
         # CRS / numeric
         target_crs: Union[str, int] = 5070,
         branch_zero_id: str = "0",
-        # AGREE and floodplain adjustment defaults match inundation-mapping
+        # AGREE and floodplain adjustment defaults
         agree_buffer_m: float = 15.0,
         agree_smooth_drop: float = 10.0,
         agree_sharp_drop: float = 1000.0,
@@ -139,9 +137,22 @@ class AOIProcessingConfig:
         floodplain_slope_exponent: float = 1.0,
         floodplain_z_factor: float = 0.5,
         fema_floodplain_layer: str = "combined",
-        # AOI code used by CreateHAND for hydroTable annotation
-        aoi_code: Optional[str] = None,
-        huc_code: Optional[str] = None,
+        # CreateHAND tuning — applied to EVERY branch so branch zero and the
+        # non-zero branches share one set of values. Defaults mirror CreateHAND;
+        # override here to retune the whole AOI in one place.
+        cost_distance_tolerance: float = 50.0,
+        lateral_elevation_threshold: int = 10,
+        max_split_distance_m: float = 1500.0,
+        slope_min: float = 0.0001,
+        lakes_buffer_dist_m: float = 100.0,
+        # SRC / crosswalk tuning (drive step 18-19, the hydroTable).
+        mannings_n: float = 0.06,
+        stage_min_m: float = 0.0,
+        stage_interval_m: float = 0.3048,
+        stage_max_m: float = 25.2984,
+        min_catchment_area: float = 0.25,
+        min_stream_length: float = 0.5,
+        crosswalk_max_distance_m: float = 100.0,
         evaluate_crosswalk: bool = False,
         convert_to_int16: bool = False,
         # gage crosswalk schema
@@ -156,7 +167,13 @@ class AOIProcessingConfig:
         timeout_seconds: Optional[int] = None,
     ):
         self.aoi_dir = _pick_one("aoi_dir", aoi_dir, "huc_dir", huc_dir, required=True)
-        self.aoi_id = _pick_one("aoi_id", aoi_id, "huc_id", huc_id, required=True)
+        # aoi_id is optional: when omitted it defaults to the AOI folder name
+        # (the parent of watershed-data), so the label always matches the data
+        # being processed. Pass it explicitly only to record a specific id.
+        self.aoi_id = (
+            _pick_one("aoi_id", aoi_id, "huc_id", huc_id, required=False)
+            or aoi_root(self.aoi_dir).name
+        )
         self.branch_list_path = branch_list_path
         self.dem_path = dem_path
         self.streams_gpkg = streams_gpkg
@@ -182,6 +199,20 @@ class AOIProcessingConfig:
         self.floodplain_slope_exponent = floodplain_slope_exponent
         self.floodplain_z_factor = floodplain_z_factor
         self.fema_floodplain_layer = fema_floodplain_layer
+
+        # CreateHAND tuning (shared by every branch via the CreateHAND call).
+        self.cost_distance_tolerance = cost_distance_tolerance
+        self.lateral_elevation_threshold = lateral_elevation_threshold
+        self.max_split_distance_m = max_split_distance_m
+        self.slope_min = slope_min
+        self.lakes_buffer_dist_m = lakes_buffer_dist_m
+        self.mannings_n = mannings_n
+        self.stage_min_m = stage_min_m
+        self.stage_interval_m = stage_interval_m
+        self.stage_max_m = stage_max_m
+        self.min_catchment_area = min_catchment_area
+        self.min_stream_length = min_stream_length
+        self.crosswalk_max_distance_m = crosswalk_max_distance_m
         self.evaluate_crosswalk = evaluate_crosswalk
         self.convert_to_int16 = convert_to_int16
         self.gage_aoi_filter_column = gage_aoi_filter_column
@@ -193,10 +224,6 @@ class AOIProcessingConfig:
         self.deny_branches_list = (
             Path(deny_branches_list) if deny_branches_list else None
         )
-        # aoi_code defaults to the AOI id (CreateHAND stores it on hydroTable rows)
-        self.aoi_code = (
-            _pick_one("aoi_code", aoi_code, "huc_code", huc_code, required=False) or ""
-        )
         self.n_workers = n_workers
         self.timeout_seconds = timeout_seconds
 
@@ -207,10 +234,6 @@ class AOIProcessingConfig:
     @property
     def huc_id(self) -> str:
         return self.aoi_id
-
-    @property
-    def huc_code(self) -> str:
-        return self.aoi_code
 
 
 def _pick_one(name_a: str, val_a, name_b: str, val_b, *, required: bool):
@@ -396,10 +419,7 @@ def _resolve_paths(cfg: AOIProcessingConfig) -> AOIProcessingConfig:
     """Fill in missing default paths from the case directory."""
     d = cfg.aoi_dir
     if cfg.branch_list_path is None:
-        # BranchDerivation writes branch_ids.lst.
-        # Inundation-mapping's branch_ids.csv is only consumed by its
-        # cross-AOI post-processing aggregator (fim_post_processing.sh),
-        # not by the branch loop itself, so fimbox doesn't emit it.
+        # BranchDerivation writes branch_ids.lst, which the branch loop reads.
         # branch_list.csv is kept as a legacy fallback for older AOIs.
         for candidate in ("branch_ids.lst", "branch_list.csv"):
             p = d / candidate
@@ -504,14 +524,13 @@ def _run_branch_zero_post_steps(cfg: AOIProcessingConfig) -> None:
 
 def _process_single_branch(cfg: AOIProcessingConfig, branch_id: str) -> BranchResult:
     """Per-branch worker. Runs in its own process; re-attaches the case log
-    so its output reaches the shared preprocess.log AND a per-branch log file
+    so its output reaches the shared processing.log AND a per-branch log file
     under ``<aoi_dir>/logs/branch/<aoi_id>_branch_<branch_id>.log``."""
     attach_case_log(cfg.aoi_dir)
     branch_log = logging.getLogger(__name__)
 
-    # Per-branch log file (matches inundation-mapping's branchLogFileName).
-    # Attached to the fimbox root logger so every module's records this worker
-    # emits are captured. Detached again in the finally-block at the end.
+    # Per-branch log file, attached to the fimbox root logger so every record
+    # this worker emits is captured. Detached again in the finally-block.
     branch_log_path = (
         cfg.aoi_dir / "logs" / "branch" / f"{cfg.aoi_id}_branch_{branch_id}.log"
     )
@@ -642,12 +661,12 @@ def _process_single_branch(cfg: AOIProcessingConfig, branch_id: str) -> BranchRe
                         f"adjust_floodplains skipped for branch {branch_id}: {exc}"
                     )
 
-        # CreateHAND: All steps
+        # CreateHAND: All steps. aoi_code is not passed — CreateHAND derives it
+        # from aoi_dir for the catchment boundary filter.
         CreateHAND(
             aoi_dir=cfg.aoi_dir,
             branch_dir=branch_dir,
             branch_id=branch_id,
-            aoi_code=cfg.aoi_code or cfg.aoi_id,
             levee_protected_areas_gpkg=None,  # set by user if needed
             levee_levelpaths_csv=None,
             lakes_gpkg=(
@@ -657,6 +676,20 @@ def _process_single_branch(cfg: AOIProcessingConfig, branch_id: str) -> BranchRe
             ),
             boundary_gpkg=cfg.boundary_gpkg,
             dem_path=cfg.dem_path,
+            # Tuning forwarded from the config so this branch uses the same
+            # values as branch zero and every other branch.
+            cost_distance_tolerance=cfg.cost_distance_tolerance,
+            lateral_elevation_threshold=cfg.lateral_elevation_threshold,
+            max_split_distance_m=cfg.max_split_distance_m,
+            slope_min=cfg.slope_min,
+            lakes_buffer_dist_m=cfg.lakes_buffer_dist_m,
+            mannings_n=cfg.mannings_n,
+            stage_min_m=cfg.stage_min_m,
+            stage_interval_m=cfg.stage_interval_m,
+            stage_max_m=cfg.stage_max_m,
+            min_catchment_area=cfg.min_catchment_area,
+            min_stream_length=cfg.min_stream_length,
+            crosswalk_max_distance_m=cfg.crosswalk_max_distance_m,
         ).run()
 
         # USGS gage crosswalk (optional)
@@ -686,8 +719,7 @@ def _process_single_branch(cfg: AOIProcessingConfig, branch_id: str) -> BranchRe
                         f"USGS crosswalk skipped for branch {branch_id}: {exc}"
                     )
 
-        # Crosswalk accuracy diagnostic (branch-zero only, mirrors
-        # inundation-mapping's `evaluateCrosswalk=1` flag scoped to bzero).
+        # Crosswalk accuracy diagnostic (branch-zero only).
         if cfg.evaluate_crosswalk and branch_id == cfg.branch_zero_id:
             from .evaluate_crosswalk import evaluate_crosswalk as _eval_xw
 
@@ -769,7 +801,7 @@ def _process_single_branch(cfg: AOIProcessingConfig, branch_id: str) -> BranchRe
 
 
 def _classify_branch_error(msg: str) -> str:
-    """Translate fimbox exception text into the inundation-mapping exit codes."""
+    """Translate a branch exception's text into a status code."""
     text = msg.lower()
     if "noflowlines" in text or "no valid flowlines" in text or "no flowlines" in text:
         return "no_flowlines"
@@ -781,8 +813,8 @@ def _classify_branch_error(msg: str) -> str:
 
 
 def _wipe_branch_dir(branch_dir: Path) -> None:
-    """Match process_branch.sh's behaviour: branches that hit 61/64/65 get
-    their output directory removed so they don't pollute later aggregation."""
+    """Remove a failed branch's output directory (branches that hit 61/64/65)
+    so they don't pollute later aggregation."""
     if branch_dir.is_dir():
         import shutil
 

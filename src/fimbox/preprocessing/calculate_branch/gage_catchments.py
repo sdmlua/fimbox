@@ -9,7 +9,7 @@ Steps:
   2. GageCatchments           Reverse-D8 label propagation from outlet points.
   3. OutletBackpoolMitigate   Detect and trim oversized outlet catchment (non-branch-zero only).
 
-Inputs / outputs follow the inundation-mapping convention:
+Inputs / outputs:
   demDerived_streamPixels_{id}.tif           --> flows_points_pixels_{id}.gpkg
   demDerived_reaches_split_points_{id}.gpkg  --> gw_catchments_reaches_{id}.tif
   flows_points_pixels_{id}.gpkg              --> gw_catchments_pixels_{id}.tif
@@ -154,8 +154,8 @@ class GageCatchments:
             result = _declutter_boundaries(result)
             result = _enforce_connectivity(result)
 
-        # int32 matches FIM output and is supported by all GIS tools.
-        # HydroIDs using fimid prefix (4 digits + 4 seq = 8 digits) fit in int32.
+        # int32 is supported by all GIS tools and HydroIDs using the fimid
+        # prefix (4 digits + 4 seq = 8 digits) fit within it.
         profile.update(
             dtype="int32",
             nodata=0,
@@ -179,7 +179,6 @@ def _fill_interior_holes(labels: np.ndarray) -> np.ndarray:
     Reverse-D8 propagation leaves a few cells unlabelled — D8 pits/sinks and
     short flow paths that terminate before reaching a seeded outlet. Inside a
     catchment these become 0-valued holes that vectorise into polygon holes.
-    (TauDEM does not show them because every cell drains somewhere.)
 
     Each interior hole (a background component not touching the raster edge) is
     filled with its nearest labelled cell. The outside background is left at 0.

@@ -70,9 +70,8 @@ def test_get_nhd_all():
         download_catchments=True,
         download_lakes=True,
         resolution="medium",  # "high" -> NHDPlus HR flowlines/catchments via pynhd; "medium" (default) -> NWM. Lakes always NWM.
-        identifier="nwm",  # filename prefix; default "nwm" -> nwm_subset_streams.gpkg etc.
+        identifier="nwmmr",  # filename prefix; default "nwm" -> nwm_subset_streams.gpkg etc.
     )
-
 
 # High-resolution flowlines + catchments only (NHDPlus HR via pynhd).
 # def test_get_nhd_hr():

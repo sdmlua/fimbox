@@ -80,7 +80,7 @@ class D8SlopeDEM:
     For each cell, slope = (z_current − z_downstream) / distance_to_downstream,
     clamped to [slope_min, ∞).  Diagonal directions use distance = res × √2.
 
-    Reference: TauDEM d8flowdir −sd8 flag (used on dem_lateral_thalweg_adj).
+    Computes D8 flow direction and slope on the lateral-thalweg-adjusted DEM.
 
     Parameters
     ----------

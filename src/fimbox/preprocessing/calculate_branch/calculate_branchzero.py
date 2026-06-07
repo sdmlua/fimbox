@@ -190,7 +190,7 @@ class BranchZero:
             log.info("Levees burned into DEM")
 
         # Boolean grid AGREE burns: branch 0 uses all NWM streams; non-zero
-        # branches use their extended level path (matches NOAA run_by_branch).
+        # branches use their extended level path.
         flows_bool = branch_dir / f"flows_grid_boolean_{bid}.tif"
         use_levelpaths = (
             not is_branch_zero

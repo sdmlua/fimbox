@@ -63,7 +63,7 @@ class BridgeDEMDiff:
         self.out_dir.mkdir(parents=True, exist_ok=True)
 
     def run(self) -> Path:
-        log_path = self.out_dir / "preprocess.log"
+        log_path = self.out_dir / "processing.log"
         fh = logging.FileHandler(log_path, mode="a", encoding="utf-8")
         fh.setLevel(logging.DEBUG)
         fh.setFormatter(

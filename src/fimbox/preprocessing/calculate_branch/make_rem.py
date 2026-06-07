@@ -4,7 +4,7 @@ Date Updated: May 2026
 
 REM / HAND (Height Above Nearest Drainage) computation.
 
-Algorithm (two-pass, block-wise — identical to FIM):
+Algorithm (two-pass, block-wise):
   Pass 1  For every pixel that is on the thalweg, record the minimum
           DEM elevation within each pixel-catchment ID.
   Pass 2  REM[i] = DEM[i] - catchment_min[catchment_id[i]]

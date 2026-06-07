@@ -137,6 +137,7 @@ from .fimgeneration import (
     MosaicResult,
     NoForecastMatch,
     extract_feature_ids,
+    NWMFimPipeline,
 )
 
 __all__ += [
@@ -148,7 +149,43 @@ __all__ += [
     "MosaicResult",
     "NoForecastMatch",
     "extract_feature_ids",
+    "NWMFimPipeline",
 ]
+
+# Streamflow retrieval / plotting / statistics. Heavy optional deps (teehr,
+# s3fs, matplotlib, ...) are imported lazily inside the functions, so this
+# import is light; guard it anyway so a partial install never breaks `import
+# fimbox`.
+try:
+    from .streamflow import (
+        NWMRetrospective,
+        NWMForecast,
+        USGSData,
+        GeoglowsData,
+        StreamflowPipeline,
+        plot_nwm,
+        plot_usgs,
+        plot_comparison,
+        calculate_statistics,
+        compute_metrics,
+        StreamflowMetrics,
+    )
+
+    __all__ += [
+        "NWMRetrospective",
+        "NWMForecast",
+        "USGSData",
+        "GeoglowsData",
+        "StreamflowPipeline",
+        "plot_nwm",
+        "plot_usgs",
+        "plot_comparison",
+        "calculate_statistics",
+        "compute_metrics",
+        "StreamflowMetrics",
+    ]
+except ImportError:
+    pass
 
 try:
     from .preprocessing import getAllInputData, preprocess_nld_lines

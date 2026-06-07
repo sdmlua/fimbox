@@ -2,8 +2,8 @@
 name = "fimbox"
 version = "0.1.0"
 description = "A modular open-source testbed framework to standardize Flood Inundation Mapping simulations and evaluation with custom datasets and hydrologic parameters with reproducible workflows."
-authors = [{ name = "Supath Dhital", email = "sdhital@crimson.ua.edu" }]
-maintainers = [{ name = "Supath Dhital", email = "sdhital@crimson.ua.edu" }]
+authors = [{ name = "Supath Dhital", email = "sdhital@ua.edu" }]
+maintainers = [{ name = "Supath Dhital", email = "sdhital@ua.edu" }]
 license = { text = "GPL-3.0" }
 readme = "README.md"
 requires-python = ">=3.10,<3.13"
@@ -23,6 +23,14 @@ dependencies = [
     "whitebox>=2.3",
     "fiona>=1.10.1",
     "rasterstats>=0.19",
+    "teehr",
+    "s3fs",
+    "xarray",
+    "netCDF4",
+    "beautifulsoup4",
+    "requests",
+    "matplotlib",
+    "plotly",
 ]
 
 [project.optional-dependencies]

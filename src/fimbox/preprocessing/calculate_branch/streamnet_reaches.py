@@ -38,9 +38,9 @@ class NoFlowlinesError(RuntimeError):
     """Raised when a branch has no stream cells to vectorise.
 
     The exception text contains "no valid flowlines" so process_branches'
-    _classify_branch_error maps it to the inundation-mapping exit-code 61
-    ("no_flowlines"), which wipes the branch directory and lets the run
-    continue instead of leaving a half-built branch full of intermediates.
+    _classify_branch_error maps it to exit-code 61 ("no_flowlines"), which
+    wipes the branch directory and lets the run continue instead of leaving a
+    half-built branch full of intermediates.
     """
 
 
@@ -63,9 +63,9 @@ class StreamNetReaches:
     Delineate stream network reach topology — pure-numpy streamnet.
 
     Each reach spans headwater-to-confluence or confluence-to-confluence
-    (or confluence-to-outlet), matching TauDEM streamnet behaviour.
-    Avoids WBT stream_link_identifier which creates one ID per D8 step,
-    producing millions of 1-3-pixel reaches on dense stream networks.
+    (or confluence-to-outlet). Avoids WBT stream_link_identifier, which creates
+    one ID per D8 step — producing millions of 1-3-pixel reaches on dense
+    stream networks.
 
     Parameters
     ----------

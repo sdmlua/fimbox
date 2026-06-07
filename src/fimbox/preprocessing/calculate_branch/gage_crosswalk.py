@@ -231,7 +231,7 @@ def _attach_feature_id_and_levelpath(
     nwm_streams_levelpaths_gpkg: PathLike,
 ) -> gpd.GeoDataFrame:
     nwm = gpd.read_file(nwm_streams_levelpaths_gpkg).to_crs(gages.crs)
-    # match inundation-mapping convention: NWM 'ID' is the feature_id
+    # the NWM 'ID' column is the feature_id; rename it when not already present
     if "ID" in nwm.columns and "feature_id" not in nwm.columns:
         nwm = nwm.rename(columns={"ID": "feature_id"})
 

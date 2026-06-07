@@ -18,7 +18,7 @@ def test_preprocess_all_from_boundary():
         get_flowlines=True,  # set False to use your own flowlines and corresponding catchments
         get_catchments=True,  # set False to skip NWM catchments--> use
         resolution="medium",  # "high" -> NHDPlus HR flowlines/catchments via pynhd; "medium" (default) -> NWM. Lakes always NWM.
-        identifier="nwm",  # filename prefix for ALL source files; flows download->processing. Default "nwm".
+        identifier="nwmmr",  # filename prefix for ALL source files; flows download->processing. Default "nwm".
     )
     pp.run()
 

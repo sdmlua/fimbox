@@ -47,6 +47,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
+from ...logging_utils import aoi_root
 from ..source_naming import resolve_source
 
 log = logging.getLogger(__name__)
@@ -570,7 +571,7 @@ class CreateHAND:
                 "Skipping stages_catchlist -- missing filtered flows or catchments"
             )
 
-        # SRC base (Python port of TauDEM catchhydrogeo)
+        # SRC geometry base table (per-catchment, per-stage)
         src_base_csv = bd / f"src_base_{bid}.csv"
         if should_skip(src_base_csv):
             _progress(18, "synthetic rating curve base", skipped=True)
@@ -639,7 +640,6 @@ class CreateHAND:
                     out_src_json=src_json,
                     out_crosswalk_csv=crosswalk_csv,
                     out_hydro_csv=hydro_table_csv,
-                    aoi_code=self._resolve_aoi_code(),
                     mannings_n=self.mannings_n,
                     min_catchment_area=self.min_catchment_area,
                     min_stream_length=self.min_stream_length,
@@ -728,7 +728,9 @@ class CreateHAND:
         """
         if self.aoi_code:
             return self.aoi_code
-        name = self.aoi_dir.name
+        # aoi_dir may point at the watershed-data subfolder; the AOI label is
+        # the AOI root's name, not "watershed-data".
+        name = aoi_root(self.aoi_dir).name
         if name.upper().startswith("HUC"):
             stripped = name[3:]
             if stripped:
@@ -784,10 +786,8 @@ def _rasterize_catchments(
     out_tif: Path,
 ) -> None:
     """
-    Replicates FIM:
-        gdal_rasterize -a HydroID -a_nodata 0
-                       gw_catchments_filtered.gpkg gw_catchments_filtered.tif
-    Burns HydroID attribute onto the reference raster grid.
+    Burn the HydroID attribute of each catchment polygon onto the reference
+    raster grid (nodata 0), producing an int32 HydroID raster.
     """
     import numpy as np
     import rasterio

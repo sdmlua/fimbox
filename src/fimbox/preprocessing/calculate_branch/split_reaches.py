@@ -142,7 +142,7 @@ def split_derived_reaches(
         for geom in flows.geometry:
             if geom is None or geom.is_empty or geom.length == 0:
                 continue
-            # TauDEM streamnet outputs reaches upstream-first (headwater --> confluence).
+            # Reaches arrive upstream-first (headwater --> confluence).
             # Do NOT reverse — coords[0] = headwater, coords[-1] = outlet/confluence.
             line = LineString(geom.coords)
             _split_one_line(line, dem_ds, max_length, slope_min, split_lines, slopes)
@@ -338,8 +338,7 @@ def _assign_hydro_ids(
     wbd8: Optional[gpd.GeoDataFrame],
 ) -> gpd.GeoDataFrame:
     """
-    Port of build_stream_traversal.build_stream_traversal_columns().
-    Assigns HydroID, From_Node, To_Node, NextDownID to stream segments.
+    Assign HydroID, From_Node, To_Node, NextDownID to stream segments.
     """
     split_gdf = split_gdf.copy().reset_index(drop=True)
     hydro_id = "HydroID"
@@ -392,7 +391,7 @@ def _assign_hydro_ids(
     split_gdf = split_gdf.sort_values(hydro_id).reset_index(drop=True)
 
     # From_Node / To_Node from endpoint coordinates.
-    # Replicates FIM build_stream_traversal.py: round to 7 decimal places.
+    # Round to 7 decimal places so endpoints that should coincide share a node.
     xy_dict: dict[str, int] = {}
     node_counter = [0]
 
@@ -417,10 +416,9 @@ def _assign_hydro_ids(
     split_gdf["To_Node"] = to_nodes
 
     # NextDownID: find the HydroID of the segment whose From_Node == our To_Node.
-    # FIM uses a From_Node --> [list of HydroIDs] dict (multiple segments can start
-    # from the same node at confluences). We replicate that: when multiple segments
-    # share a From_Node, take the one with the smallest HydroID (first in sort order,
-    # matching FIM's behaviour of taking next_down_ids[0]).
+    # Build a From_Node --> [list of HydroIDs] dict (multiple segments can start
+    # from the same node at confluences). When several segments share a
+    # From_Node, take the one with the smallest HydroID (first in sort order).
     dnodes: dict[int, list[int]] = {}
     for fn, hid_val in zip(
         split_gdf["From_Node"].tolist(), split_gdf[hydro_id].tolist()

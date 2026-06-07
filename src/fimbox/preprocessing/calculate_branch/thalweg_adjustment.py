@@ -139,7 +139,8 @@ class ThalwegAdjustment:
 
     def _stream_pixel_zones(self) -> tuple[Path, Path, Path]:
         """
-        Port of unique_pixel_and_allocation.py.
+        Assign a unique id to each stream pixel and build the distance /
+        allocation grids from those seeds.
         Returns (unique_ids_path, dist_path, allo_path).
         """
         from ._wbt_safe import run_wbt_tool
@@ -294,8 +295,7 @@ class ThalwegAdjustment:
     def _mask_and_condition(self) -> None:
         """
         Mask D8 flow directions to stream cells (A*B) then condition the
-        thalweg-adjusted DEM to be monotonically decreasing along flow paths
-        (TauDEM flowdircond equivalent).
+        thalweg-adjusted DEM to be monotonically decreasing along flow paths.
         """
         with (
             rasterio.open(str(self.flowdir)) as fd_ds,

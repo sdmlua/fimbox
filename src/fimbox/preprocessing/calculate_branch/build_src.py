@@ -1,19 +1,28 @@
 """
 Author: Supath Dhital
-Date Updated: May 2026
+Date Updated: June 2026
 
-Developing the Synthetic Rating Curve (SRC) table.
+Developing the Synthetic Rating Curve (SRC) geometry table.
 
-Algorithm (per catchment, per stage h):
-    inundated      = HAND <= h within the catchment
-    Number of Cells = count(inundated)
-    SurfaceArea    = N * pixel_area                   # planar water surface
-    Volume         = Σ (h - HAND_i) * pixel_area      # depth integral
-    BedArea        = Σ pixel_area * sqrt(1 + slope_i^2)  # wetted bed (accounts for terrain)
+For each catchment and each stage height ``h``, accumulate over the catchment's
+cells:
+    * WET condition is ``HAND < h`` (strict) OR ``|HAND| < 1e-6`` (a zero-HAND
+      channel cell is wet at every stage, including stage 0).
+    * A cell is dropped entirely when its slope (or HAND, or catchment) is
+      nodata — it contributes to no accumulator.
+    * BedArea uses the per-cell wetted-bed factor ``sqrt(1 + slope^2)``.
+    * Volume is the depth integral ``Σ (h - HAND_i) * cellArea``.
 
-Output schema (CSV with leading-space ' SLOPE' kept for FIM compatibility):
-    CatchId, Number of Cells, SurfaceArea (m2), BedArea (m2),
-    Volume (m3), Stage,  SLOPE, LENGTHKM
+Cell area:
+The pipeline runs in projected metres (EPSG:5070 CONUS Albers by default),
+where every cell has the same area ``|transform.a * transform.e|``. We use that
+constant and emit a WARNING if the raster is geographic, since a single planar
+cell area would then be wrong (cell width in metres varies with latitude).
+
+Output schema — the ``SLOPE`` column is written with a leading space
+(``" SLOPE"``); the downstream ``add_crosswalk`` strips it on read:
+    CatchId, Stage, Number of Cells, SurfaceArea (m2), BedArea (m2),
+    Volume (m3),  SLOPE, LENGTHKM, AREASQKM
 
 Inputs
 ------
@@ -66,6 +75,10 @@ def build_src_base(
         log.info("build_src: output exists, skipping --> %s", out_csv.name)
         return out_csv
 
+    # A HAND value within this tolerance of zero is treated as a channel cell
+    # (wet at every stage).
+    ZERO_TOL = 1e-6
+
     stages = _read_stages(stages_txt)
     catch_meta = _read_catchlist(catchlist_txt)  # HydroID --> (S0, LengthKm, areasqkm)
     hydro_ids = list(catch_meta.keys())
@@ -78,51 +91,85 @@ def build_src_base(
     )
 
     with rasterio.open(str(hand_raster)) as hand_ds:
-        hand_nodata = hand_ds.nodata if hand_ds.nodata is not None else -9999.0
+        hand_nodata = hand_ds.nodata
+        # Cell area is constant for projected rasters; warn if geographic,
+        # where one planar cell area would be wrong (cell width in metres
+        # varies with latitude).
+        if hand_ds.crs is not None and hand_ds.crs.is_geographic:
+            log.warning(
+                "build_src: HAND raster is geographic (%s); a single planar "
+                "cell area is used, which is inaccurate. Reproject to a metric "
+                "CRS (e.g. EPSG:5070) for a faithful SRC.",
+                hand_ds.crs.to_string(),
+            )
         pixel_area = abs(hand_ds.transform.a * hand_ds.transform.e)  # m^2 per cell
-        hand_arr = hand_ds.read(1).astype(np.float32)
+        hand_arr = hand_ds.read(1).astype(np.float64)
 
     with rasterio.open(str(catch_raster)) as cat_ds:
         cat_arr = cat_ds.read(1).astype(np.int64)
 
     with rasterio.open(str(slope_raster)) as slp_ds:
-        slope_nodata = slp_ds.nodata if slp_ds.nodata is not None else -9999.0
-        slope_arr = slp_ds.read(1).astype(np.float32)
+        slope_nodata = slp_ds.nodata
+        slope_arr = slp_ds.read(1).astype(np.float64)
 
-    # Vectorised per-catchment accumulation via np.bincount.
-    # All catchment pixels with valid HAND contribute; missing slope falls
-    # back to zero (treated as flat bed, the FIM default behaviour).
-    valid_pix = (cat_arr > 0) & (hand_arr != hand_nodata)
+    # A cell contributes only when catch / HAND / slope are ALL valid.
+    # nodata-slope cells are dropped entirely (they contribute to no
+    # accumulator), not coerced to a flat bed.
+    valid_pix = cat_arr > 0
+    if hand_nodata is not None:
+        valid_pix &= hand_arr != hand_nodata
+    valid_pix &= ~np.isnan(hand_arr)
+    if slope_nodata is not None:
+        valid_pix &= slope_arr != slope_nodata
+    valid_pix &= ~np.isnan(slope_arr)
     if not valid_pix.any():
-        log.warning("build_src: no valid (catchment, HAND) pixels found")
+        log.warning("build_src: no valid (catchment, HAND, slope) pixels found")
 
     flat_cat = cat_arr[valid_pix]
     flat_hand = hand_arr[valid_pix]
     flat_slope = slope_arr[valid_pix]
-    flat_slope = np.where(flat_slope == slope_nodata, 0.0, flat_slope)
 
     # Per-cell wetted bed factor: sqrt(1 + slope^2) accounts for the terrain
     # tilt of each cell — flat cells contribute pixel_area, steep cells contribute
     # more bed area than their planar projection.
-    bed_factor = np.sqrt(1.0 + flat_slope.astype(np.float64) ** 2)
+    bed_factor = np.sqrt(1.0 + flat_slope**2)
     bed_area_per_cell = pixel_area * bed_factor  # m^2
 
-    # Map each unique HydroID to a dense 0..K-1 index for bincount.
+    # The wet test is `HAND < h` (strict) OR `|HAND| < 1e-6`. The second clause
+    # makes a zero-HAND channel cell wet at EVERY stage. We handle the two
+    # populations separately so the strict `<` is exact:
+    #   * zero-HAND cells  -> always wet (counted at every stage)
+    #   * positive cells   -> wet when HAND < h, via searchsorted(side='left')
+    is_zero = np.abs(flat_hand) < ZERO_TOL
+    pos_mask = ~is_zero
+
+    # Map each unique HydroID to a dense 0..K-1 index.
     unique_hids, inverse = np.unique(flat_cat, return_inverse=True)
     n_catch = len(unique_hids)
+    hid_to_k: dict[int, int] = {int(h): i for i, h in enumerate(unique_hids)}
 
-    # Build pre-summed quantities per catchment that can be combined with
-    # any stage h without re-scanning pixels:
-    order = np.lexsort((flat_hand, inverse))
-    sorted_inv = inverse[order]
-    sorted_hand = flat_hand[order]
-    sorted_bed = bed_area_per_cell[order]
+    # --- Zero-HAND (always-wet) per-catchment totals (stage-independent). ---
+    # Volume contribution of a zero-HAND cell at stage h is (h - 0) * area.
+    zero_count = np.bincount(inverse[is_zero], minlength=n_catch)
+    zero_bed = np.bincount(
+        inverse[is_zero], weights=bed_area_per_cell[is_zero], minlength=n_catch
+    )
+    # Σ HAND over zero cells ≈ 0 by definition, so their volume per stage is
+    # simply h * (count * pixel_area); no HAND sum needed.
 
-    # Per-catchment slice boundaries in the sorted arrays.
+    # --- Positive-HAND cells: sort within catchment for cumulative partial sums. ---
+    pos_inv = inverse[pos_mask]
+    pos_hand = flat_hand[pos_mask]
+    pos_bed = bed_area_per_cell[pos_mask]
+
+    order = np.lexsort((pos_hand, pos_inv))
+    sorted_inv = pos_inv[order]
+    sorted_hand = pos_hand[order]
+    sorted_bed = pos_bed[order]
+
     counts = np.bincount(sorted_inv, minlength=n_catch)
     starts = np.concatenate([[0], np.cumsum(counts)])
 
-    # Cumulative arrays inside each catchment slice for fast partial sums.
     cum_hand = np.zeros_like(sorted_hand, dtype=np.float64)
     cum_bed = np.zeros_like(sorted_bed, dtype=np.float64)
     for k in range(n_catch):
@@ -132,30 +179,37 @@ def build_src_base(
         cum_hand[s:e] = np.cumsum(sorted_hand[s:e], dtype=np.float64)
         cum_bed[s:e] = np.cumsum(sorted_bed[s:e], dtype=np.float64)
 
-    # Build the per-row records. Order rows by HydroID (ascending stage within)
-    # to match the file layout produced by TauDEM catchhydrogeo.
+    # Build the per-row records, ordered by HydroID then ascending stage.
     rows: list[dict] = []
-    hid_to_k: dict[int, int] = {int(h): i for i, h in enumerate(unique_hids)}
+
+    def _row(hid, h, n, surf, bed, vol, s0, length_km, area_sq_km):
+        # ' SLOPE' keeps the leading space that add_crosswalk strips on read.
+        return {
+            "CatchId": int(hid),
+            "Stage": float(h),
+            "Number of Cells": int(n),
+            "SurfaceArea (m2)": float(surf),
+            "BedArea (m2)": float(bed),
+            "Volume (m3)": float(vol),
+            " SLOPE": float(s0),
+            "LENGTHKM": float(length_km),
+            "AREASQKM": float(area_sq_km),
+        }
 
     for hid in hydro_ids:
-        s0, length_km, _area_sq_km = catch_meta[hid]
+        s0, length_km, area_sq_km = catch_meta[hid]
         k = hid_to_k.get(int(hid))
+
+        # Stage-independent zero-HAND contribution for this catchment.
+        zc = int(zero_count[k]) if k is not None else 0
+        zb = float(zero_bed[k]) if k is not None else 0.0
+        z_surface = zc * pixel_area
+
         if k is None:
-            # No raster pixels for this catchment — emit zero-volume rows so
-            # the downstream merge still produces a stage ladder for this HydroID.
+            # No raster pixels at all — still emit a full stage ladder so the
+            # downstream merge produces a (zeroed) curve for this HydroID.
             for h in stages:
-                rows.append(
-                    {
-                        "CatchId": int(hid),
-                        "Number of Cells": 0,
-                        "SurfaceArea (m2)": 0.0,
-                        "BedArea (m2)": 0.0,
-                        "Volume (m3)": 0.0,
-                        "Stage": float(h),
-                        " SLOPE": float(s0),
-                        "LENGTHKM": float(length_km),
-                    }
-                )
+                rows.append(_row(hid, h, 0, 0.0, 0.0, 0.0, s0, length_km, area_sq_km))
             continue
 
         s, e = starts[k], starts[k + 1]
@@ -163,43 +217,39 @@ def build_src_base(
         catch_cum_hand = cum_hand[s:e]
         catch_cum_bed = cum_bed[s:e]
 
-        # For each stage, find the count of pixels with HAND <= h and use
-        # cumulative arrays to assemble the per-stage geometry totals.
-        # side='right' so a pixel with HAND exactly equal to h is included.
-        idx = np.searchsorted(catch_hand, stages, side="right")
+        # Positive-HAND cells wet at stage h: HAND < h (strict) -> side='left'.
+        idx = np.searchsorted(catch_hand, stages, side="left")
 
-        for h, n_le in zip(stages, idx):
-            if n_le == 0:
-                rows.append(
-                    {
-                        "CatchId": int(hid),
-                        "Number of Cells": 0,
-                        "SurfaceArea (m2)": 0.0,
-                        "BedArea (m2)": 0.0,
-                        "Volume (m3)": 0.0,
-                        "Stage": float(h),
-                        " SLOPE": float(s0),
-                        "LENGTHKM": float(length_km),
-                    }
-                )
-                continue
-            n_int = int(n_le)
-            sum_hand_le = float(catch_cum_hand[n_int - 1])
-            sum_bed_le = float(catch_cum_bed[n_int - 1])
-            surface_area = n_int * pixel_area
-            # Volume = Σ (h - HAND_i) * pixel_area = h*N*A - A*Σ HAND_i
-            volume = (float(h) * n_int * pixel_area) - (sum_hand_le * pixel_area)
+        for h, n_lt in zip(stages, idx):
+            n_pos = int(n_lt)
+            if n_pos > 0:
+                sum_hand_lt = float(catch_cum_hand[n_pos - 1])
+                sum_bed_lt = float(catch_cum_bed[n_pos - 1])
+            else:
+                sum_hand_lt = 0.0
+                sum_bed_lt = 0.0
+
+            # Combine the always-wet zero cells with the stage-wet positive cells.
+            n_total = n_pos + zc
+            surface_area = (n_pos * pixel_area) + z_surface
+            bed_area = sum_bed_lt + zb
+            # Volume = Σ_pos (h - HAND_i) A + Σ_zero (h - 0) A
+            volume = (
+                (float(h) * n_pos * pixel_area) - (sum_hand_lt * pixel_area)
+            ) + (float(h) * zc * pixel_area)
+
             rows.append(
-                {
-                    "CatchId": int(hid),
-                    "Number of Cells": n_int,
-                    "SurfaceArea (m2)": surface_area,
-                    "BedArea (m2)": sum_bed_le,
-                    "Volume (m3)": max(volume, 0.0),
-                    "Stage": float(h),
-                    " SLOPE": float(s0),
-                    "LENGTHKM": float(length_km),
-                }
+                _row(
+                    hid,
+                    h,
+                    n_total,
+                    surface_area,
+                    bed_area,
+                    max(volume, 0.0),
+                    s0,
+                    length_km,
+                    area_sq_km,
+                )
             )
 
     df = pd.DataFrame.from_records(rows)

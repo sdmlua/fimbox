@@ -40,13 +40,10 @@ from fimbox import (
 )
 
 # AOI parameters — point this at any user-supplied AOI working directory.
-# aoi_code is recorded on every hydroTable row; a generic string is fine
-# (HUC IDs work unchanged for legacy datasets).
-OUT_DIR = Path(".././out/test_smallB")
-AOI_CODE = "08060202"
+OUT_DIR = Path(".././out/test_smallB/watershed-data")
 
 # Source-data filename prefix.
-IDENTIFIER = "nwm"
+IDENTIFIER = "nwmmr"
 
 # Tunable CreateHAND parameters- All have sensible defaults in CreateHAND itself.
 PARAMS_CREATE_HAND = dict(
@@ -206,7 +203,6 @@ GW_PIXELS = BRANCH_DIR / f"gw_catchments_pixels_{BRANCH_ID}.tif"
 #         aoi_dir=OUT_DIR,
 #         branch_dir=BRANCH_DIR,
 #         branch_id=BRANCH_ID,
-#         aoi_code=AOI_CODE,
 #         levee_protected_areas_gpkg=LEVEE_AREAS if LEVEE_AREAS.exists() else None,
 #         levee_levelpaths_csv=LEVEE_LP_CSV if LEVEE_LP_CSV.exists() else None,
 #         lakes_gpkg=LAKES if LAKES.exists() else None,
@@ -251,24 +247,19 @@ GW_PIXELS = BRANCH_DIR / f"gw_catchments_pixels_{BRANCH_ID}.tif"
 
 #     ht = pd.read_csv(
 #         HYDRO_TABLE,
-#         dtype={"aoi_code": str, "HydroID": str, "feature_id": str},
+#         dtype={"HydroID": str, "feature_id": str},
 #     )
 #     required = {
-#         "HydroID", "feature_id", "aoi_code",
+#         "HydroID", "feature_id",
 #         "stage", "discharge_cms", "ManningN", "SLOPE", "LENGTHKM",
 #     }
 #     missing = required - set(ht.columns)
 #     assert not missing, f"hydroTable missing columns: {missing}"
 #     assert (ht["stage"] >= 0).all(), "negative stage values in hydroTable"
 #     assert (ht["discharge_cms"] >= 0).all(), "negative discharge in hydroTable"
-#     aoi_unique = set(ht["aoi_code"].unique())
-#     assert AOI_CODE in aoi_unique or any(
-#         AOI_CODE in v for v in aoi_unique
-#     ), f"aoi_code column {aoi_unique} does not contain test AOI_CODE={AOI_CODE!r}"
 #     log.info(
 #         f"hydroTable rows: {len(ht)}, HydroIDs: {ht['HydroID'].nunique()}, "
-#         f"feature_ids: {ht['feature_id'].nunique()}, "
-#         f"aoi_code: {sorted(aoi_unique)}"
+#         f"feature_ids: {ht['feature_id'].nunique()}"
 #     )
 
 
@@ -594,7 +585,6 @@ def test_step_B13_polygonize_catchments():
     log.info(f"polygonised: {len(gdf)} catchments")
     assert CATCH_POLY.exists() and "HydroID" in gdf.columns and len(gdf) > 0
 
-
 def test_step_B14_filter_catchments():
     """CreateHAND step 14: drop slivers + attach flow attributes per HydroID."""
     from fimbox import FilterCatchments
@@ -606,7 +596,7 @@ def test_step_B14_filter_catchments():
         flows_gpkg=SPLIT_REACHES,
         out_catchments=FILT_CATCH,
         out_flows=FILT_FLOWS,
-        aoi_code=AOI_CODE,
+        aoi_code=OUT_DIR.parent.name,
         boundary_gpkg=WBD8_CLP if WBD8_CLP.exists() else None,
     ).run()
     import geopandas as gpd
@@ -659,7 +649,7 @@ def test_step_B17_stages_and_catchlist():
 
 
 def test_step_B18_build_src_base():
-    """CreateHAND step 18: synthetic rating curve base table (TauDEM-style geometry)."""
+    """CreateHAND step 18: synthetic rating curve base table."""
     from fimbox import build_src_base
 
     for p in (REM_ZEROED, FILT_TIF, SLOPES_MASKED, CATCHLIST_TXT, STAGE_TXT):
@@ -696,7 +686,6 @@ def test_step_B19_add_crosswalk():
         out_src_json=SRC_JSON,
         out_crosswalk_csv=XWALK_CSV,
         out_hydro_csv=HYDRO_TABLE,
-        aoi_code=AOI_CODE,
         boundary_gpkg=WBD8_CLP if WBD8_CLP.exists() else None,
         mannings_n=0.06,
         min_catchment_area=0.25,
@@ -706,7 +695,7 @@ def test_step_B19_add_crosswalk():
     )
     import pandas as pd
 
-    ht = pd.read_csv(HYDRO_TABLE, dtype={"aoi_code": str, "HydroID": str})
+    ht = pd.read_csv(HYDRO_TABLE, dtype={"HydroID": str})
     log.info(f"hydroTable: {len(ht)} rows  HydroIDs={ht['HydroID'].nunique()}")
     assert HYDRO_TABLE.exists() and (ht["discharge_cms"] >= 0).all()
 
@@ -776,7 +765,7 @@ def test_step_C20_download_usgs_gages():
 
     gdf = DownloadUSGSGages().download(
         boundary=boundary,
-        aoi_id=AOI_CODE,
+        aoi_id=OUT_DIR.parent.name,
         out_dir=OUT_DIR,
         out_name="usgs_gages.gpkg",
         out_layer="usgs_gages",
@@ -815,7 +804,7 @@ def test_step_C21_assign_gages_to_branches():
     assign_gages_to_branches(
         usgs_gages_gpkg=USGS_GAGES,
         nwm_streams_levelpaths_gpkg=NWM_LEVELPATHS,
-        aoi_id=AOI_CODE,
+        aoi_id=OUT_DIR.parent.name,
         out_dir=OUT_DIR,
         # DownloadUSGSGages writes "aoi_id"; the default filter column ("HUC8")
         # would not find anything in that gpkg.
@@ -841,9 +830,7 @@ def test_step_C22_usgs_crosswalk_branch_zero():
     ``branches/0/usgs_elev_table.csv``.
 
     Prerequisites: ``usgs_subset_gages_0.gpkg`` (from C21) and the per-branch
-    CreateHAND outputs (from Z1 + the B-series). Skips silently when the
-    branch-zero gage gpkg isn't on disk, so an AOI with no gauges does not
-    fail the suite.
+    CreateHAND outputs (from Z1 + the B-series).
     """
     from fimbox import run_branch_crosswalk
 
@@ -944,13 +931,13 @@ def test_step_C24_calculate_allbranches(tmp_path):
 
     deny_unit_list = tmp_path / "deny_unit.lst"
     deny_unit_list.write_text("temporary_{}.tif\n")
-    removable = aoi_dir / f"temporary_{AOI_CODE}.tif"
+    # aoi_id defaults to the AOI folder name ("aoi") when not passed.
+    removable = aoi_dir / f"temporary_{aoi_dir.name}.tif"
     removable.write_bytes(b"x")
 
     result = calculate_allbranches(
         AOIProcessingConfig(
             aoi_dir=aoi_dir,
-            aoi_id=AOI_CODE,
             branch_list_path=branch_list_path,
             n_workers=1,
         ),
@@ -983,12 +970,15 @@ def test_step_C25_calculate_allbranches_live_run():
     deny_unit_list = Path(__file__).resolve().parent.parent / "config" / "deny_unit.lst"
     assert deny_unit_list.is_file(), f"deny_unit.lst missing: {deny_unit_list}"
 
+    # Pass the same tuning the branch-zero step tests use, so every branch in
+    # this all-branches run and branch zero share one set of values. Editing
+    # PARAMS_CREATE_HAND at the top of this file retunes both paths together.
     cfg = AOIProcessingConfig(
         aoi_dir=OUT_DIR,
-        aoi_id=AOI_CODE,
         branch_list_path=branch_list_path,
         n_workers=int(os.environ.get("FIMBOX_BRANCH_WORKERS", "1")),
         delete_deny_list=True,
+        **PARAMS_CREATE_HAND,
     )
 
     delete_deny_list = True
