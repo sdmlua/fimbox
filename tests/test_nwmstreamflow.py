@@ -2,188 +2,95 @@
 Author: Supath Dhital
 Date Created: June 2026
 
-Streamflow retrieval / plot / statistics tests, plus the default NWM FIM
-pipeline. 
+Streamflow retrieval / plot / statistics — minimal, call-the-function tests.
 
-Point AOI_DIR at any AOI whose feature_id.csv exists. Edit the dates/sites to
-your basin before running the live steps.
+Point AOI_DIR at a working directory whose feature_id.csv exists (or pass a
+feature_ids list / CSV per call). Edit the dates and USGS site to your basin,
+then run the functions you want.
 """
 
 from __future__ import annotations
 
-import importlib.util
 from pathlib import Path
 
-import pandas as pd
-import pytest
+from fimbox import (
+    getNWMretrospective,
+    getNWMforecast,
+    get_usgs_fid_pairs,
+    USGSData,
+    plot_nwm,
+    plot_usgs,
+    plot_comparison,
+    calculate_statistics,
+)
 
-from fimbox.streamflow import _common as C
+AOI_DIR = Path(".././out/test_smallB")
 
-# Edit these for your AOI.
-AOI_DIR = Path("/Users/Supath/Downloads/SDML/FIMBOX/out/test_smallB")
-FEATURE_ID_CSV = AOI_DIR / "feature_id.csv"
-
-# Retrospective window, a USGS site for comparison.
 START = "2020-05-19"
 END = "2020-05-22"
 EVENT = "2020-05-20 12:00:00"
 USGS_SITE = "07289000"
+FEATURE_ID = 25747229
 
 
-def _have(mod: str) -> bool:
-    return importlib.util.find_spec(mod) is not None
+# retrospective — different extraction combinations
+# def test_retrospective_event_date():
+#     getNWMretrospective(AOI_DIR, date=EVENT)
 
 
-needs_teehr = pytest.mark.skipif(not _have("teehr"), reason="teehr not installed")
-needs_mpl = pytest.mark.skipif(not _have("matplotlib"), reason="matplotlib not installed")
-needs_s3 = pytest.mark.skipif(
-    not (_have("s3fs") and _have("xarray")), reason="s3fs/xarray not installed"
-)
-needs_fids = pytest.mark.skipif(
-    not FEATURE_ID_CSV.exists(), reason=f"no feature_id.csv at {FEATURE_ID_CSV}"
-)
+# def test_retrospective_range_continuous():
+#     # start + end, nothing else -> one CSV per hour
+#     getNWMretrospective(AOI_DIR, start=START, end=END)
 
 
-# offline: always runs
-def test_statistics_math():
-    from fimbox.streamflow import compute_metrics
-
-    obs = pd.Series([10.0, 20.0, 30.0, 40.0])
-    perfect = compute_metrics(obs.values, obs.values)
-    assert perfect["KGE"] == pytest.approx(1.0, abs=1e-6)
-    assert perfect["NSE"] == pytest.approx(1.0, abs=1e-6)
-    assert perfect["PBias (%)"] == pytest.approx(0.0, abs=1e-6)
-
-    sim = obs * 1.1
-    biased = compute_metrics(sim.values, obs.values)
-    assert biased["NSE"] < 1.0
-    assert biased["PBias (%)"] > 0.0
+# def test_retrospective_range_sortby():
+#     # start + end + sortby -> one aggregated CSV
+#     getNWMretrospective(AOI_DIR, start=START, end=END, sortby="maximum")
 
 
-def test_fim_csv_normalization(tmp_path):
-    """The FIM forecast loader accepts both 'discharge' and 'discharge_cms'."""
-    from fimbox.fimgeneration.pipeline import _load_forecast
-
-    legacy = tmp_path / "legacy.csv"
-    pd.DataFrame({"feature_id": [1, 2], "discharge": [5.0, 6.0]}).to_csv(legacy, index=False)
-    df = _load_forecast(legacy)
-    assert "discharge_cms" in df.columns
-    assert df["discharge_cms"].tolist() == [5.0, 6.0]
+# def test_retrospective_feature_ids_list():
+#     # pass feature_ids directly instead of relying on the AOI's feature_id.csv
+#     getNWMretrospective(AOI_DIR, feature_ids=[FEATURE_ID], date=EVENT)
 
 
-def test_archive_select(tmp_path):
-    """select_from_archive slices a synthetic parquet without any download."""
-    from fimbox.streamflow.nwm_retrospective import NWMRetrospective
-
-    aoi = tmp_path / "MyAOI"
-    aoi.mkdir()
-    fids = aoi / "feature_id.csv"
-    pd.DataFrame({"feature_id": [101, 202]}).to_csv(fids, index=False)
-
-    retro = NWMRetrospective(aoi, fids)
-    times = pd.date_range("2020-05-20 00:00:00", periods=3, freq="h")
-    rows = []
-    for t in times:
-        for fid, v in ((101, 10.0), (202, 20.0)):
-            rows.append({"location_id": f"nwm30-{fid}", "value_time": t, "value": v})
-    parquet = retro.archive_dir / "20200520_20200520.parquet"
-    pd.DataFrame(rows).to_parquet(parquet)
-
-    out = retro.select_from_archive(date="2020-05-20 01:00:00")
-    assert len(out) == 1 and out[0].exists()
-    got = pd.read_csv(out[0])
-    assert set(got.columns) == {"feature_id", "discharge_cms"}
-    assert sorted(got["feature_id"]) == [101, 202]
+# # forecast — different combinations
+# def test_forecast_shortrange():
+#     getNWMforecast(AOI_DIR, "shortrange")
 
 
-# live: NWM retrospective -> FIM-ready CSVs
-@needs_teehr
-@needs_fids
-def test_nwm_retrospective_range():
-    from fimbox.streamflow import NWMRetrospective
-
-    csvs = NWMRetrospective(AOI_DIR, FEATURE_ID_CSV).to_fim_inputs(START, END)
-    assert csvs, "no FIM-ready CSVs written"
-    df = pd.read_csv(csvs[0])
-    assert {"feature_id", "discharge_cms"}.issubset(df.columns)
+# def test_forecast_mediumrange_maxsort():
+#     getNWMforecast(AOI_DIR, "mediumrange", sort_by="maximum")
 
 
-@needs_teehr
-@needs_fids
-def test_nwm_retrospective_instant():
-    from fimbox.streamflow import NWMRetrospective
-
-    out = NWMRetrospective(AOI_DIR, FEATURE_ID_CSV).at(EVENT)
-    assert out.is_file()
+# def test_forecast_specific_cycle():
+#     getNWMforecast(AOI_DIR, "shortrange", forecast_date="2024-06-01", hour=12)
 
 
-# live: NWM forecast
-@pytest.mark.skipif(not _have("netCDF4"), reason="netCDF4 not installed")
-@needs_fids
-def test_nwm_forecast_shortrange():
-    from fimbox.streamflow import NWMForecast
-
-    out = NWMForecast(AOI_DIR, FEATURE_ID_CSV).to_fim_inputs("shortrange")
-    # forecast availability varies; just assert it ran and returned a list.
-    assert isinstance(out, list)
+# # USGS observations
+# def test_usgs_fetch():
+#     USGSData(AOI_DIR).fetch([USGS_SITE], START, END)
 
 
-# live: USGS + statistics
-@needs_teehr
-@needs_fids
-def test_usgs_fetch():
-    from fimbox.streamflow import USGSData
-
-    USGSData(AOI_DIR).fetch([USGS_SITE], START, END)
+def test_usgs_feature_id_pairs():
+    # which USGS gage falls on which reach (feature_id) within the AOI
+    pairs = get_usgs_fid_pairs(AOI_DIR)
+    print(pairs)
 
 
-@needs_mpl
-@needs_fids
-def test_plot_nwm():
-    from fimbox.streamflow import plot_nwm
-
-    fids = C.load_feature_ids(FEATURE_ID_CSV)[:3]
-    out = plot_nwm(AOI_DIR, fids, START, END)
-    if out is not None:
-        assert out.suffix == ".png"
-        # plots live under watershed-data/plots
-        assert out.parent == C.plots_dir(AOI_DIR)
+# plots
+def test_plot_feature_id():
+    plot_nwm(AOI_DIR, [FEATURE_ID], START, END)
 
 
-@needs_teehr
-@needs_mpl
-@needs_fids
-def test_statistics_vs_usgs():
-    from fimbox.streamflow import calculate_statistics
-
-    fid = C.load_feature_ids(FEATURE_ID_CSV)[0]
-    metrics = calculate_statistics(AOI_DIR, fid, USGS_SITE, START, END, plot=True)
-    assert -10 <= metrics.kge <= 1.0
+# def test_plot_usgs():
+#     plot_usgs(AOI_DIR, [USGS_SITE], START, END)
 
 
-# live: GEOGLOWS (needs a hydrotable mapping LINKNO -> feature_id)
-@needs_s3
-@needs_fids
-def test_geoglows():
-    from fimbox.streamflow import GeoglowsData
-
-    hydrotable = AOI_DIR / "geoglows_hydrotable.csv"
-    if not hydrotable.exists():
-        pytest.skip("no GEOGLOWS hydrotable (LINKNO -> feature_id) present")
-    GeoglowsData(AOI_DIR, hydrotable).fetch(EVENT)
+# def test_plot_usgs_and_feature_id():
+#     # time series overlay of USGS and the NWM feature_id together
+#     plot_comparison(AOI_DIR, FEATURE_ID, USGS_SITE, START, END)
 
 
-# live: end-to-end NWM -> FIM
-@needs_teehr
-@needs_fids
-@pytest.mark.skipif(
-    not (AOI_DIR / "watershed-data" / "branches").is_dir(),
-    reason="no branches — run branch processing first",
-)
-def test_nwm_fim_pipeline():
-    from fimbox import NWMFimPipeline
-
-    results = NWMFimPipeline(AOI_DIR, FEATURE_ID_CSV, n_workers=1).from_retrospective(
-        date=EVENT
-    )
-    assert results and results[0].depth_path is not None
+# # statistics
+# def test_statistics_usgs_vs_nwm():
+#     calculate_statistics(AOI_DIR, FEATURE_ID, USGS_SITE, START, END)

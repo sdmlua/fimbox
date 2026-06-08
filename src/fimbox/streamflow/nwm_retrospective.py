@@ -32,6 +32,36 @@ NWM_VERSION = "nwm30"
 _LOC_PREFIX = f"{NWM_VERSION}-"
 
 
+def getNWMretrospective(
+    aoi_dir: PathLike,
+    *,
+    feature_ids: Optional[list] = None,
+    feature_id_csv: Optional[PathLike] = None,
+    date: Optional[str] = None,
+    start: Optional[str] = None,
+    end: Optional[str] = None,
+    sortby: Optional[str] = None,
+) -> list[Path]:
+    """Retrieve NWM retrospective streamflow into FIM-ready CSVs.
+
+    Feature ids come from ``feature_ids`` (a list), ``feature_id_csv`` (a path),
+    or the AOI's ``feature_id.csv`` (default). Date handling:
+
+      * ``date``            -> one CSV at that instant/day
+      * ``start`` + ``end`` -> one CSV per hour (continuous)
+      * ``start`` + ``end`` + ``sortby`` -> one aggregated CSV (max/min/mean)
+    """
+    fid_csv = C.resolve_feature_id_csv(
+        aoi_dir, feature_id_csv=feature_id_csv, feature_ids=feature_ids
+    )
+    retro = NWMRetrospective(aoi_dir, fid_csv)
+    if date:
+        return [retro.at(date)]
+    if start and end:
+        return retro.to_fim_inputs(start, end, sortby=sortby)
+    raise ValueError("Provide date=, or start= and end=.")
+
+
 class NWMRetrospective:
     """Fetch and slice NWM retrospective streamflow for an AOI's feature_ids."""
 
@@ -48,20 +78,27 @@ class NWMRetrospective:
         self.nwm_version = nwm_version
         self.variable_name = variable_name
         self.archive_dir = C.streamflow_dir(aoi_dir, f"{nwm_version}_retrospective")
+        C.attach_log(aoi_dir)
 
     # downloading
     def fetch(self, start_date: str, end_date: str) -> Path:
-        """Download the [start_date, end_date] hourly parquet (idempotent).
-        Dates are ``YYYY-MM-DD`` or ``YYYY-MM-DD HH:MM:SS``. Returns the parquet
-        path."""
-        parquet = self.archive_dir / self._parquet_name(start_date, end_date)
-        if parquet.exists():
-            log.info("SKIP (exists): %s", parquet.name)
-            return parquet
+        """Download NWM retrospective for [start_date, end_date] (idempotent).
 
-        nwm_retro = C.require(
-            "teehr.fetching.nwm.retrospective_points"
-        )
+        teehr names its output by the request's day span: ``YYYYMMDD.parquet``
+        when start and end fall on the same UTC day, else
+        ``YYYYMMDD_YYYYMMDD.parquet``. We compute that exact name, skip the
+        download when it already exists (or when an existing wider window
+        already covers the request), and return the parquet path.
+        """
+        target = self.archive_dir / self._canonical_name(start_date, end_date)
+        if target.exists() or self._covering_file(start_date, end_date) is not None:
+            existing = target if target.exists() else self._covering_file(
+                start_date, end_date
+            )
+            log.info("SKIP (exists): %s", existing.name)
+            return existing
+
+        nwm_retro = C.require("teehr.fetching.nwm.retrospective_points")
         location_ids = C.load_feature_ids(self.feature_id_csv)
         log.info(
             "NWM retrospective: %d reaches, %s -> %s",
@@ -77,8 +114,11 @@ class NWMRetrospective:
             location_ids=location_ids,
             output_parquet_dir=self.archive_dir,
         )
-        log.info("NWM retrospective parquet --> %s", parquet.name)
-        return parquet
+        log.info(
+            "NWM retrospective parquet --> %s",
+            target.name if target.exists() else "(no data in window)",
+        )
+        return target
 
     # slicing into FIM-ready CSVs
     def to_fim_inputs(
@@ -240,19 +280,53 @@ class NWMRetrospective:
             )
 
     # internals
-    def _parquet_name(self, start_date: str, end_date: str) -> str:
-        return f"{start_date.replace('-', '')}_{end_date.replace('-', '')}.parquet"
+    @staticmethod
+    def _canonical_name(start_date: str, end_date: str) -> str:
+        """teehr's output filename for a request: ``YYYYMMDD.parquet`` when the
+        start and end days match, else ``YYYYMMDD_YYYYMMDD.parquet``."""
+        s = pd.to_datetime(start_date).strftime("%Y%m%d")
+        e = pd.to_datetime(end_date).strftime("%Y%m%d")
+        return f"{s}.parquet" if s == e else f"{s}_{e}.parquet"
+
+    @staticmethod
+    def _file_span(parquet: Path):
+        """Day span a parquet filename encodes: (start_day, end_day) as
+        ``YYYYMMDD`` strings. Single-day names repeat the day."""
+        stem = parquet.stem
+        if "_" in stem:
+            a, b = stem.split("_", 1)
+            return a, b
+        return stem, stem
+
+    def _covering_file(self, start_date: str, end_date: str) -> Optional[Path]:
+        """An already-downloaded parquet whose day span fully contains the
+        request (so a wider prior download is reused instead of re-fetching)."""
+        s = pd.to_datetime(start_date).strftime("%Y%m%d")
+        e = pd.to_datetime(end_date).strftime("%Y%m%d")
+        for parquet in sorted(self.archive_dir.glob("*.parquet")):
+            fs, fe = self._file_span(parquet)
+            if fs <= s and fe >= e:
+                return parquet
+        return None
 
     def _read_range(self, start_date: str, end_date: str) -> pd.DataFrame:
-        parquet = self.archive_dir / self._parquet_name(start_date, end_date)
+        """Read the parquet covering [start_date, end_date] (the canonical file
+        or a wider one that contains it) and clip to the exact window."""
+        parquet = self.archive_dir / self._canonical_name(start_date, end_date)
         if not parquet.exists():
-            raise FileNotFoundError(f"NWM parquet not found: {parquet}")
+            parquet = self._covering_file(start_date, end_date)
+        if parquet is None or not parquet.exists():
+            raise FileNotFoundError(
+                f"No NWM parquet under {self.archive_dir} for {start_date} .. {end_date}"
+            )
         df = pd.read_parquet(parquet)
         df["value_time"] = pd.to_datetime(df["value_time"])
         df["feature_id"] = (
             df["location_id"].str.replace(_LOC_PREFIX, "", regex=False).astype("int64")
         )
-        return df
+        lo, hi = pd.to_datetime(start_date), pd.to_datetime(end_date)
+        df = df[(df["value_time"] >= lo) & (df["value_time"] <= hi)]
+        return df.drop_duplicates(subset=["value_time", "feature_id"]).reset_index(drop=True)
 
     @staticmethod
     def _aggregate(df: pd.DataFrame, sortby: str) -> pd.DataFrame:

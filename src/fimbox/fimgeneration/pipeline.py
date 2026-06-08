@@ -393,22 +393,61 @@ def extract_feature_ids(
     return target
 
 
+def _select_discharge_csvs(
+    csvs: Sequence[Path],
+    *,
+    date: Optional[str] = None,
+    start: Optional[str] = None,
+    end: Optional[str] = None,
+) -> list[Path]:
+    """Filter discharge CSVs by the date stamp embedded in their filename.
+
+    Names carry a ``YYYYMMDD`` (and optional ``THHMM``) token, e.g.
+    ``NWM_20200520T1200.csv`` / ``NWM_20200520.csv``. ``date`` keeps names
+    containing the stamp ``YYYYMMDD`` (or ``YYYYMMDDTHHMM`` when a time is
+    given); ``start``/``end`` keep names whose first ``YYYYMMDD`` token is in
+    the inclusive range. With no filter, all CSVs are returned.
+    """
+    import re
+
+    if date is not None:
+        t = pd.to_datetime(date)
+        has_time = " " in str(date) or "T" in str(date)
+        token = t.strftime("%Y%m%dT%H%M") if has_time else t.strftime("%Y%m%d")
+        return [p for p in csvs if token in p.name]
+
+    if start is not None and end is not None:
+        lo = pd.to_datetime(start).strftime("%Y%m%d")
+        hi = pd.to_datetime(end).strftime("%Y%m%d")
+        day = re.compile(r"(\d{8})")
+        out = []
+        for p in csvs:
+            m = day.search(p.name)
+            if m and lo <= m.group(1) <= hi:
+                out.append(p)
+        return out
+
+    return list(csvs)
+
+
 @dataclass
-class NWMFimPipeline:
-    """Default pipeline: NWM streamflow -> FIM-ready discharge CSVs -> rasters.
+class generateFIM:
+    """Default pipeline: streamflow -> FIM-ready discharge CSVs -> rasters.
 
     Input modes (pick one method): retrieve NWM retrospective for a date/range,
     select a narrower window from the already-downloaded archive, run a specific
-    discharge CSV, or run everything already in <AOI>/discharge-inputs/. Each
-    FIM-ready CSV becomes a depth + extent raster in <AOI>/fim-outputs/ named
-    after the CSV. Streamflow retrieval lives in the ``fimbox.streamflow``
-    subpackage and is imported lazily so its heavy deps stay optional.
+    discharge CSV, or run a selection from <AOI>/discharge-inputs/. Each
+    FIM-ready CSV becomes an inundation extent raster in <AOI>/fim-outputs/
+    named after the CSV; the depth raster is produced only when ``depth=True``.
+    Streamflow retrieval lives in the ``fimbox.streamflow`` subpackage and is
+    imported lazily so its heavy deps stay optional.
     """
 
     aoi_dir: PathLike
     feature_id_csv: Optional[PathLike] = None
     n_workers: int = 4
     int16_mode: bool = True
+    depth: bool = False
 
     def __post_init__(self) -> None:
         self.aoi_dir = Path(self.aoi_dir)
@@ -436,33 +475,68 @@ class NWMFimPipeline:
         """Run a single user-supplied discharge CSV."""
         return self.generate([Path(discharge_csv)])
 
-    def from_discharge_inputs(self) -> list[FimGenerationResult]:
-        """Run every CSV already in <AOI>/discharge-inputs/."""
+    def from_discharge_inputs(
+        self,
+        *,
+        csv: Optional[PathLike] = None,
+        date: Optional[str] = None,
+        start: Optional[str] = None,
+        end: Optional[str] = None,
+    ) -> list[FimGenerationResult]:
+        """Generate FIM from the CSVs already in <AOI>/discharge-inputs/.
+
+        Selection (in precedence order):
+          * ``csv``           -> just that file
+          * ``date``          -> CSVs whose name contains that day/instant stamp
+                                 (``YYYYMMDD`` or ``YYYYMMDDTHHMM``)
+          * ``start``+``end`` -> CSVs whose ``YYYYMMDD`` token is in [start, end]
+          * none              -> every CSV in the folder
+        """
+        if csv is not None:
+            return self.generate([Path(csv)])
+
         ddir = self._root / "discharge-inputs"
-        csvs = sorted(ddir.glob("*.csv"))
-        if not csvs:
+        all_csvs = sorted(ddir.glob("*.csv"))
+        if not all_csvs:
             raise FileNotFoundError(f"No discharge CSVs in {ddir}")
-        return self.generate(csvs)
+
+        selected = _select_discharge_csvs(all_csvs, date=date, start=start, end=end)
+        if not selected:
+            raise FileNotFoundError(
+                f"No discharge CSVs in {ddir} match "
+                f"{dict(csv=csv, date=date, start=start, end=end)}"
+            )
+        log.info(
+            "Selected %d/%d discharge CSV(s): %s",
+            len(selected),
+            len(all_csvs),
+            ", ".join(p.name for p in selected),
+        )
+        return self.generate(selected)
 
     def generate(self, discharge_csvs: Sequence[PathLike]) -> list[FimGenerationResult]:
-        """Run FimGenerator for each CSV -> a depth + extent raster per CSV."""
+        """Run FimGenerator for each CSV. Outputs land in <AOI>/fim-outputs/
+        named after the input CSV: an inundation extent always, plus a depth
+        raster only when ``self.depth`` is True."""
         out_dir = self._root / "fim-outputs"
         out_dir.mkdir(parents=True, exist_ok=True)
         results: list[FimGenerationResult] = []
         for csv in discharge_csvs:
             csv = Path(csv)
-            base = csv.stem
-            log.info(f"--- FIM generation: {csv.name} ---")
-            results.append(
-                FimGenerator(
-                    aoi_dir=self.aoi_dir,
-                    forecast=csv,  # _load_forecast handles the discharge alias
-                    n_workers=self.n_workers,
-                    int16_mode=self.int16_mode,
-                    depth_out=out_dir / f"{base}_depth.tif",
-                    extent_out=out_dir / f"{base}_inundation.tif",
-                ).run()
-            )
+            base = csv.stem  # output names carry the input basename
+            log.info(f"--- FIM generation: {csv.name} (depth={self.depth}) ---")
+            result = FimGenerator(
+                aoi_dir=self.aoi_dir,
+                forecast=csv,  # _load_forecast handles the discharge alias
+                n_workers=self.n_workers,
+                int16_mode=self.int16_mode,
+                depth_out=out_dir / f"{base}_depth.tif",
+                extent_out=out_dir / f"{base}_inundation.tif",
+            ).run()
+            # The mosaic always writes depth; drop it unless the user wants it.
+            if not self.depth and result.depth_path and Path(result.depth_path).exists():
+                Path(result.depth_path).unlink()
+            results.append(result)
         return results
 
 

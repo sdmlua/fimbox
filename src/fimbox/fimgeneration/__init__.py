@@ -15,7 +15,7 @@ Inundator            per-branch inundation worker
 BranchMosaic         combine per-branch rasters into AOI-level outputs
 extract_feature_ids  scan an AOI's hydroTables and emit a forecast template CSV
 NoForecastMatch      raised when a branch shares no feature_ids with forecast
-NWMFimPipeline       default pipeline: NWM streamflow -> discharge-inputs -> FIM
+generateFIM          default pipeline: streamflow -> discharge-inputs -> FIM
 """
 
 from __future__ import annotations
@@ -25,7 +25,7 @@ from .mosaic import BranchMosaic, MosaicResult
 from .pipeline import (
     FimGenerationResult,
     FimGenerator,
-    NWMFimPipeline,
+    generateFIM,
     extract_feature_ids,
 )
 
@@ -38,5 +38,5 @@ __all__ = [
     "MosaicResult",
     "NoForecastMatch",
     "extract_feature_ids",
-    "NWMFimPipeline",
+    "generateFIM",
 ]

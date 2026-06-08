@@ -36,6 +36,7 @@ class GeoglowsData:
         self.aoi_dir = Path(aoi_dir)
         self.hydrotable_csv = Path(hydrotable_csv)
         self.archive_dir = C.streamflow_dir(aoi_dir, "geoglows")
+        C.attach_log(aoi_dir)
 
     def _open_store(self):
         s3fs = C.require("s3fs")

@@ -137,7 +137,7 @@ from .fimgeneration import (
     MosaicResult,
     NoForecastMatch,
     extract_feature_ids,
-    NWMFimPipeline,
+    generateFIM,
 )
 
 __all__ += [
@@ -149,7 +149,7 @@ __all__ += [
     "MosaicResult",
     "NoForecastMatch",
     "extract_feature_ids",
-    "NWMFimPipeline",
+    "generateFIM",
 ]
 
 # Streamflow retrieval / plotting / statistics. Heavy optional deps (teehr,
@@ -163,6 +163,9 @@ try:
         USGSData,
         GeoglowsData,
         StreamflowPipeline,
+        getNWMretrospective,
+        getNWMforecast,
+        get_usgs_fid_pairs,
         plot_nwm,
         plot_usgs,
         plot_comparison,
@@ -177,6 +180,9 @@ try:
         "USGSData",
         "GeoglowsData",
         "StreamflowPipeline",
+        "getNWMretrospective",
+        "getNWMforecast",
+        "get_usgs_fid_pairs",
         "plot_nwm",
         "plot_usgs",
         "plot_comparison",

@@ -2,7 +2,7 @@
 Author: Supath Dhital
 Date Created: June 2026
 
-Streamflow plots (500 DPI) saved to ``<AOI>/watershed-data/plots/``:
+Streamflow plots (500 DPI) saved to ``<AOI>/plots/``:
   * NWM retrospective time series for one or more feature_ids
   * USGS time series for one or more sites
   * NWM-vs-USGS comparison overlay

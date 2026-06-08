@@ -47,12 +47,42 @@ _RANGE_CFG = {
 }
 
 
+def getNWMforecast(
+    aoi_dir: PathLike,
+    forecast_range: str = "shortrange",
+    *,
+    feature_ids: Optional[list] = None,
+    feature_id_csv: Optional[PathLike] = None,
+    forecast_date: Optional[str] = None,
+    hour: Optional[int] = None,
+    sort_by: str = "maximum",
+) -> list[Path]:
+    """Retrieve an NWM operational forecast into per-day FIM-ready CSVs.
+
+    Feature ids come from ``feature_ids`` (a list), ``feature_id_csv`` (a path),
+    or the AOI's ``feature_id.csv`` (default). ``forecast_range`` is
+    'shortrange' | 'mediumrange' | 'longrange'; ``forecast_date``/``hour`` pick
+    the cycle (defaults to the latest complete one); ``sort_by`` aggregates each
+    forecast day ('maximum' | 'minimum' | 'median').
+    """
+    fid_csv = C.resolve_feature_id_csv(
+        aoi_dir, feature_id_csv=feature_id_csv, feature_ids=feature_ids
+    )
+    return NWMForecast(aoi_dir, fid_csv).to_fim_inputs(
+        forecast_range,
+        forecast_date=forecast_date,
+        hour=hour,
+        sort_by=sort_by,
+    )
+
+
 class NWMForecast:
     """Fetch NWM operational forecast streamflow for an AOI's feature_ids."""
 
     def __init__(self, aoi_dir: PathLike, feature_id_csv: PathLike):
         self.aoi_dir = Path(aoi_dir)
         self.feature_id_csv = Path(feature_id_csv)
+        C.attach_log(aoi_dir)
 
     def to_fim_inputs(
         self,
