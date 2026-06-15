@@ -92,8 +92,8 @@ class NWMRetrospective:
         """
         target = self.archive_dir / self._canonical_name(start_date, end_date)
         if target.exists() or self._covering_file(start_date, end_date) is not None:
-            existing = target if target.exists() else self._covering_file(
-                start_date, end_date
+            existing = (
+                target if target.exists() else self._covering_file(start_date, end_date)
             )
             log.info("SKIP (exists): %s", existing.name)
             return existing
@@ -150,9 +150,7 @@ class NWMRetrospective:
             per = group.rename(columns={"value": "discharge"})[
                 ["feature_id", "discharge"]
             ]
-            written.append(
-                C.write_fim_ready(per, out_dir / f"NWM_{C.stamp(ts)}.csv")
-            )
+            written.append(C.write_fim_ready(per, out_dir / f"NWM_{C.stamp(ts)}.csv"))
         log.info("Wrote %d hourly FIM-ready CSVs --> %s", len(written), out_dir)
         return written
 
@@ -180,9 +178,9 @@ class NWMRetrospective:
 
         if kind == "date":
             sel = df[df["value_time"].dt.date == t.date()]
-            per = (
-                sel.groupby("feature_id")["value"].mean().reset_index()
-            ).rename(columns={"value": "discharge"})
+            per = (sel.groupby("feature_id")["value"].mean().reset_index()).rename(
+                columns={"value": "discharge"}
+            )
             name = f"NWM_{C.stamp(t, False)}.csv"
         else:
             sel = df[df["value_time"] == t]
@@ -226,12 +224,18 @@ class NWMRetrospective:
                 self._require_coverage(sel, date, lo, hi)
                 per = sel.groupby("feature_id")["value"].mean().reset_index()
                 per = per.rename(columns={"value": "discharge"})
-                written.append(C.write_fim_ready(per, out_dir / f"NWM_{C.stamp(t, False)}.csv"))
+                written.append(
+                    C.write_fim_ready(per, out_dir / f"NWM_{C.stamp(t, False)}.csv")
+                )
             else:
                 sel = archive[archive["value_time"] == t]
                 self._require_coverage(sel, date, lo, hi)
-                per = sel.rename(columns={"value": "discharge"})[["feature_id", "discharge"]]
-                written.append(C.write_fim_ready(per, out_dir / f"NWM_{C.stamp(t)}.csv"))
+                per = sel.rename(columns={"value": "discharge"})[
+                    ["feature_id", "discharge"]
+                ]
+                written.append(
+                    C.write_fim_ready(per, out_dir / f"NWM_{C.stamp(t)}.csv")
+                )
             return written
 
         if start and end:
@@ -247,7 +251,9 @@ class NWMRetrospective:
                 per = group.rename(columns={"value": "discharge"})[
                     ["feature_id", "discharge"]
                 ]
-                written.append(C.write_fim_ready(per, out_dir / f"NWM_{C.stamp(ts)}.csv"))
+                written.append(
+                    C.write_fim_ready(per, out_dir / f"NWM_{C.stamp(ts)}.csv")
+                )
             log.info("Selected %d hourly FIM-ready CSVs from archive", len(written))
             return written
 
@@ -326,14 +332,14 @@ class NWMRetrospective:
         )
         lo, hi = pd.to_datetime(start_date), pd.to_datetime(end_date)
         df = df[(df["value_time"] >= lo) & (df["value_time"] <= hi)]
-        return df.drop_duplicates(subset=["value_time", "feature_id"]).reset_index(drop=True)
+        return df.drop_duplicates(subset=["value_time", "feature_id"]).reset_index(
+            drop=True
+        )
 
     @staticmethod
     def _aggregate(df: pd.DataFrame, sortby: str) -> pd.DataFrame:
         funcs = {"maximum": "max", "minimum": "min", "mean": "mean"}
         if sortby not in funcs:
             raise ValueError(f"sortby must be one of {list(funcs)}, got {sortby!r}")
-        agg = (
-            df.groupby("feature_id")["value"].agg(funcs[sortby]).reset_index()
-        )
+        agg = df.groupby("feature_id")["value"].agg(funcs[sortby]).reset_index()
         return agg.rename(columns={"value": "discharge"})

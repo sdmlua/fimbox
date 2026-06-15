@@ -50,9 +50,7 @@ class LogScanner:
             return {"errors": None, "warnings": None}
 
         # Rerun scans only the src_calibrations subdir; normal scans all logs.
-        scan_root = (
-            logs_dir / self.rerun_subdir if self.calibration_rerun else logs_dir
-        )
+        scan_root = logs_dir / self.rerun_subdir if self.calibration_rerun else logs_dir
         suffix = "_calib_rerun" if self.calibration_rerun else ""
 
         err_name = f"huc_{aoi_id}_errors{suffix}.log"

@@ -84,7 +84,9 @@ def plot_nwm(
     if not plotted:
         plt.close()
         return None
-    return _finish(plt, "NWM hourly streamflow", _plots_dir(aoi_dir) / f"NWM_{plotted[0]}.png")
+    return _finish(
+        plt, "NWM hourly streamflow", _plots_dir(aoi_dir) / f"NWM_{plotted[0]}.png"
+    )
 
 
 def plot_usgs(
@@ -107,7 +109,9 @@ def plot_usgs(
     if not plotted:
         plt.close()
         return None
-    return _finish(plt, "USGS hourly streamflow", _plots_dir(aoi_dir) / f"USGS_{plotted[0]}.png")
+    return _finish(
+        plt, "USGS hourly streamflow", _plots_dir(aoi_dir) / f"USGS_{plotted[0]}.png"
+    )
 
 
 def plot_comparison(
@@ -122,13 +126,26 @@ def plot_comparison(
     nwm = _nwm_series(aoi_dir, feature_id, start_date, end_date)
     usgs = _usgs_series(aoi_dir, usgs_site, start_date, end_date)
     if nwm is None or usgs is None:
-        log.warning("Comparison needs both NWM (%s) and USGS (%s) series", feature_id, usgs_site)
+        log.warning(
+            "Comparison needs both NWM (%s) and USGS (%s) series", feature_id, usgs_site
+        )
         return None
     plt.figure(figsize=(10, 5))
-    plt.plot(nwm["Date"], nwm["Discharge"], color="#167693", linewidth=2,
-             label=f"NWM {feature_id}")
-    plt.plot(usgs["Date"], usgs["Discharge"], color="#BF4037", linestyle="dashed",
-             linewidth=2, label=f"USGS {usgs_site}")
+    plt.plot(
+        nwm["Date"],
+        nwm["Discharge"],
+        color="#167693",
+        linewidth=2,
+        label=f"NWM {feature_id}",
+    )
+    plt.plot(
+        usgs["Date"],
+        usgs["Discharge"],
+        color="#BF4037",
+        linestyle="dashed",
+        linewidth=2,
+        label=f"USGS {usgs_site}",
+    )
     return _finish(
         plt,
         "NWM vs USGS streamflow",

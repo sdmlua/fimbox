@@ -401,24 +401,24 @@ def _idw_rasterize(
     # When k=1 scipy returns 1-D arrays; normalise to (n_pixels, k) for uniform logic
     if k == 1:
         dists = dists[:, np.newaxis]
-        idxs  = idxs[:, np.newaxis]
+        idxs = idxs[:, np.newaxis]
 
     nodata = np.float32(-9999.0)
 
     z_vals = z[idxs]  # (n_pixels, k)
 
     # Exact hits (distance == 0): use the point elevation directly
-    exact_mask = dists == 0.0          # (n_pixels, k)
-    has_exact  = exact_mask.any(axis=1)
+    exact_mask = dists == 0.0  # (n_pixels, k)
+    has_exact = exact_mask.any(axis=1)
 
     with np.errstate(divide="ignore", invalid="ignore"):
         w = np.where(~exact_mask, 1.0 / np.power(dists, weight), 0.0)
 
-    w_sum    = w.sum(axis=1)
+    w_sum = w.sum(axis=1)
     idw_vals = np.where(w_sum > 0, (w * z_vals).sum(axis=1) / w_sum, nodata)
 
     first_exact_idx = np.argmax(exact_mask, axis=1)
-    exact_z  = z_vals[np.arange(len(grid_pts)), first_exact_idx]
+    exact_z = z_vals[np.arange(len(grid_pts)), first_exact_idx]
 
     out = np.where(has_exact, exact_z, idw_vals)
 

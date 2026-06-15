@@ -61,7 +61,8 @@ test_boundary = "././docs/test_boundary/test_smallB.shp"
 #         out_layer="lakes",
 #     )
 
-#Get all NHD Plus Data
+
+# Get all NHD Plus Data
 def test_get_nhd_all():
     fimbox.getNHDPlusData(
         boundary=test_boundary,
@@ -72,6 +73,7 @@ def test_get_nhd_all():
         resolution="medium",  # "high" -> NHDPlus HR flowlines/catchments via pynhd; "medium" (default) -> NWM. Lakes always NWM.
         identifier="nwmmr",  # filename prefix; default "nwm" -> nwm_subset_streams.gpkg etc.
     )
+
 
 # High-resolution flowlines + catchments only (NHDPlus HR via pynhd).
 # def test_get_nhd_hr():

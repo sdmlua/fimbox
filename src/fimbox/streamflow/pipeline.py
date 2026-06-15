@@ -112,9 +112,15 @@ def _main(argv: Optional[list[str]] = None) -> None:
     from ..logging_utils import configure_cli_logging
 
     configure_cli_logging()
-    p = argparse.ArgumentParser(description="Retrieve streamflow and write FIM-ready CSVs.")
-    p.add_argument("--aoi-dir", required=True, help="AOI directory (root or watershed-data).")
-    p.add_argument("--feature-id-csv", default=None, help="Defaults to <AOI>/feature_id.csv.")
+    p = argparse.ArgumentParser(
+        description="Retrieve streamflow and write FIM-ready CSVs."
+    )
+    p.add_argument(
+        "--aoi-dir", required=True, help="AOI directory (root or watershed-data)."
+    )
+    p.add_argument(
+        "--feature-id-csv", default=None, help="Defaults to <AOI>/feature_id.csv."
+    )
     p.add_argument(
         "--source", choices=["retrospective", "forecast"], default="retrospective"
     )
@@ -125,18 +131,31 @@ def _main(argv: Optional[list[str]] = None) -> None:
         "download) using --date or --start/--end.",
     )
     # retrospective
-    p.add_argument("--date", default=None, help="Single instant/day (YYYY-MM-DD[ HH:MM:SS]).")
+    p.add_argument(
+        "--date", default=None, help="Single instant/day (YYYY-MM-DD[ HH:MM:SS])."
+    )
     p.add_argument("--start", default=None, help="Range start (YYYY-MM-DD).")
     p.add_argument("--end", default=None, help="Range end (YYYY-MM-DD).")
-    p.add_argument("--sortby", choices=["maximum", "minimum", "mean"], default=None,
-                   help="Aggregate a range to one CSV instead of per-hour.")
+    p.add_argument(
+        "--sortby",
+        choices=["maximum", "minimum", "mean"],
+        default=None,
+        help="Aggregate a range to one CSV instead of per-hour.",
+    )
     # forecast
-    p.add_argument("--range", dest="frange",
-                   choices=["shortrange", "mediumrange", "longrange"], default="shortrange")
-    p.add_argument("--forecast-date", default=None, help="Forecast cycle date (YYYY-MM-DD).")
+    p.add_argument(
+        "--range",
+        dest="frange",
+        choices=["shortrange", "mediumrange", "longrange"],
+        default="shortrange",
+    )
+    p.add_argument(
+        "--forecast-date", default=None, help="Forecast cycle date (YYYY-MM-DD)."
+    )
     p.add_argument("--hour", type=int, default=None, help="Forecast cycle hour (UTC).")
-    p.add_argument("--forecast-sortby", choices=["maximum", "minimum", "median"],
-                   default="maximum")
+    p.add_argument(
+        "--forecast-sortby", choices=["maximum", "minimum", "median"], default="maximum"
+    )
     args = p.parse_args(argv)
 
     pipe = StreamflowPipeline(args.aoi_dir, args.feature_id_csv)
@@ -155,7 +174,9 @@ def _main(argv: Optional[list[str]] = None) -> None:
             hour=args.hour,
             sort_by=args.forecast_sortby,
         )
-    print(f"Wrote {len(out)} FIM-ready CSV(s) to {C.discharge_inputs_dir(args.aoi_dir)}")
+    print(
+        f"Wrote {len(out)} FIM-ready CSV(s) to {C.discharge_inputs_dir(args.aoi_dir)}"
+    )
     for f in out:
         print(f"  {f.name}")
 

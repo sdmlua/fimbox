@@ -137,9 +137,7 @@ def _thalweg_one_branch(
 def _reset_stage(grp: pd.DataFrame, stage_interval_m: float) -> pd.DataFrame:
     # Re-index onto a clean 0-based stage ladder.
     grp = grp.sort_values("Stage").reset_index(drop=True)
-    grp["Stage"] = np.array(
-        [round(i * stage_interval_m, 4) for i in range(len(grp))]
-    )
+    grp["Stage"] = np.array([round(i * stage_interval_m, 4) for i in range(len(grp))])
     return grp
 
 
@@ -249,15 +247,12 @@ def _longitudinal_one_branch(branch_dir: Path, bid: str, n_stages: int) -> str:
     lake_df = catch[["HydroID", "LakeID"]].drop_duplicates(subset=["HydroID"])
 
     src = pd.read_csv(src_path, low_memory=False)
-    # Drop columns this routine (re)creates + LakeID, so a re-run merges
-    # cleanly instead of colliding into _x/_y duplicates (which turn the
-    # boolean masks below into DataFrames). Makes the step idempotent.
-    stale = ["LakeID", "Longitudinal_adjustment_applied",
-             "Discharge (m3s-1)_longitudinalAdjusted"]
-    stale += [f"{k}_longitudinalAdjusted" for k in _LONGITUDINAL_KEYS]
-    src = src.drop(columns=stale, errors="ignore")
-    # Defensively collapse any duplicate columns left by earlier bad merges,
-    # so boolean masks stay 1-D Series rather than DataFrames.
+    # Smoothing is not idempotent — re-running re-smooths already-smoothed geometry and keeps shrinking discharge. If it already ran, skip; arerun must reset the SRC to baseline first (calibration_rerun).
+    if "Discharge (m3s-1)_longitudinalAdjusted" in src.columns:
+        return "SKIP already applied (reset SRC to re-run)"
+    # Drop the catchment LakeID so the merge below adds it cleanly (no _x/_y).
+    src = src.drop(columns=["LakeID"], errors="ignore")
+    # Defensively collapse any duplicate columns left by earlier bad merges, so boolean masks stay 1-D Series rather than DataFrames.
     src = src.loc[:, ~src.columns.duplicated()]
     src = src.merge(lake_df, on="HydroID", how="inner")
     stages = [round(v, 4) for v in src["Stage"][:n_stages]]
@@ -376,11 +371,21 @@ def _filter_key(src, chains, stages, key) -> pd.DataFrame:
     full = pd.concat(out_frames)
     long = (
         full.reset_index()
-        .melt(id_vars="index", var_name="Stage", value_name=f"{key}_longitudinalAdjusted")
+        .melt(
+            id_vars="index", var_name="Stage", value_name=f"{key}_longitudinalAdjusted"
+        )
         .rename(columns={"index": "HydroID"})
     )
     long["Stage"] = long["Stage"].astype(float)
-    return long[["HydroID", "Stage", f"{key}_longitudinalAdjusted"]]
+    adj_col = f"{key}_longitudinalAdjusted"
+    # A HydroID can sit in several chains (converging tributaries), giving
+    # duplicate (HydroID, Stage) rows. Average them to one value per pair so
+    # the downstream left-merge doesn't inflate the SRC.
+    return (
+        long[["HydroID", "Stage", adj_col]]
+        .groupby(["HydroID", "Stage"], as_index=False)[adj_col]
+        .mean()
+    )
 
 
 def _interp(src, hydroid, key, stage):
@@ -401,6 +406,7 @@ class BathymetricAdjustment:
     bathy_file_aibased: Optional[PathLike] = None
     ai_toggle: int = 0
     ai_strm_order: int = 4
+    n_workers: int = 1
 
     def run(self) -> dict[str, str]:
         aoi_dir = resolve_aoi_dir(self.aoi_dir)
@@ -410,41 +416,53 @@ class BathymetricAdjustment:
         results: dict[str, str] = {}
         if self.bathy_file_ehydro and Path(self.bathy_file_ehydro).is_file():
             log.info("--- eHydro bathymetry ---")
-            results["ehydro"] = self._apply_ehydro(aoi_dir)
+            results["ehydro"] = self._apply(aoi_dir, self._ehydro_frame(aoi_dir))
         else:
             log.info("eHydro bathymetry file absent — skipping eHydro step")
 
         if self.ai_toggle == 1:
             if self.bathy_file_aibased and Path(self.bathy_file_aibased).is_file():
                 log.info("--- AI-based bathymetry ---")
-                results["ai"] = self._apply_ai(aoi_dir)
+                results["ai"] = self._apply(aoi_dir, self._ai_frame(aoi_dir))
             else:
                 log.info("AI bathymetry file absent — skipping AI step")
         return results
 
-    def _apply_ehydro(self, aoi_dir: Path) -> str:
+    def _apply(self, aoi_dir: Path, bathy: pd.DataFrame) -> str:
+        # Inject the missing-geometry table into every branch SRC, in parallel.
+        branches = list(iter_branches(aoi_dir, exclude_zero=False))
+        log.info(
+            f"BathymetricAdjustment: {len(branches)} branches, {self.n_workers} workers"
+        )
+        out = _run_branches(
+            branches,
+            _bathy_one_branch,
+            (bathy,),
+            self.n_workers,
+            "BathymetricAdjustment",
+        )
+        return (
+            f"OK bathymetry on {sum(v.startswith('OK') for v in out.values())} branches"
+        )
+
+    def _ehydro_frame(self, aoi_dir: Path) -> pd.DataFrame:
         import geopandas as gpd
 
         wbd = aoi_dir / "wbd8_clp.gpkg"
         mask = gpd.read_file(wbd) if wbd.is_file() else None
         bathy = gpd.read_file(str(self.bathy_file_ehydro), mask=mask, engine="fiona")
-        bathy = bathy.rename(columns={"ID": "feature_id"})
+        return bathy.rename(columns={"ID": "feature_id"})
 
-        n = 0
-        for bid, bp in iter_branches(aoi_dir, exclude_zero=False):
-            src_path = bp / f"src_full_crosswalked_{bid}.csv"
-            if not src_path.is_file():
-                continue
-            self._inject(src_path, bathy)
-            n += 1
-        return f"OK eHydro bathymetry on {n} branches"
-
-    def _apply_ai(self, aoi_dir: Path) -> str:
+    def _ai_frame(self, aoi_dir: Path) -> pd.DataFrame:
         import geopandas as gpd
 
         ml = pd.read_parquet(self.bathy_file_aibased, engine="pyarrow")[
-            ["hf_id", "owp_tw_inchan", "owp_inchan_channel_area",
-             "owp_inchan_channel_perimeter"]
+            [
+                "hf_id",
+                "owp_tw_inchan",
+                "owp_inchan_channel_area",
+                "owp_inchan_channel_perimeter",
+            ]
         ]
         streams = aoi_dir / "nwmmr_subset_streams.gpkg"
         if not streams.is_file():
@@ -456,79 +474,104 @@ class BathymetricAdjustment:
 
         ml = ml.merge(nwm[["ID", "order_"]], left_on="hf_id", right_on="ID")
         ml = ml.rename(
-            columns={"owp_inchan_channel_area": "missing_xs_area_m2", "ID": "feature_id"}
+            columns={
+                "owp_inchan_channel_area": "missing_xs_area_m2",
+                "ID": "feature_id",
+            }
         )
         ml["missing_wet_perimeter_m"] = (
             ml["owp_inchan_channel_perimeter"] - ml["owp_tw_inchan"]
         )
         ml["Bathymetry_source"] = "AI_Based"
+        # Below the order threshold, AI depths are unreliable — zero them out.
         below = ml["order_"] < self.ai_strm_order
         ml.loc[below, ["missing_xs_area_m2", "missing_wet_perimeter_m"]] = 0.0
         ml.loc[below, "Bathymetry_source"] = pd.NA
-        ml = ml[
-            ["feature_id", "missing_xs_area_m2", "missing_wet_perimeter_m", "Bathymetry_source"]
+        return ml[
+            [
+                "feature_id",
+                "missing_xs_area_m2",
+                "missing_wet_perimeter_m",
+                "Bathymetry_source",
+            ]
         ]
 
-        n = 0
-        for bid, bp in iter_branches(aoi_dir, exclude_zero=False):
-            src_path = bp / f"src_full_crosswalked_{bid}.csv"
-            if not src_path.is_file():
-                continue
-            self._inject(src_path, ml)
-            n += 1
-        return f"OK AI bathymetry on {n} branches"
 
-    @staticmethod
-    def _inject(src_path: Path, bathy: pd.DataFrame) -> None:
-        # Merge missing geometry by feature_id, add it in, recompute Q.
-        src = pd.read_csv(src_path, low_memory=False)
-        if "Bathymetry_source" in src.columns:
-            src = src.drop(columns="Bathymetry_source")
+def _bathy_one_branch(branch_dir: Path, bid: str, bathy: pd.DataFrame) -> str:
+    # Merge missing geometry by feature_id, add it in, recompute discharge.
+    src_path = branch_dir / f"src_full_crosswalked_{bid}.csv"
+    if not src_path.is_file():
+        return "SKIP no src"
+    src = pd.read_csv(src_path, low_memory=False)
+    if "Bathymetry_source" in src.columns:
+        src = src.drop(columns="Bathymetry_source")
 
-        cols = ["feature_id", "missing_xs_area_m2", "missing_wet_perimeter_m",
-                "Bathymetry_source"]
-        if bathy.empty:
-            src["Bathymetry_source"] = ""
-            src.to_csv(src_path, index=False)
-            return
-
-        try:
-            src = src.merge(bathy[cols], on="feature_id", how="left",
-                            validate="many_to_one")
-        except pd.errors.MergeError:
-            reconciled = bathy[cols].groupby("feature_id", as_index=False).agg(
-                {"missing_xs_area_m2": "mean", "missing_wet_perimeter_m": "mean",
-                 "Bathymetry_source": "first"}
-            )
-            src = src.merge(reconciled, on="feature_id", how="left",
-                            validate="many_to_one")
-
-        src["missing_xs_area_m2"] = src["missing_xs_area_m2"].fillna(0.0)
-        src["missing_wet_perimeter_m"] = src["missing_wet_perimeter_m"].fillna(0.0)
-
-        length_m = src["LENGTHKM"] * 1000.0
-        src["Volume (m3)"] = src["Volume (m3)"] + src["missing_xs_area_m2"] * length_m
-        src["BedArea (m2)"] = src["BedArea (m2)"] + src["missing_wet_perimeter_m"] * length_m
-        src["WettedPerimeter (m)"] = (
-            src["WettedPerimeter (m)"] + src["missing_wet_perimeter_m"]
-        )
-        src["WetArea (m2)"] = src["WetArea (m2)"] + src["missing_xs_area_m2"]
-        src["HydraulicRadius (m)"] = (
-            src["WetArea (m2)"] / src["WettedPerimeter (m)"]
-        ).fillna(0)
-        src["Discharge (m3s-1)"] = (
-            src["WetArea (m2)"]
-            * np.power(src["HydraulicRadius (m)"].clip(lower=0), 2.0 / 3)
-            * np.power(src["SLOPE"].clip(lower=0), 0.5)
-            / src["ManningN"]
-        )
-
-        # Zero-stage / zero-cell rows stay zero.
-        src.loc[src["Stage"] == 0, "Discharge (m3s-1)"] = 0
-        zero_cell = src["Number of Cells"] == 0
-        for col in ("Discharge (m3s-1)", "BedArea (m2)", "Volume (m3)",
-                    "WettedPerimeter (m)", "WetArea (m2)", "HydraulicRadius (m)"):
-            src.loc[zero_cell, col] = 0
-
-        src["Discharge (m3s-1)_bathymetryAdjusted"] = src["Discharge (m3s-1)"]
+    cols = [
+        "feature_id",
+        "missing_xs_area_m2",
+        "missing_wet_perimeter_m",
+        "Bathymetry_source",
+    ]
+    if bathy.empty:
+        src["Bathymetry_source"] = ""
         src.to_csv(src_path, index=False)
+        return "OK no bathy overlap"
+
+    # many_to_one merge; reconcile by feature_id mean when a feature_id repeats.
+    try:
+        src = src.merge(
+            bathy[cols], on="feature_id", how="left", validate="many_to_one"
+        )
+    except pd.errors.MergeError:
+        reconciled = (
+            bathy[cols]
+            .groupby("feature_id", as_index=False)
+            .agg(
+                {
+                    "missing_xs_area_m2": "mean",
+                    "missing_wet_perimeter_m": "mean",
+                    "Bathymetry_source": "first",
+                }
+            )
+        )
+        src = src.merge(reconciled, on="feature_id", how="left", validate="many_to_one")
+
+    src["missing_xs_area_m2"] = src["missing_xs_area_m2"].fillna(0.0)
+    src["missing_wet_perimeter_m"] = src["missing_wet_perimeter_m"].fillna(0.0)
+
+    # Add the below-DEM area/perimeter into the geometry, then re-derive discharge.
+    length_m = src["LENGTHKM"] * 1000.0
+    src["Volume (m3)"] = src["Volume (m3)"] + src["missing_xs_area_m2"] * length_m
+    src["BedArea (m2)"] = (
+        src["BedArea (m2)"] + src["missing_wet_perimeter_m"] * length_m
+    )
+    src["WettedPerimeter (m)"] = (
+        src["WettedPerimeter (m)"] + src["missing_wet_perimeter_m"]
+    )
+    src["WetArea (m2)"] = src["WetArea (m2)"] + src["missing_xs_area_m2"]
+    src["HydraulicRadius (m)"] = (
+        src["WetArea (m2)"] / src["WettedPerimeter (m)"]
+    ).fillna(0)
+    src["Discharge (m3s-1)"] = (
+        src["WetArea (m2)"]
+        * np.power(src["HydraulicRadius (m)"].clip(lower=0), 2.0 / 3)
+        * np.power(src["SLOPE"].clip(lower=0), 0.5)
+        / src["ManningN"]
+    )
+
+    # Zero-stage / zero-cell rows stay zero.
+    src.loc[src["Stage"] == 0, "Discharge (m3s-1)"] = 0
+    zero_cell = src["Number of Cells"] == 0
+    for col in (
+        "Discharge (m3s-1)",
+        "BedArea (m2)",
+        "Volume (m3)",
+        "WettedPerimeter (m)",
+        "WetArea (m2)",
+        "HydraulicRadius (m)",
+    ):
+        src.loc[zero_cell, col] = 0
+
+    src["Discharge (m3s-1)_bathymetryAdjusted"] = src["Discharge (m3s-1)"]
+    src.to_csv(src_path, index=False)
+    return f"OK bathymetry on {len(src)} rows"

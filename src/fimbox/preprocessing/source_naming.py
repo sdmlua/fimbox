@@ -21,7 +21,7 @@ from typing import Optional, Union
 
 DEFAULT_IDENTIFIER = "nwm"
 
-# kind -> stable suffix 
+# kind -> stable suffix
 SOURCE_SUFFIXES: dict[str, str] = {
     "streams": "_subset_streams.gpkg",
     "catchments": "_catchments_proj_subset.gpkg",
@@ -64,7 +64,9 @@ def _kind_of(name: str) -> Optional[str]:
     return best_kind
 
 
-def detect_identifier(directory: Union[str, Path], default: str = DEFAULT_IDENTIFIER) -> str:
+def detect_identifier(
+    directory: Union[str, Path], default: str = DEFAULT_IDENTIFIER
+) -> str:
     """Infer the identifier prefix from the staged streams file in ``directory``.
 
     Falls back to ``default`` when no streams file is present.
@@ -104,7 +106,9 @@ def resolve_source(
 
     # a file belongs to ``kind`` only if ``suffix`` is the LONGEST known suffix
     # it ends with — prevents a short suffix matching a more-specific filename.
-    matches = [m for m in sorted(directory.glob(f"*{suffix}")) if _kind_of(m.name) == kind]
+    matches = [
+        m for m in sorted(directory.glob(f"*{suffix}")) if _kind_of(m.name) == kind
+    ]
     if not matches:
         return directory / source_name(kind, identifier or DEFAULT_IDENTIFIER)
     for m in matches:

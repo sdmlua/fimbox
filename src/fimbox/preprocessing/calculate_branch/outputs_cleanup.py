@@ -69,9 +69,7 @@ def remove_deny_list_files(
     return n_removed
 
 
-def _read_deny_list(
-    path: Path, branch_id: str, identifier: str = "nwm"
-) -> list[str]:
+def _read_deny_list(path: Path, branch_id: str, identifier: str = "nwm") -> list[str]:
     """Parse the deny-list text file into filename patterns, with ``{}``
     substituted for the branch id.
 

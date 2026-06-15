@@ -166,7 +166,9 @@ class NWMForecast:
                 requests, cur_date, cur_hour, forecast_range, netcdf_root
             )
             if nc_dir is not None:
-                log.info("Complete %s cycle: %s %02dZ", forecast_range, cur_date, cur_hour)
+                log.info(
+                    "Complete %s cycle: %s %02dZ", forecast_range, cur_date, cur_hour
+                )
                 return nc_dir
             prev = cur_hour
             cur_hour = (cur_hour - step) % 24
@@ -288,9 +290,7 @@ class NWMForecast:
         written: list[Path] = []
         for day, day_files in sorted(groups.items()):
             combined = pd.concat([pd.read_csv(f) for f in day_files], ignore_index=True)
-            per = (
-                combined.groupby("feature_id")["discharge"].agg(agg).reset_index()
-            )
+            per = combined.groupby("feature_id")["discharge"].agg(agg).reset_index()
             name = f"{cycle_hour:02d}UTC_{forecast_range}_{day}.csv"
             written.append(C.write_fim_ready(per, out_dir / name))
         return written

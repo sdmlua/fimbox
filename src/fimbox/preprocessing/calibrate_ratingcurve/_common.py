@@ -11,9 +11,20 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Optional, Union
 
-from ...logging_utils import WATERSHED_DIR_NAME, aoi_root
+import pandas as pd
+
+from ...logging_utils import WATERSHED_DIR_NAME, aoi_root, attach_case_log
 
 PathLike = Union[str, Path]
+
+
+def read_table(path: PathLike, **kwargs) -> pd.DataFrame:
+    # Read a lookup table as CSV or Parquet by file extension. Parquet ignores
+    # the csv-only kwargs (dtype, low_memory) since it carries its own schema.
+    p = Path(path)
+    if p.suffix.lower() in (".parquet", ".pq"):
+        return pd.read_parquet(p)
+    return pd.read_csv(p, **kwargs)
 
 
 class CalibrationNotImplemented(NotImplementedError):
@@ -44,7 +55,10 @@ def resolve_aoi_dir(
     # Accept the AOI root, its watershed-data/ subfolder, or a legacy flat
     # layout. Calibration operates on the folder that holds branches/.
     if p.name != WATERSHED_DIR_NAME and (p / WATERSHED_DIR_NAME / "branches").is_dir():
-        return p / WATERSHED_DIR_NAME
+        p = p / WATERSHED_DIR_NAME
+    # Route every step's logs into <AOI_root>/processing.log (standalone or
+    # via the pipeline). Idempotent — repeat calls reuse the same handler.
+    attach_case_log(p)
     return p
 
 

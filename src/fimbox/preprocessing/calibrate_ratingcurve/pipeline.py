@@ -95,6 +95,9 @@ class CalibrationConfig:
     usgs_acceptable_gages: Optional[PathLike] = None
     nwm_recur_file: Optional[PathLike] = None
     ras_rating_curve_csv: Optional[PathLike] = None
+    calib_points_file: Optional[PathLike] = (
+        None  # benchmark obs points for src_adjust_spatial
+    )
     man_calb_file: Optional[PathLike] = None
 
     # --- tunables ------
@@ -163,9 +166,10 @@ class Calibrator:
         )
 
         if cfg.bathymetry_adjust:
-            if cfg.bathy_file_ehydro is None or cfg.bathy_file_aibased is None:
+            # eHydro is the base source; AI (bathy_file_aibased) only when ai_toggle=1.
+            if cfg.bathy_file_ehydro is None and cfg.bathy_file_aibased is None:
                 raise ValueError(
-                    "bathymetry_adjust requires bathy_file_ehydro + bathy_file_aibased"
+                    "bathymetry_adjust requires bathy_file_ehydro and/or bathy_file_aibased"
                 )
             self._maybe(
                 True,
@@ -176,6 +180,7 @@ class Calibrator:
                     bathy_file_aibased=cfg.bathy_file_aibased,
                     ai_toggle=cfg.ai_toggle,
                     ai_strm_order=cfg.ai_strm_order,
+                    n_workers=cfg.job_branch_limit,
                 ).run(),
             )
 
@@ -215,19 +220,15 @@ class Calibrator:
             lambda: SrcNonmonotonic(
                 aoi_dir=aoi_dir,
                 stream_order_min=cfg.nonmonotonic_stream_order_min,
+                n_workers=cfg.job_branch_limit,
             ).run(),
         )
 
         if cfg.src_adjust_usgs and cfg.src_subdiv_toggle:
-            required = (
-                cfg.usgs_rating_curve_csv,
-                cfg.usgs_acceptable_gages,
-                cfg.nwm_recur_file,
-            )
-            if any(x is None for x in required):
+            # Rating curve + recurrence flows required; acceptable-gage list optional.
+            if cfg.usgs_rating_curve_csv is None or cfg.nwm_recur_file is None:
                 raise ValueError(
-                    "src_adjust_usgs requires usgs_rating_curve_csv, "
-                    "usgs_acceptable_gages, nwm_recur_file"
+                    "src_adjust_usgs requires usgs_rating_curve_csv + nwm_recur_file"
                 )
             self._maybe(
                 True,
@@ -235,8 +236,8 @@ class Calibrator:
                 lambda: UsgsRatingCalibrator(
                     aoi_dir=aoi_dir,
                     usgs_rating_curve_csv=cfg.usgs_rating_curve_csv,
-                    usgs_acceptable_gages=cfg.usgs_acceptable_gages,
                     nwm_recur_file=cfg.nwm_recur_file,
+                    usgs_acceptable_gages=cfg.usgs_acceptable_gages,
                     n_workers=cfg.job_branch_limit,
                 ).run(),
             )
@@ -262,7 +263,9 @@ class Calibrator:
                 True,
                 "SRC adjust (spatial observations)",
                 lambda: SpatialObsCalibrator(
-                    aoi_dir=aoi_dir, n_workers=cfg.job_branch_limit
+                    aoi_dir=aoi_dir,
+                    calib_points_file=cfg.calib_points_file,
+                    n_workers=cfg.job_branch_limit,
                 ).run(),
             )
 
@@ -279,15 +282,11 @@ class Calibrator:
 
         if cfg.aggregate_post:
             log.info("--- aggregate hydroTable + bridge + road outputs ---")
-            BranchAggregator(
-                aoi_dir=aoi_dir, htable=True, bridge=True, road=True
-            ).run()
+            BranchAggregator(aoi_dir=aoi_dir, htable=True, bridge=True, road=True).run()
 
         if cfg.scan_logs:
             log.info("--- scan logs for errors / warnings ---")
-            LogScanner(
-                aoi_dir=aoi_dir, calibration_rerun=cfg.calibration_rerun
-            ).run()
+            LogScanner(aoi_dir=aoi_dir, calibration_rerun=cfg.calibration_rerun).run()
 
         log.info(f"=== {verb} complete: {aoi_id} ===")
 

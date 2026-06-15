@@ -234,9 +234,9 @@ def build_src_base(
             surface_area = (n_pos * pixel_area) + z_surface
             bed_area = sum_bed_lt + zb
             # Volume = Σ_pos (h - HAND_i) A + Σ_zero (h - 0) A
-            volume = (
-                (float(h) * n_pos * pixel_area) - (sum_hand_lt * pixel_area)
-            ) + (float(h) * zc * pixel_area)
+            volume = ((float(h) * n_pos * pixel_area) - (sum_hand_lt * pixel_area)) + (
+                float(h) * zc * pixel_area
+            )
 
             rows.append(
                 _row(

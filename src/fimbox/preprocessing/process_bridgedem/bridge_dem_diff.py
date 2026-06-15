@@ -133,7 +133,9 @@ class BridgeDEMDiff:
 
         # Convert NaN → dem_nodata (or a sentinel if DEM has no nodata value).
         out_nodata = dem_nodata if dem_nodata is not None else -999999.0
-        diff_out = np.where(np.isnan(diff_array), out_nodata, diff_array).astype(np.float32)
+        diff_out = np.where(np.isnan(diff_array), out_nodata, diff_array).astype(
+            np.float32
+        )
 
         # Apply DEM nodata mask so pixels outside the watershed are nodata.
         with rasterio.open(self.dem_path) as dem_src:
@@ -141,7 +143,9 @@ class BridgeDEMDiff:
         diff_out[dem_mask == 0] = out_nodata
 
         out_path = self.out_dir / self.out_name
-        dem_meta.update({"dtype": "float32", "compress": "lzw", "count": 1, "nodata": out_nodata})
+        dem_meta.update(
+            {"dtype": "float32", "compress": "lzw", "count": 1, "nodata": out_nodata}
+        )
         with rasterio.open(out_path, "w", **dem_meta) as dst:
             dst.write(diff_out, 1)
 

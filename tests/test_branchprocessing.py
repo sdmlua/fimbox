@@ -393,6 +393,7 @@ def test_step_B04_d8_slopes():
     # of 1e-4 (which is 9.9999997e-05).
     assert float(valid.min()) >= 0.0001 - 1e-7
 
+
 def test_step_B05_streamnet_reaches():
     """CreateHAND step 5: vectorise stream network into reach polylines."""
     for p in (FLOWDIR, THALWEG_COND, FLOWACCUM, STREAM_PIX):
@@ -424,8 +425,8 @@ def test_step_B06_split_reaches():
         out_points_gpkg=SPLIT_PTS,
         wbd8_clp_gpkg=WBD8_CLP if WBD8_CLP.exists() else None,
         lakes_gpkg=LAKES if LAKES.exists() else None,
-        #This could be interesting point where based on slope or anyother logic, you can segment the reach--> ultimately gives the corresponsing
-        #catchment, meaning shorter the reach length- denser the catchment
+        # This could be interesting point where based on slope or anyother logic, you can segment the reach--> ultimately gives the corresponsing
+        # catchment, meaning shorter the reach length- denser the catchment
         max_length=1500.0,
         slope_min=0.0001,
         lakes_buffer_dist=100.0,
@@ -595,6 +596,7 @@ def test_step_B13_polygonize_catchments():
     log.info(f"polygonised: {len(gdf)} catchments")
     assert CATCH_POLY.exists() and "HydroID" in gdf.columns and len(gdf) > 0
 
+
 def test_step_B14_filter_catchments():
     """CreateHAND step 14: drop slivers + attach flow attributes per HydroID."""
     from fimbox import FilterCatchments
@@ -702,11 +704,10 @@ def test_step_B19_add_crosswalk():
         min_stream_length=0.5,
         max_distance_m=100.0,
         small_segments_csv=BRANCH_DIR / f"small_segments_{BRANCH_ID}.csv",
-        
         # SRC slope source (optional): "iris_sword" (default) | "dem" | "hfab".
         src_slope_source="iris_sword",
-        iris_slope_csv=None,        # None -> packaged fimbox/data table
-        hfab_slope_column=None,     # name the hydrofabric slope col if not Slope/So
+        iris_slope_csv=None,  # None -> packaged fimbox/data table
+        hfab_slope_column=None,  # name the hydrofabric slope col if not Slope/So
     )
     import pandas as pd
 
@@ -1001,7 +1002,7 @@ def test_step_C25_calculate_allbranches_live_run():
     cfg = AOIProcessingConfig(
         aoi_dir=OUT_DIR,
         branch_list_path=branch_list_path,
-        n_workers=n_workers,        # auto-sized; FIMBOX_DASK_WORKERS=1 forces serial
+        n_workers=n_workers,  # auto-sized; FIMBOX_DASK_WORKERS=1 forces serial
         keep_failed_branches=True,  # keep a failed branch dir for inspection
         delete_deny_list=True,
         **PARAMS_CREATE_HAND,

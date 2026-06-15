@@ -716,9 +716,7 @@ class getAllInputData:
                     f"Levee protected areas --> {_FILENAMES['levee_protected_areas']}"
                 )
             else:
-                self.logger.info(
-                    "NLD: no levee protected areas in this area."
-                )
+                self.logger.info("NLD: no levee protected areas in this area.")
 
     def run_osm(self):
         if not self._skip("osm_roads"):

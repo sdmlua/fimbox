@@ -394,8 +394,20 @@ def getNHDPlusHRData(
 
     # (pynhd layer, result key, output filename, output layer, wanted?)
     layers = [
-        ("flowline", "flowlines", source_name("streams", identifier), "flowlines", download_flowlines),
-        ("catchment", "catchments", source_name("catchments", identifier), "catchments", download_catchments),
+        (
+            "flowline",
+            "flowlines",
+            source_name("streams", identifier),
+            "flowlines",
+            download_flowlines,
+        ),
+        (
+            "catchment",
+            "catchments",
+            source_name("catchments", identifier),
+            "catchments",
+            download_catchments,
+        ),
     ]
     results = {"flowlines": None, "catchments": None}
 
@@ -471,7 +483,9 @@ def getNHDPlusData(
     )
 
     if _is_high_resolution(resolution):
-        logger.info("Resolution = high --> NHDPlus High Resolution flowlines/catchments (pynhd)")
+        logger.info(
+            "Resolution = high --> NHDPlus High Resolution flowlines/catchments (pynhd)"
+        )
         hr = getNHDPlusHRData(
             boundary=boundary,
             boundary_layer=boundary_layer,
@@ -533,7 +547,9 @@ def _read_vector(data, layer: Optional[str] = None) -> gpd.GeoDataFrame:
     return gpd.read_file(str(data), layer=layer)
 
 
-def _apply_field_map(gdf: gpd.GeoDataFrame, field_map: Optional[dict]) -> gpd.GeoDataFrame:
+def _apply_field_map(
+    gdf: gpd.GeoDataFrame, field_map: Optional[dict]
+) -> gpd.GeoDataFrame:
     """Rename user columns to canonical names. ``field_map`` is canonical -> your column."""
     if not field_map:
         return gdf

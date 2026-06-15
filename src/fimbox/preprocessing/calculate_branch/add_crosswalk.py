@@ -316,7 +316,9 @@ def _prepare_nwm(
             iris = iris.rename(columns={"slope_iris_sword": "SLOPE_IRIS_SWORD"})
         if {"feature_id", "SLOPE_IRIS_SWORD"}.issubset(iris.columns):
             iris["feature_id"] = iris["feature_id"].astype(int)
-            iris = iris[["feature_id", "SLOPE_IRIS_SWORD"]].drop_duplicates("feature_id")
+            iris = iris[["feature_id", "SLOPE_IRIS_SWORD"]].drop_duplicates(
+                "feature_id"
+            )
             nwm = nwm.drop(columns=["SLOPE_IRIS_SWORD"]).merge(
                 iris, on="feature_id", how="left"
             )
@@ -481,7 +483,9 @@ def _build_src_full(
     chosen = _select_slope(base, src_slope_source)
 
     # Sanity-bound the chosen slope so Manning's equation stays well-defined.
-    chosen = chosen.where((chosen >= SLOPE_MIN) & (chosen <= SLOPE_MAX), other=SLOPE_MIN)
+    chosen = chosen.where(
+        (chosen >= SLOPE_MIN) & (chosen <= SLOPE_MAX), other=SLOPE_MIN
+    )
     base["SLOPE"] = chosen.apply(lambda x: float(f"{x:.3e}"))
 
     # Hydraulic geometry — all per-segment averaged values.

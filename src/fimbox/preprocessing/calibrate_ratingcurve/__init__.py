@@ -91,16 +91,16 @@ def bathymetric_adjustment(
 def src_adjust_usgs_rating_trace(
     aoi_dir,
     usgs_rating_curve_csv,
-    usgs_acceptable_gages,
     nwm_recur_file,
+    usgs_acceptable_gages=None,
     *,
     n_workers: int = 1,
 ):
     return UsgsRatingCalibrator(
         aoi_dir=aoi_dir,
         usgs_rating_curve_csv=usgs_rating_curve_csv,
-        usgs_acceptable_gages=usgs_acceptable_gages,
         nwm_recur_file=nwm_recur_file,
+        usgs_acceptable_gages=usgs_acceptable_gages,
         n_workers=n_workers,
     ).run()
 
@@ -116,8 +116,10 @@ def src_adjust_ras2fim_rating(
     ).run()
 
 
-def src_adjust_spatial_obs(aoi_dir, *, n_workers: int = 1):
-    return SpatialObsCalibrator(aoi_dir=aoi_dir, n_workers=n_workers).run()
+def src_adjust_spatial_obs(aoi_dir, calib_points_file=None, *, n_workers: int = 1):
+    return SpatialObsCalibrator(
+        aoi_dir=aoi_dir, calib_points_file=calib_points_file, n_workers=n_workers
+    ).run()
 
 
 __all__ = [

@@ -99,7 +99,12 @@ def calculate_statistics(
     )
     log.info(
         "Metrics feature_id=%s usgs=%s | KGE=%.3f NSE=%.3f PBias=%.1f%% (n=%d)",
-        feature_id, usgs_site, metrics.kge, metrics.nse, metrics.pbias_pct, metrics.n_obs,
+        feature_id,
+        usgs_site,
+        metrics.kge,
+        metrics.nse,
+        metrics.pbias_pct,
+        metrics.n_obs,
     )
 
     if plot:
@@ -111,14 +116,26 @@ def _plot_metrics(aoi_dir: PathLike, m: dict, usgs_site: str) -> Path:
     plt = C.require("matplotlib").pyplot
     names = ["KGE", "NSE", "PBias (%)"]
     fig, ax1 = plt.subplots(figsize=(6, 4))
-    ax1.bar(names[:2], [m["KGE"], m["NSE"]], color=["tab:blue", "tab:purple"],
-            edgecolor="black", width=0.7, zorder=3)
+    ax1.bar(
+        names[:2],
+        [m["KGE"], m["NSE"]],
+        color=["tab:blue", "tab:purple"],
+        edgecolor="black",
+        width=0.7,
+        zorder=3,
+    )
     ax1.set_ylabel("Metric value", fontsize=13)
     ax1.set_ylim(0, 1.1)
     ax1.grid(axis="y", linestyle="--", alpha=0.6, zorder=0)
     ax2 = ax1.twinx()
-    ax2.bar([names[2]], [m["PBias (%)"]], color="tab:orange", edgecolor="black",
-            width=0.7, zorder=3)
+    ax2.bar(
+        [names[2]],
+        [m["PBias (%)"]],
+        color="tab:orange",
+        edgecolor="black",
+        width=0.7,
+        zorder=3,
+    )
     ax2.set_ylabel("Percentage bias (%)", color="tab:orange", fontsize=13)
     plt.title(f"NWM vs USGS metrics ({usgs_site})", fontsize=14)
     plt.tight_layout()

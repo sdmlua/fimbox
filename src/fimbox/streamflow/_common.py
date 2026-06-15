@@ -26,6 +26,7 @@ def attach_log(aoi_dir: PathLike) -> None:
     """Route streamflow log records into the AOI's combined processing.log."""
     attach_case_log(aoi_dir)
 
+
 PathLike = Union[str, Path]
 
 # Subfolders under the AOI root.
@@ -96,10 +97,10 @@ def resolve_feature_id_csv(
 ) -> Path:
     """Resolve a feature_id CSV from any of three inputs (precedence as listed):
 
-      * ``feature_ids`` — a list of ids; written to ``<AOI>/streamflow/feature_id.csv``
-      * ``feature_id_csv`` — an explicit CSV path
-      * neither — the AOI's ``<AOI>/feature_id.csv``; when absent it is generated
-        on demand from the AOI's per-branch hydroTables.
+    * ``feature_ids`` — a list of ids; written to ``<AOI>/streamflow/feature_id.csv``
+    * ``feature_id_csv`` — an explicit CSV path
+    * neither — the AOI's ``<AOI>/feature_id.csv``; when absent it is generated
+      on demand from the AOI's per-branch hydroTables.
     """
     if feature_ids is not None:
         out = streamflow_dir(aoi_dir) / "feature_id.csv"
@@ -141,9 +142,7 @@ def parse_date_kind(value: str) -> str:
     return "invalid"
 
 
-def write_fim_ready(
-    discharge_by_fid: pd.DataFrame, out_csv: Path
-) -> Path:
+def write_fim_ready(discharge_by_fid: pd.DataFrame, out_csv: Path) -> Path:
     """Write a FIM-ready CSV (``feature_id, discharge_cms``) the Inundator can
     read directly. ``discharge_by_fid`` must hold 'feature_id' and a discharge
     column named either 'discharge' or 'discharge_cms'."""

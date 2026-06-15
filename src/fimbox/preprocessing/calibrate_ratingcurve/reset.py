@@ -51,7 +51,6 @@ _PRESERVE_COLUMNS = [
     "Bathymetry_source",
     "default_SLOPE",
     "default_ManningN",
-
     # Slope variants carried from the crosswalk (kept only if present).
     "SLOPE_RISE_RUN",
     "SLOPE_HFAB",

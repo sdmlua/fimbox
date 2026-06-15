@@ -11,8 +11,9 @@ Two layers:
       CalibrationConfig parameter spelled out so the full surface is visible
       in one place.
 
-  STEP BY STEP ..... one test per stage (aggregate, bankfull, subdiv,
-      nonmonotonic, log scan) so any single step can be run / debugged alone.
+  STEP BY STEP ..... one test per stage (thalweg, longitudinal, bathymetry,
+      bankfull, subdiv, nonmonotonic, usgs, spatial, log scan) so any single
+      step can be run / debugged alone.
 
 It will point into the working version of the AOI and skip when it is absent.
 """
@@ -27,22 +28,50 @@ import pytest
 from fimbox import CalibrationConfig, run_calibration
 from fimbox._dask import _resolve_n_workers
 from fimbox.preprocessing.calibrate_ratingcurve import (
+    BathymetricAdjustment,
     BranchAggregator,
     HydroTableReset,
     LongitudinalFlowFilter,
     LogScanner,
+    ManualCalibrator,
+    SpatialObsCalibrator,
     SrcBankfull,
     SrcNonmonotonic,
     SrcSubdiv,
     ThalwegNotchesAdjustment,
+    UsgsRatingCalibrator,
 )
 
 # Live AOI + input files. Edit these to point at your data; tests skip when the AOI is absent.
 AOI_DIR = Path(".././out/test_smallB")
-DATA = Path("/Users/Supath/Downloads/SDML/FIMBOX/FIM_HF/Data/rating_curve")
 
-BANKFULL_FLOWS_FILE = DATA / "bankfull_flows" / "nwm_high_water_threshold_cms.csv"
-VMANN_INPUT_FILE = DATA / "variable_roughness" / "mannings_global_06_014.csv"
+# Bundled lookup tables shipped in the repo (all calibration inputs live here).
+DATA = Path(__file__).resolve().parents[1] / "data"
+
+# Bankfull recurrence flows
+BANKFULL_FLOWS_FILE = DATA / "nwm_high_water_threshold_cms.parquet"
+
+# Variable-roughness Manning's n table
+VMANN_INPUT_FILE = DATA / "mannings_gbm_obank.parquet"
+
+# USGS rating-curve calibration. Rating curve + NWM recurrence flows are
+# required; the acceptable-gage quality filter is optional (unfiltered when None).
+USGS_RATING_CURVE_CSV = DATA / "usgs_rating_curves.parquet"
+NWM_RECUR_FILE = DATA / "nwm_recurrence_flows_cfs.parquet"
+USGS_ACCEPTABLE_GAGES = DATA / "usgs_gages_acceptance.parquet"
+
+# Bathymetry: eHydro surveyed channels (.gpkg) with columns ID,
+# missing_xs_area_m2, missing_wet_perimeter_m. Left unset until available.
+BATHY_EHYDRO_FILE = None
+
+# Spatial-observation calibration: per-AOI benchmark points (.parquet) with
+# columns geometry, flow, submitter, coll_time, flow_unit, layer. Left unset
+# until available in that schema.
+CALIB_POINTS_FILE = None
+
+# Manual calibration: a small CSV you author with columns aoi_id, feature_id,
+# calb_coef_manual (discharge = pre_manual / coef). Left unset until provided.
+MAN_CALB_FILE = None
 
 # Worker count for the branch-parallel routines — auto-sized to the device
 JOB_BRANCH_LIMIT = _resolve_n_workers()
@@ -61,6 +90,21 @@ _skip_no_bankfull = pytest.mark.skipif(
 _skip_no_vmann = pytest.mark.skipif(
     not VMANN_INPUT_FILE.is_file(), reason=f"missing {VMANN_INPUT_FILE}"
 )
+_skip_no_bathy = pytest.mark.skipif(
+    BATHY_EHYDRO_FILE is None or not Path(BATHY_EHYDRO_FILE).is_file(),
+    reason=f"bathy eHydro file not set: {BATHY_EHYDRO_FILE}",
+)
+_skip_no_usgs = pytest.mark.skipif(
+    not USGS_RATING_CURVE_CSV.is_file(), reason=f"missing {USGS_RATING_CURVE_CSV}"
+)
+_skip_no_manual = pytest.mark.skipif(
+    MAN_CALB_FILE is None or not Path(MAN_CALB_FILE).is_file(),
+    reason=f"manual calib file not set: {MAN_CALB_FILE}",
+)
+_skip_no_spatial = pytest.mark.skipif(
+    CALIB_POINTS_FILE is None or not Path(CALIB_POINTS_FILE).is_file(),
+    reason=f"spatial calib points not set: {CALIB_POINTS_FILE}",
+)
 
 
 # # COMBINED — the whole pipeline in one call, Tune the parameters as needed.
@@ -68,10 +112,10 @@ _skip_no_vmann = pytest.mark.skipif(
 # @_skip_no_bankfull
 # @_skip_no_vmann
 # def test_calibrate_full_pipeline():
-#     """One run_calibration() call driving the full default pipeline plus the
-#     two big-lift SRC routines. Every CalibrationConfig field is listed (the
-#     commented ones are the not-yet-ported / file-dependent steps) so this
-#     test doubles as the parameter reference."""
+#     """One run_calibration() call driving the full default pipeline plus every
+#     optional adjustment. Every CalibrationConfig field is listed so this test
+#     doubles as the parameter reference. File-dependent steps self-skip with a
+#     log line when their input is absent."""
 #     cfg = CalibrationConfig(
 #         # --- mode ---
 #         # True runs the reset step first (reverts hydroTables to the
@@ -81,27 +125,25 @@ _skip_no_vmann = pytest.mark.skipif(
 
 #         thalweg_notches_adjustment=True,   # no extra input
 #         longitudinal_filter=True,          # no extra input
+#         bathymetry_adjust=True,            # needs bathy_file_ehydro
 #         src_bankfull_toggle=True,          # needs bankfull_flows_file
 #         src_subdiv_toggle=True,            # needs vmann_input_file & bankfull on
 #         nonmonotonic_src_adjustment=True,  # no extra input
-#         # bathymetry_adjust=True,          # needs bathy_file_* below
-#         # src_adjust_usgs=True,            # stub; needs usgs_* + nwm_recur
+#         src_adjust_usgs=True,              # needs usgs_* + nwm_recur + usgs_elev_table
 #         # src_adjust_ras2fim=True,         # stub; needs ras_rating_curve_csv
-#         # src_adjust_spatial=True,         # stub
-#         # manual_calb_toggle=True,         # needs man_calb_file
+#         src_adjust_spatial=True,           # needs calib_points_file
+#         manual_calb_toggle=True,           # needs man_calb_file
 
 #         # --- input files -----
 #         bankfull_flows_file=BANKFULL_FLOWS_FILE,
 #         vmann_input_file=VMANN_INPUT_FILE,
-#         # bathy_file_ehydro=...,           # for bathymetry_adjust (eHydro .gpkg)
-#         # bathy_file_aibased=...,          # AI bathymetry .parquet
-#         # ai_toggle=0,                     # 1 = also apply AI bathymetry
-#         # ai_strm_order=4,                 # min stream order for AI bathymetry
-#         # usgs_rating_curve_csv=...,       # for src_adjust_usgs
-#         # usgs_acceptable_gages=...,
-#         # nwm_recur_file=...,              # for usgs + ras2fim
+#         bathy_file_ehydro=BATHY_EHYDRO_FILE,
+#         usgs_rating_curve_csv=USGS_RATING_CURVE_CSV,
+#         usgs_acceptable_gages=USGS_ACCEPTABLE_GAGES,
+#         nwm_recur_file=NWM_RECUR_FILE,     # for usgs (+ ras2fim)
+#         calib_points_file=CALIB_POINTS_FILE,  # for src_adjust_spatial
+#         man_calb_file=MAN_CALB_FILE,       # for manual_calb_toggle
 #         # ras_rating_curve_csv=...,        # for src_adjust_ras2fim
-#         # man_calb_file=...,               # for manual_calb_toggle
 
 #         # --- tunables ----
 #         default_channel_n=0.06,
@@ -154,64 +196,114 @@ _skip_no_vmann = pytest.mark.skipif(
 #     ).run()
 #     assert results
 
+
+# @_skip_no_aoi
+# def test_step_longitudinal():
+#     """Smooth hydraulic geometry along reach chains, recompute discharge."""
+#     results = LongitudinalFlowFilter(
+#         aoi_dir=AOI_DIR, n_workers=JOB_BRANCH_LIMIT, n_stages=84
+#     ).run()
+#     assert results
+
+
 @_skip_no_aoi
-def test_step_longitudinal():
-    """Smooth hydraulic geometry along reach chains, recompute discharge."""
-    results = LongitudinalFlowFilter(
-        aoi_dir=AOI_DIR, n_workers=JOB_BRANCH_LIMIT, n_stages=84
+@_skip_no_bathy
+def test_step_bathymetry():
+    """Add missing in-channel area below the DEM from eHydro surveys, then
+    recompute discharge."""
+    results = BathymetricAdjustment(
+        aoi_dir=AOI_DIR,
+        bathy_file_ehydro=BATHY_EHYDRO_FILE,
     ).run()
     assert results
 
 
-# @_skip_no_aoi
-# @_skip_no_bankfull
-# def test_step_bankfull():
-#     """Identify bankfull stage in every branch SRC."""
-#     results = SrcBankfull(
-#         aoi_dir=AOI_DIR,
-#         bankfull_flows_file=BANKFULL_FLOWS_FILE,
-#         n_workers=JOB_BRANCH_LIMIT,
-#         include_branch_zero=True,
-#     ).run()
-#     assert results  # dict of branch_id -> status string
+@_skip_no_aoi
+@_skip_no_bankfull
+def test_step_bankfull():
+    """Identify bankfull stage in every branch SRC."""
+    results = SrcBankfull(
+        aoi_dir=AOI_DIR,
+        bankfull_flows_file=BANKFULL_FLOWS_FILE,
+        n_workers=JOB_BRANCH_LIMIT,
+        include_branch_zero=True,
+    ).run()
+    assert results  # dict of branch_id -> status string
 
 
-# @_skip_no_aoi
-# @_skip_no_bankfull
-# @_skip_no_vmann
-# def test_step_subdiv():
-#     """Channel/overbank subdivision. Depends on bankfull having run, so run
-#     it first within this test to keep the step self-contained."""
-#     SrcBankfull(
-#         aoi_dir=AOI_DIR, bankfull_flows_file=BANKFULL_FLOWS_FILE, n_workers=1
-#     ).run()
-#     results = SrcSubdiv(
-#         aoi_dir=AOI_DIR,
-#         vmann_table=VMANN_INPUT_FILE,
-#         n_workers=JOB_BRANCH_LIMIT,
-#         default_channel_n=0.06,   # used when feature_id missing from vmann table
-#         default_overbank_n=0.12,
-#     ).run()
-#     assert results
+@_skip_no_aoi
+@_skip_no_bankfull
+@_skip_no_vmann
+def test_step_subdiv():
+    """Channel/overbank subdivision. Depends on bankfull having run, so run
+    it first within this test to keep the step self-contained."""
+    SrcBankfull(
+        aoi_dir=AOI_DIR, bankfull_flows_file=BANKFULL_FLOWS_FILE, n_workers=1
+    ).run()
+    results = SrcSubdiv(
+        aoi_dir=AOI_DIR,
+        vmann_table=VMANN_INPUT_FILE,
+        n_workers=JOB_BRANCH_LIMIT,
+        default_channel_n=0.06,  # used when feature_id missing from vmann table
+        default_overbank_n=0.12,
+    ).run()
+    assert results
 
 
-# @_skip_no_aoi
-# def test_step_nonmonotonic():
-#     """Force monotonic in-channel rating curves."""
-#     results = SrcNonmonotonic(
-#         aoi_dir=AOI_DIR, stream_order_min=1, include_branch_zero=True
-#     ).run()
-#     assert results
+@_skip_no_aoi
+def test_step_nonmonotonic():
+    """Force monotonic in-channel rating curves."""
+    results = SrcNonmonotonic(
+        aoi_dir=AOI_DIR, stream_order_min=1, include_branch_zero=True
+    ).run()
+    assert results
 
 
-# @_skip_no_aoi
-# def test_step_aggregate_post():
-#     """Post-calibration aggregation: htable + bridge + road -> AOI root."""
-#     BranchAggregator(aoi_dir=AOI_DIR, htable=True, bridge=True, road=True).run()
+@_skip_no_aoi
+@_skip_no_usgs
+def test_step_usgs():
+    """Calibrate SRCs against USGS rating curves at NWM recurrence flows.
+    Needs usgs_elev_table.csv at the AOI root; self-skips when inputs are absent."""
+    results = UsgsRatingCalibrator(
+        aoi_dir=AOI_DIR,
+        usgs_rating_curve_csv=USGS_RATING_CURVE_CSV,
+        usgs_acceptable_gages=USGS_ACCEPTABLE_GAGES,
+        nwm_recur_file=NWM_RECUR_FILE,
+        n_workers=JOB_BRANCH_LIMIT,
+    ).run()
+    assert results is not None
 
 
-# @_skip_no_aoi
-# def test_step_log_scan():
-#     """Scan logs/ for error / warning lines into per-AOI summary files."""
-#     out = LogScanner(aoi_dir=AOI_DIR, calibration_rerun=False).run()
-#     assert set(out) == {"errors", "warnings"}
+@_skip_no_aoi
+@_skip_no_spatial
+def test_step_spatial():
+    """Calibrate SRCs against benchmark inundation points. Samples HAND/HydroID
+    rasters at each point; self-skips when the points file is absent."""
+    results = SpatialObsCalibrator(
+        aoi_dir=AOI_DIR,
+        calib_points_file=CALIB_POINTS_FILE,
+        n_workers=JOB_BRANCH_LIMIT,
+    ).run()
+    assert results is not None
+
+
+@_skip_no_aoi
+@_skip_no_manual
+def test_step_manual():
+    """Apply a per-feature_id coefficient table to each branch hydroTable.
+    Needs MAN_CALB_FILE (aoi_id, feature_id, calb_coef_manual); no-op when the
+    AOI has no matching entry."""
+    ManualCalibrator(aoi_dir=AOI_DIR, calibration_file=MAN_CALB_FILE).run()
+
+
+@_skip_no_aoi
+def test_step_aggregate_post():
+    """Post-calibration aggregation: htable + bridge + road -> AOI root."""
+    BranchAggregator(aoi_dir=AOI_DIR, htable=True, bridge=True, road=True).run()
+
+
+@_skip_no_aoi
+def test_step_log_scan():
+    """Scan logs/ for error / warning lines into per-AOI summary files."""
+    out = LogScanner(aoi_dir=AOI_DIR, calibration_rerun=False).run()
+    assert set(out) == {"errors", "warnings"}

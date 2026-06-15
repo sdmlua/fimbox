@@ -107,9 +107,12 @@ class FlowAccDEM:
 
             aligned = np.zeros(d8.shape, dtype=np.float32)
             reproject(
-                source=hw_raw, destination=aligned,
-                src_transform=hw_transform, src_crs=hw_crs,
-                dst_transform=d8_transform, dst_crs=d8_crs,
+                source=hw_raw,
+                destination=aligned,
+                src_transform=hw_transform,
+                src_crs=hw_crs,
+                dst_transform=d8_transform,
+                dst_crs=d8_crs,
                 resampling=Resampling.max,
             )
             log.info("FlowAccDEM: aligned headwaters %s -> %s", hw_raw.shape, d8.shape)
@@ -142,7 +145,8 @@ class FlowAccDEM:
                 log.info(
                     "FlowAccDEM: re-seeded from level-path network "
                     "(%d seed cells) -> %d stream cells",
-                    int(seeds.sum()), stream_count,
+                    int(seeds.sum()),
+                    stream_count,
                 )
 
         stream_pix = np.where(accum >= self.threshold, 1.0, -9999.0).astype(np.float32)
@@ -174,7 +178,9 @@ class FlowAccDEM:
         return accum, int((accum >= self.threshold).sum())
 
 
-def _snap_seeds_to_network(hw: np.ndarray, d8: np.ndarray, radius: int = 3) -> np.ndarray:
+def _snap_seeds_to_network(
+    hw: np.ndarray, d8: np.ndarray, radius: int = 3
+) -> np.ndarray:
     """Move headwater seeds that landed on a non-flowing cell (D8 code 0) onto
     the nearest flowing cell within ``radius``, so the weight enters the D8
     network. Seeds already on a flowing cell are left untouched."""

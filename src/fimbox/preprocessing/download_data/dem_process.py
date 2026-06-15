@@ -39,7 +39,7 @@ class DEMProcessor:
         self.layer = layer
         self.dem_file = dem_file
         self.resolution = resolution
-        
+
         # Tile size for parallel DEM requests; max_workers defaults to min(cpu_count, 8)
         self.tile_size_deg = tile_size_deg
         self.max_workers = max_workers or min(8, (os.cpu_count() or 4))
@@ -167,7 +167,10 @@ class DEMProcessor:
                 # (to avoid seams), so the merged grid extends well beyond the
                 # boundary — clip it back so the output matches the AOI.
                 dem_data = dem_data.rio.clip(
-                    gdf_projected.geometry, gdf_projected.crs, drop=True, all_touched=True
+                    gdf_projected.geometry,
+                    gdf_projected.crs,
+                    drop=True,
+                    all_touched=True,
                 )
 
                 dem_data.rio.to_raster(save_path, **export_kwargs)
@@ -262,15 +265,19 @@ class DEMProcessor:
 
         nodata = dem.rio.nodata
         arr = dem.squeeze().to_numpy()
-        mask = np.isfinite(arr) if nodata is None else (arr != nodata) & np.isfinite(arr)
+        mask = (
+            np.isfinite(arr) if nodata is None else (arr != nodata) & np.isfinite(arr)
+        )
         n_gap = int((~mask).sum())
         if n_gap == 0:
             return dem
         filled = fillnodata(
             arr.astype("float32"), mask=mask.astype(np.uint8), max_search_distance=3.0
         )
-        n_left = int(np.isnan(filled).sum()) if nodata is None else int(
-            (filled == nodata).sum()
+        n_left = (
+            int(np.isnan(filled).sum())
+            if nodata is None
+            else int((filled == nodata).sum())
         )
         self.logger.info(
             f"Healed DEM seams: {n_gap - n_left} of {n_gap} nodata cells filled"

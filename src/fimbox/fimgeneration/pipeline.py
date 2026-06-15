@@ -250,8 +250,7 @@ class FimGenerator:
                     aoi_dir=self.watershed_dir,
                     branch_ids=ok_bids,
                     depth_out=self.depth_out or fim_out_dir / "inundation_depth.tif",
-                    extent_out=self.extent_out
-                    or fim_out_dir / "inundation_extent.tif",
+                    extent_out=self.extent_out or fim_out_dir / "inundation_extent.tif",
                     sources_dir=tmp_dir,
                 ).run()
 
@@ -354,7 +353,11 @@ def _load_forecast(src: Union[PathLike, pd.DataFrame]) -> pd.DataFrame:
         p = Path(src)
         if not p.is_file():
             raise FileNotFoundError(f"forecast file not found: {p}")
-        df = pd.read_parquet(p) if p.suffix.lower() in (".parquet", ".pq") else pd.read_csv(p)
+        df = (
+            pd.read_parquet(p)
+            if p.suffix.lower() in (".parquet", ".pq")
+            else pd.read_csv(p)
+        )
     # Accept a FIMserv-style 'discharge' column as an alias for 'discharge_cms'.
     if "discharge_cms" not in df.columns and "discharge" in df.columns:
         df = df.rename(columns={"discharge": "discharge_cms"})
@@ -385,7 +388,9 @@ def extract_feature_ids(
         .reset_index(drop=True)
     )
     target = (
-        Path(out_csv) if out_csv is not None else (aoi_root(watershed) / "feature_id.csv")
+        Path(out_csv)
+        if out_csv is not None
+        else (aoi_root(watershed) / "feature_id.csv")
     )
     target.parent.mkdir(parents=True, exist_ok=True)
     pd.DataFrame({"feature_id": fids}).to_csv(target, index=False)
@@ -534,7 +539,11 @@ class generateFIM:
                 extent_out=out_dir / f"{base}_inundation.tif",
             ).run()
             # The mosaic always writes depth; drop it unless the user wants it.
-            if not self.depth and result.depth_path and Path(result.depth_path).exists():
+            if (
+                not self.depth
+                and result.depth_path
+                and Path(result.depth_path).exists()
+            ):
                 Path(result.depth_path).unlink()
             results.append(result)
         return results

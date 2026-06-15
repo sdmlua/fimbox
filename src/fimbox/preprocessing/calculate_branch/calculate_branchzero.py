@@ -405,7 +405,9 @@ def _fill_depressions(dem: Path, out: Path, wbt_path: Optional[str] = None) -> N
         with rasterio.open(str(out)) as src:
             filled = src.read(1).astype(np.float64)
             nodata = src.nodata
-        valid = np.ones(filled.shape, dtype=bool) if nodata is None else (filled != nodata)
+        valid = (
+            np.ones(filled.shape, dtype=bool) if nodata is None else (filled != nodata)
+        )
         higher = np.ones(filled.shape, dtype=bool)
         for dr in (-1, 0, 1):
             for dc in (-1, 0, 1):

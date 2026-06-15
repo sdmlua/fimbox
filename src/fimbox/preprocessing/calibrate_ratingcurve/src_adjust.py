@@ -40,6 +40,7 @@ from ._common import (
     VOLUME_VAR,
     PathLike,
     iter_branches,
+    read_table,
     resolve_aoi_dir,
 )
 
@@ -75,8 +76,7 @@ def _run_branches(
     try:
         with ProcessPoolExecutor(max_workers=n_workers) as pool:
             fut_to_bid = {
-                pool.submit(worker, bp, bid, *worker_args): bid
-                for bid, bp in branches
+                pool.submit(worker, bp, bid, *worker_args): bid for bid, bp in branches
             }
             for fut in as_completed(fut_to_bid):
                 bid = fut_to_bid[fut]
@@ -96,11 +96,7 @@ def _run_branches(
     return results
 
 
-# ---------------------------------------------------------------------------
 # Bankfull
-# ---------------------------------------------------------------------------
-
-
 @dataclass
 class SrcBankfull:
     # Identify bankfull stage for every HydroID by looking up the closest
@@ -118,9 +114,6 @@ class SrcBankfull:
         if not bflows_path.is_file():
             raise FileNotFoundError(f"bankfull flows file not found: {bflows_path}")
 
-        df_bflows = pd.read_csv(bflows_path, dtype={"feature_id": int})
-        df_bflows = df_bflows.rename(columns={"discharge": "bankfull_flow"})
-
         branches = list(
             iter_branches(aoi_dir, exclude_zero=not self.include_branch_zero)
         )
@@ -132,23 +125,32 @@ class SrcBankfull:
         return _run_branches(
             branches,
             _bankfull_one_branch,
-            (df_bflows,),
+            (bflows_path,),
             self.n_workers,
             "SrcBankfull",
         )
 
 
-def _bankfull_one_branch(branch_dir: Path, bid: str, df_bflows: pd.DataFrame) -> str:
+def _load_bankfull_flows(bflows_path: Path, feature_ids) -> pd.DataFrame:
+    ids = list({int(x) for x in feature_ids})
+    if Path(bflows_path).suffix.lower() in (".parquet", ".pq"):
+        df = pd.read_parquet(bflows_path, filters=[("feature_id", "in", ids)])
+    else:
+        df = pd.read_csv(bflows_path, dtype={"feature_id": int})
+        df = df[df["feature_id"].isin(ids)]
+    df["feature_id"] = df["feature_id"].astype(int)
+    return df.rename(columns={"discharge": "bankfull_flow"})
+
+
+def _bankfull_one_branch(branch_dir: Path, bid: str, bflows_path: Path) -> str:
     src_path = branch_dir / f"src_full_crosswalked_{bid}.csv"
     if not src_path.is_file():
         return "SKIP no src_full_crosswalked"
 
     df_src = pd.read_csv(src_path, dtype={"HydroID": int, "feature_id": int})
+    df_bflows = _load_bankfull_flows(bflows_path, df_src["feature_id"].unique())
 
-    # Drop any bankfull columns left by a previous run so the merge below
-    # adds a clean "bankfull_flow" instead of colliding into
-    # bankfull_flow_x / _y (which would break the fillna that follows).
-    # Makes the step idempotent — safe to re-run on already-calibrated SRCs.
+    # Remove old bankfull columns before merging.
     df_src = df_src.drop(
         columns=[
             "bankfull_flow",
@@ -236,11 +238,7 @@ def _bankfull_one_branch(branch_dir: Path, bid: str, df_bflows: pd.DataFrame) ->
     return f"OK bankfull set on {len(df_src)} rows"
 
 
-# ---------------------------------------------------------------------------
 # Subdivision (channel / overbank)
-# ---------------------------------------------------------------------------
-
-
 @dataclass
 class SrcSubdiv:
     # Channel/overbank subdivision using Manning's equation with separate
@@ -248,7 +246,7 @@ class SrcSubdiv:
     # (consumes the Stage_bankfull column it adds).
 
     aoi_dir: PathLike
-    vmann_table: PathLike  # CSV with columns: feature_id, channel_n, overbank_n
+    vmann_table: PathLike  # CSV/Parquet keyed on feature_id, channel_n, overbank_n
     n_workers: int = 1
     include_branch_zero: bool = True
     default_channel_n: float = 0.06
@@ -260,7 +258,7 @@ class SrcSubdiv:
         if not mann_path.is_file():
             raise FileNotFoundError(f"Manning's n table not found: {mann_path}")
 
-        df_mann = pd.read_csv(mann_path, dtype={"feature_id": "int64"})
+        df_mann = read_table(mann_path, dtype={"feature_id": "int64"})
 
         branches = list(
             iter_branches(aoi_dir, exclude_zero=not self.include_branch_zero)
@@ -462,11 +460,7 @@ def _subdiv_one_branch(
     return f"OK subdiv on {len(df)} src rows / {len(ht)} ht rows"
 
 
-# ---------------------------------------------------------------------------
 # Nonmonotonic SRC correction
-# ---------------------------------------------------------------------------
-
-
 @dataclass
 class SrcNonmonotonic:
     # Walk each in-channel rating curve and force discharge to be
@@ -476,6 +470,7 @@ class SrcNonmonotonic:
     aoi_dir: PathLike
     stream_order_min: int = 1
     include_branch_zero: bool = True
+    n_workers: int = 1
 
     def run(self) -> dict[str, str]:
         aoi_dir = resolve_aoi_dir(self.aoi_dir)
@@ -484,15 +479,16 @@ class SrcNonmonotonic:
         self._normalize_branch_zero(aoi_dir)
 
         branches = list(iter_branches(aoi_dir, exclude_zero=True))
-        log.info(f"SrcNonmonotonic: {len(branches)} non-zero branches")
-        results: dict[str, str] = {}
-        for bid, bp in branches:
-            try:
-                results[bid] = self._one_branch(bp, bid)
-            except Exception as exc:
-                results[bid] = f"FAIL {exc}"
-                log.exception(f"SrcNonmonotonic branch {bid} failed")
-        return results
+        log.info(
+            f"SrcNonmonotonic: {len(branches)} non-zero branches, {self.n_workers} workers"
+        )
+        return _run_branches(
+            branches,
+            _nonmonotonic_one_branch,
+            (self.stream_order_min,),
+            self.n_workers,
+            "SrcNonmonotonic",
+        )
 
     def _normalize_branch_zero(self, aoi_dir: Path) -> None:
         # Tidy branch 0's SRC + hydroTable: ensure Bathymetry_source is a
@@ -531,127 +527,109 @@ class SrcNonmonotonic:
         src.to_csv(src0, index=False)
         ht.to_csv(ht0, index=False)
 
-    def _one_branch(self, branch_dir: Path, bid: str) -> str:
-        src_path = branch_dir / f"src_full_crosswalked_{bid}.csv"
-        if not src_path.is_file():
-            return "SKIP no src"
 
-        df = pd.read_csv(src_path, low_memory=False)
-        df = df.drop_duplicates(subset=["HydroID", "Stage"], keep="first").reset_index(
-            drop=True
+def _nonmonotonic_one_branch(branch_dir: Path, bid: str, strm_order: int) -> str:
+    src_path = branch_dir / f"src_full_crosswalked_{bid}.csv"
+    if not src_path.is_file():
+        return "SKIP no src"
+
+    df = pd.read_csv(src_path, low_memory=False)
+    df = df.drop_duplicates(subset=["HydroID", "Stage"], keep="first").reset_index(
+        drop=True
+    )
+
+    # Use the subdivided discharge as the source where it ran; else the standard column.
+    if "subdiv_applied" in df.columns and "Discharge (m3s-1)_subdiv" in df.columns:
+        df["Discharge (m3s-1)"] = np.where(
+            df["subdiv_applied"] == True,
+            df["Discharge (m3s-1)_subdiv"],
+            df["Discharge (m3s-1)"],
         )
 
-        # If subdivision ran, use that as the discharge source. Otherwise
-        # the standard Discharge column is canonical.
-        if "subdiv_applied" in df.columns and "Discharge (m3s-1)_subdiv" in df.columns:
-            df["Discharge (m3s-1)"] = np.where(
-                df["subdiv_applied"] == True,
-                df["Discharge (m3s-1)_subdiv"],
-                df["Discharge (m3s-1)"],
-            )
+    original = df.copy()
+    fixed = df.groupby("HydroID", group_keys=False).apply(
+        _fix_hydroid, strm_order=strm_order
+    )
 
-        original = df.copy()
+    # Floodplain rows stay at their original values — only the channel is touched.
+    if "bankfull_proxy" in original.columns:
+        mask_fp = original["bankfull_proxy"] == "floodplain"
+        cols = [
+            "Discharge (m3s-1)",
+            "SurfaceArea (m2)",
+            "BedArea (m2)",
+            "TopWidth (m)",
+            "WettedPerimeter (m)",
+            "HydraulicRadius (m)",
+        ]
+        if "Discharge (m3s-1)_subdiv" in original.columns:
+            cols.append("Discharge (m3s-1)_subdiv")
+        for c in cols:
+            if c in original.columns and c in fixed.columns:
+                fixed.loc[mask_fp, c] = original.loc[mask_fp, c]
 
-        # Per-HydroID nonmonotonic fix.
-        fixed = df.groupby("HydroID", group_keys=False).apply(
-            self._fix_hydroid,
-            strm_order=self.stream_order_min,
+    # Zero stage = zero discharge.
+    fixed.loc[fixed["Stage"] == 0, "Discharge (m3s-1)"] = 0
+    if "Discharge (m3s-1)_subdiv" in fixed.columns:
+        fixed.loc[fixed["Stage"] == 0, "Discharge (m3s-1)_subdiv"] = 0
+
+    if "Bathymetry_source" in fixed.columns:
+        fixed.loc[
+            fixed["Bathymetry_source"].astype(str) == "0", "Bathymetry_source"
+        ] = "No Bathymetry Applied"
+        fixed["Bathymetry_source"] = fixed["Bathymetry_source"].fillna(
+            "No Bathymetry Applied"
         )
 
-        # Restore floodplain rows to the original values so we only touch
-        # in-channel stages. Some columns may not exist on first runs.
-        if "bankfull_proxy" in original.columns:
-            mask_fp = original["bankfull_proxy"] == "floodplain"
-            cols = [
-                "Discharge (m3s-1)",
-                "SurfaceArea (m2)",
-                "BedArea (m2)",
-                "TopWidth (m)",
-                "WettedPerimeter (m)",
-                "HydraulicRadius (m)",
-            ]
-            if "Discharge (m3s-1)_subdiv" in original.columns:
-                cols.append("Discharge (m3s-1)_subdiv")
-            for c in cols:
-                if c in original.columns and c in fixed.columns:
-                    fixed.loc[mask_fp, c] = original.loc[mask_fp, c]
+    # Flag columns are set at one stage only — forward-fill across the HydroID.
+    for col in ("subdiv_applied", "channel_n", "overbank_n"):
+        if col in fixed.columns:
+            fixed[col] = fixed.groupby("HydroID")[col].ffill()
 
-        # Zero stage always gets zero discharge.
-        fixed.loc[fixed["Stage"] == 0, "Discharge (m3s-1)"] = 0
-        if "Discharge (m3s-1)_subdiv" in fixed.columns:
-            fixed.loc[fixed["Stage"] == 0, "Discharge (m3s-1)_subdiv"] = 0
+    fixed.to_csv(src_path, index=False)
+    return f"OK nonmonotonic on {len(fixed)} rows"
 
-        # Tidy Bathymetry_source the same way as branch 0.
-        if "Bathymetry_source" in fixed.columns:
-            fixed.loc[
-                fixed["Bathymetry_source"].astype(str) == "0", "Bathymetry_source"
-            ] = "No Bathymetry Applied"
-            fixed["Bathymetry_source"] = fixed["Bathymetry_source"].fillna(
-                "No Bathymetry Applied"
-            )
 
-        # Forward-fill per-HydroID flag columns that were attached at one
-        # stage only.
-        for col in ("subdiv_applied", "channel_n", "overbank_n"):
-            if col in fixed.columns:
-                fixed[col] = fixed.groupby("HydroID")[col].ffill()
-
-        fixed.to_csv(src_path, index=False)
-        return f"OK nonmonotonic on {len(fixed)} rows"
-
-    @staticmethod
-    def _fix_hydroid(grp: pd.DataFrame, strm_order: int) -> pd.DataFrame:
-        # Per-HydroID worker. Skipped if stream order is below threshold
-        # (low-order streams are often too noisy to trust the fix on).
-        if grp.empty or grp["order_"].iloc[0] < strm_order:
-            return grp
-        grp = grp.copy()
-        grp.loc[grp["Stage"] == 0, "Discharge (m3s-1)"] = 0
-
-        # Operate only on the channel portion.
-        if "bankfull_proxy" not in grp.columns:
-            return grp
-        chan = grp[grp["bankfull_proxy"] == "channel"]
-        non_mono_idx = chan.index[chan["Discharge (m3s-1)"].diff().lt(0)].tolist()
-        if not non_mono_idx:
-            return grp
-
-        # Replay all rows before the last nonmonotonic index using the
-        # geometry of that row. This forces a smooth, monotonically rising
-        # rating curve up to the violation.
-        target = non_mono_idx[-1]
-        tgt_cells = grp.at[target, "Number of Cells"]
-        tgt_sa = grp.at[target, "SurfaceArea (m2)"]
-        tgt_ba = grp.at[target, "BedArea (m2)"]
-        rows = slice(0, target)
-        grp.loc[rows, "Number of Cells"] = tgt_cells
-        grp.loc[rows, "SurfaceArea (m2)"] = tgt_sa
-        grp.loc[rows, "BedArea (m2)"] = tgt_ba
-
-        length_km = grp.loc[rows, "LENGTHKM"].replace(0, np.nan)
-        grp.loc[rows, "TopWidth (m)"] = tgt_sa / length_km / 1000
-        grp.loc[rows, "WettedPerimeter (m)"] = tgt_ba / length_km / 1000
-
-        wet_area = grp.loc[rows, "WetArea (m2)"]
-        grp.loc[rows, "HydraulicRadius (m)"] = (
-            wet_area / grp.loc[rows, "WettedPerimeter (m)"]
-        )
-        grp["HydraulicRadius (m)"] = grp["HydraulicRadius (m)"].fillna(0)
-
-        # Recompute discharge from the corrected geometry.
-        grp.loc[rows, "Discharge (m3s-1)"] = (
-            (
-                wet_area
-                * np.power(grp.loc[rows, "HydraulicRadius (m)"], 2.0 / 3)
-                * np.power(grp.loc[rows, "SLOPE"], 0.5)
-                / grp.loc[rows, "channel_n"]
-            )
-            if "channel_n" in grp.columns
-            else (
-                wet_area
-                * np.power(grp.loc[rows, "HydraulicRadius (m)"], 2.0 / 3)
-                * np.power(grp.loc[rows, "SLOPE"], 0.5)
-                / grp.loc[rows, "ManningN"]
-            )
-        )
+def _fix_hydroid(grp: pd.DataFrame, strm_order: int) -> pd.DataFrame:
+    # Per-HydroID fix; skip low-order reaches (too noisy to trust the correction).
+    if grp.empty or grp["order_"].iloc[0] < strm_order:
         return grp
+    grp = grp.copy()
+    grp.loc[grp["Stage"] == 0, "Discharge (m3s-1)"] = 0
+
+    if "bankfull_proxy" not in grp.columns:
+        return grp
+    chan = grp[grp["bankfull_proxy"] == "channel"]
+    non_mono_idx = chan.index[chan["Discharge (m3s-1)"].diff().lt(0)].tolist()
+    if not non_mono_idx:
+        return grp
+
+    # Replay every row up to the last violation with that row's geometry, so
+    # the channel curve rises smoothly to the violation point.
+    target = non_mono_idx[-1]
+    tgt_sa = grp.at[target, "SurfaceArea (m2)"]
+    tgt_ba = grp.at[target, "BedArea (m2)"]
+    rows = slice(0, target)
+    grp.loc[rows, "Number of Cells"] = grp.at[target, "Number of Cells"]
+    grp.loc[rows, "SurfaceArea (m2)"] = tgt_sa
+    grp.loc[rows, "BedArea (m2)"] = tgt_ba
+
+    length_km = grp.loc[rows, "LENGTHKM"].replace(0, np.nan)
+    grp.loc[rows, "TopWidth (m)"] = tgt_sa / length_km / 1000
+    grp.loc[rows, "WettedPerimeter (m)"] = tgt_ba / length_km / 1000
+
+    wet_area = grp.loc[rows, "WetArea (m2)"]
+    grp.loc[rows, "HydraulicRadius (m)"] = (
+        wet_area / grp.loc[rows, "WettedPerimeter (m)"]
+    )
+    grp["HydraulicRadius (m)"] = grp["HydraulicRadius (m)"].fillna(0)
+
+    # Re-derive discharge via Manning's (channel_n after subdiv, else ManningN).
+    n_col = "channel_n" if "channel_n" in grp.columns else "ManningN"
+    grp.loc[rows, "Discharge (m3s-1)"] = (
+        wet_area
+        * np.power(grp.loc[rows, "HydraulicRadius (m)"], 2.0 / 3)
+        * np.power(grp.loc[rows, "SLOPE"], 0.5)
+        / grp.loc[rows, n_col]
+    )
+    return grp

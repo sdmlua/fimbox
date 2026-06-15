@@ -52,7 +52,9 @@ _skip_no_branches = pytest.mark.skipif(
 # default: generate FIM for every discharge CSV in the AOI
 @_skip_no_branches
 def test_fim_all_discharge_inputs():
-    results = generateFIM(AOI_DIR, n_workers=N_WORKERS, depth=True).from_discharge_inputs()
+    results = generateFIM(
+        AOI_DIR, n_workers=N_WORKERS, depth=True
+    ).from_discharge_inputs()
     assert results
     for r in results:
         print(f"  extent={r.extent_path}")
