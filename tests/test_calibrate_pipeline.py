@@ -48,29 +48,26 @@ AOI_DIR = Path(".././out/test_smallB")
 # Bundled lookup tables shipped in the repo (all calibration inputs live here).
 DATA = Path(__file__).resolve().parents[1] / "data"
 
-# Bankfull recurrence flows
-BANKFULL_FLOWS_FILE = DATA / "nwm_high_water_threshold_cms.parquet"
+# Bankfull recurrence flows (NWM v3)
+BANKFULL_FLOWS_FILE = DATA / "nwm3_high_water_threshold_cms.parquet"
 
-# Variable-roughness Manning's n table
-VMANN_INPUT_FILE = DATA / "mannings_gbm_obank.parquet"
+# Optimized variable-roughness Manning's n table (per feature_id channel/overbank n)
+VMANN_INPUT_FILE = DATA / "mannings_global_optz.parquet"
 
-# USGS rating-curve calibration. Rating curve + NWM recurrence flows are
-# required; the acceptable-gage quality filter is optional (unfiltered when None).
+# USGS rating-curve calibration. Rating curve + NWM recurrence flows (v3) are
+# required; the acceptable-gage quality filter refines which gages qualify.
 USGS_RATING_CURVE_CSV = DATA / "usgs_rating_curves.parquet"
-NWM_RECUR_FILE = DATA / "nwm_recurrence_flows_cfs.parquet"
-USGS_ACCEPTABLE_GAGES = DATA / "usgs_gages_acceptance.parquet"
+NWM_RECUR_FILE = DATA / "nwm3_17C_recurrence_flows_cfs.parquet"
+USGS_ACCEPTABLE_GAGES = DATA / "acceptable_sites_for_rating_curves.parquet"
 
-# Bathymetry: eHydro surveyed channels (.gpkg) with columns ID,
-# missing_xs_area_m2, missing_wet_perimeter_m. Left unset until available.
-BATHY_EHYDRO_FILE = None
+# Bathymetry: eHydro surveyed channels (.gpkg). Supply it in data/, then set:
+BATHY_EHYDRO_FILE = DATA / "final_bathymetry_ehydro_ohrfc.gpkg"
 
-# Spatial-observation calibration: per-AOI benchmark points (.parquet) with
-# columns geometry, flow, submitter, coll_time, flow_unit, layer. Left unset
-# until available in that schema.
+# Spatial-observation calibration: per-AOI benchmark points (.parquet). Yet to
+# be added — left unset for now.
 CALIB_POINTS_FILE = None
 
-# Manual calibration: a small CSV you author with columns aoi_id, feature_id,
-# calb_coef_manual (discharge = pre_manual / coef). Left unset until provided.
+# Manual calibration: per-feature_id coefficient CSV. Yet to be added.
 MAN_CALB_FILE = None
 
 # Worker count for the branch-parallel routines — auto-sized to the device

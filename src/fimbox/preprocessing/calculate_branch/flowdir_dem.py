@@ -94,6 +94,10 @@ class D8SlopeDEM:
     flowdir: Path
     out_path: Path
     slope_min: float = 0.0001
+    # Upper bound on a physical channel slope. DEM artifacts / edge cells can
+    # otherwise yield impossible drops (e.g. 1000s) that collapse discharge
+    # downstream once clipped. Matches inundation-mapping's SLOPE_MAX.
+    slope_max: float = 0.5
 
     def __post_init__(self):
         self.dem = Path(self.dem)
@@ -114,7 +118,7 @@ class D8SlopeDEM:
         with rasterio.open(str(self.flowdir)) as fd_ds:
             d8 = fd_ds.read(1)
 
-        slope = _compute_d8_slope(elev, d8, res, nodata, self.slope_min)
+        slope = _compute_d8_slope(elev, d8, res, nodata, self.slope_min, self.slope_max)
 
         profile.update(
             dtype="float32",
@@ -139,6 +143,7 @@ def _compute_d8_slope(
     res: float,
     nodata: Optional[float],
     slope_min: float,
+    slope_max: float = 0.5,
 ) -> np.ndarray:
     """Vectorised D8 slope computation (one pass per direction)."""
     rows, cols = elev.shape
@@ -176,7 +181,9 @@ def _compute_d8_slope(
             valid_idxs = np.where(valid)[0]
 
         s = (z_cur - z_ds) / (dist_factor * res)
-        slope[valid_idxs] = np.maximum(s, slope_min)
+        # Clamp to [slope_min, slope_max]: floor flat/uphill cells, cap
+        # impossible drops from DEM artifacts so they can't poison discharge.
+        slope[valid_idxs] = np.clip(s, slope_min, slope_max)
 
     if nodata is not None:
         slope[nodata_mask] = nodata

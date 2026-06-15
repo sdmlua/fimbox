@@ -373,14 +373,27 @@ def extract_feature_ids(
     aoi = Path(aoi_dir)
     # branches/ live in watershed-data/; feature_id.csv lands at the AOI root.
     watershed = _resolve_watershed_dir(aoi)
-    pattern = str(watershed / "branches" / "*" / "hydroTable_*.csv")
-    paths = sorted(glob.glob(pattern))
+    # One hydroTable per branch — prefer the parquet, fall back to the csv.
+    paths = []
+    for bd in sorted(glob.glob(str(watershed / "branches" / "*"))):
+        bid = Path(bd).name
+        pq = Path(bd) / f"hydroTable_{bid}.parquet"
+        csv = Path(bd) / f"hydroTable_{bid}.csv"
+        if pq.is_file():
+            paths.append(pq)
+        elif csv.is_file():
+            paths.append(csv)
     if not paths:
         raise FileNotFoundError(
-            f"No hydroTable_*.csv files under {watershed}/branches/"
+            f"No hydroTable_*.(parquet|csv) files under {watershed}/branches/"
         )
 
-    frames = [pd.read_csv(p, usecols=["feature_id"]) for p in paths]
+    frames = [
+        pd.read_parquet(p, columns=["feature_id"])
+        if p.suffix.lower() in (".parquet", ".pq")
+        else pd.read_csv(p, usecols=["feature_id"])
+        for p in paths
+    ]
     fids = (
         pd.concat(frames, ignore_index=True)["feature_id"]
         .drop_duplicates()

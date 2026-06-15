@@ -33,6 +33,20 @@ PathLike = Union[str, Path]
 log = logging.getLogger(__name__)
 
 
+def _resolve_hydrotable(branch_dir: Path, bid: str) -> Path:
+    # Prefer the compact hydroTable_{bid}.parquet; fall back to the .csv.
+    pq = branch_dir / f"hydroTable_{bid}.parquet"
+    return pq if pq.is_file() else branch_dir / f"hydroTable_{bid}.csv"
+
+
+def _read_hydrotable(path: Path, usecols, dtype) -> pd.DataFrame:
+    # Parquet carries its own schema (usecols/dtype ignored); CSV uses both.
+    if path.suffix.lower() in (".parquet", ".pq"):
+        df = pd.read_parquet(path, columns=usecols)
+        return df.astype({c: t for c, t in dtype.items() if c in df.columns})
+    return pd.read_csv(path, usecols=usecols, dtype=dtype)
+
+
 class NoForecastMatch(Exception):
     # Raised when a hydroTable shares no feature_ids with the forecast.
     pass
@@ -82,7 +96,7 @@ class Inundator:
                 / f"gw_catchments_reaches_filtered_addedAttributes_{bid}.tif"
             )
         if self.hydrotable_csv is None:
-            self.hydrotable_csv = self.branch_dir / f"hydroTable_{bid}.csv"
+            self.hydrotable_csv = _resolve_hydrotable(self.branch_dir, bid)
 
         # Output directory: explicit out_dir wins; otherwise outputs go alongside the input rasters in branch_dir.
         write_dir = Path(self.out_dir) if self.out_dir is not None else self.branch_dir
@@ -164,12 +178,18 @@ class Inundator:
     def _build_stage_lookup(self, forecast: pd.DataFrame) -> dict[int, float]:
         ht_cols_needed = ["feature_id", "HydroID", "stage", "discharge_cms"]
         ht_optional = ["LakeID"]
-        header = pd.read_csv(self.hydrotable_csv, nrows=0).columns
+        ht_path = Path(self.hydrotable_csv)
+        if ht_path.suffix.lower() in (".parquet", ".pq"):
+            import pyarrow.parquet as pq
+
+            header = pq.read_schema(ht_path).names
+        else:
+            header = pd.read_csv(ht_path, nrows=0).columns
         usecols = [c for c in ht_cols_needed + ht_optional if c in header]
-        ht = pd.read_csv(
-            self.hydrotable_csv,
-            usecols=usecols,
-            dtype={
+        ht = _read_hydrotable(
+            ht_path,
+            usecols,
+            {
                 "feature_id": np.int64,
                 "HydroID": np.int64,
                 "stage": np.float64,

@@ -431,13 +431,15 @@ def _select_slope(base: pd.DataFrame, src_slope_source: str) -> pd.Series:
     ``hfab``: hydrofabric slope where in range, else DEM. ``dem``: DEM only.
     All fall back to the DEM rise/run slope when the preferred source is
     missing, so SLOPE is never NaN."""
-    dem = pd.to_numeric(base.get("SLOPE_RISE_RUN"), errors="coerce")
-
     def _in_range(col: str) -> pd.Series:
         if col not in base.columns:
             return pd.Series(np.nan, index=base.index)
         v = pd.to_numeric(base[col], errors="coerce")
         return v.where((v >= SLOPE_MIN) & (v <= SLOPE_MAX))
+
+    # Range-filter the DEM fallback too — an out-of-range DEM slope (e.g. a
+    # 1000s artifact) must drop out, not survive to be floored to ~zero.
+    dem = _in_range("SLOPE_RISE_RUN")
 
     if src_slope_source == "dem":
         return dem
@@ -482,7 +484,8 @@ def _build_src_full(
     base["SLOPE_RISE_RUN"] = pd.to_numeric(base["SLOPE"], errors="coerce")
     chosen = _select_slope(base, src_slope_source)
 
-    # Sanity-bound the chosen slope so Manning's equation stays well-defined.
+    # Last-resort floor: reaches with no in-range slope from any source get
+    # SLOPE_MIN (garbage was already filtered out in _select_slope).
     chosen = chosen.where(
         (chosen >= SLOPE_MIN) & (chosen <= SLOPE_MAX), other=SLOPE_MIN
     )
