@@ -95,6 +95,17 @@ class CreateHAND:
     min_stream_length: float = 0.5
     crosswalk_max_distance_m: float = 100.0
 
+    # SRC slope source for the crosswalk's rating-curve build:
+    #   "iris_sword" (default) — IRIS-SWORD slope on order_>=4 streams, else DEM
+    #   "dem"                  — DEM rise/run slope only
+    #   "hfab"                 — hydrofabric native slope, else DEM fallback
+    src_slope_source: str = "iris_sword"
+    # IRIS-SWORD slope table (feature_id, slope_iris_sword). None -> the table
+    # shipped with the package is used when src_slope_source == "iris_sword".
+    iris_slope_csv: Optional[Path] = None
+    # Hydrofabric slope column name when it isn't the usual 'Slope'/'So'.
+    hfab_slope_column: Optional[str] = None
+
     # back-compat alias — older callers pass ``wbd8_clp_gpkg``. Resolved to
     # ``boundary_gpkg`` in __post_init__ if explicitly set.
     wbd8_clp_gpkg: Optional[Path] = None
@@ -137,6 +148,7 @@ class CreateHAND:
             "osm_bridges_gpkg",
             "osm_roads_gpkg",
             "bridge_diff_raster",
+            "iris_slope_csv",
         ):
             val = getattr(self, attr)
             if val is not None:
@@ -238,6 +250,7 @@ class CreateHAND:
                 headwaters=self.headwaters_path,
                 out_flowaccum=flowaccum,
                 out_stream_pixels=stream_pixels,
+                stream_raster=bd / f"flows_grid_boolean_{bid}.tif",
             ).run()
             outputs["flowaccum"] = flowaccum
             outputs["stream_pixels"] = stream_pixels
@@ -645,6 +658,9 @@ class CreateHAND:
                     min_stream_length=self.min_stream_length,
                     max_distance_m=self.crosswalk_max_distance_m,
                     small_segments_csv=sml_seg_csv,
+                    src_slope_source=self.src_slope_source,
+                    iris_slope_csv=self.iris_slope_csv,
+                    hfab_slope_column=self.hfab_slope_column,
                 )
                 outputs.update(xwalk_out)
             except NoCrosswalkError as exc:

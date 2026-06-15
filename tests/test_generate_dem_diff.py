@@ -10,10 +10,10 @@ import fimbox
 log = logging.getLogger(__name__)
 
 bridge_gpkg = (
-    ".././out/test_smallB/osm_bridges_subset.gpkg"
+    ".././out/test_smallB/watershed-data/osm_bridges_subset.gpkg"
 )
-dem_path = ".././out/test_smallB/dem.tif"
-out_dir = ".././out/test_smallB"
+dem_path = ".././out/test_smallB/watershed-data/dem.tif"
+out_dir = ".././out/test_smallB/watershed-data"
 
 
 # check which bridges already have rasters vs still pending (safe to run anytime)

@@ -11,6 +11,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Optional, Union
 
+from ...logging_utils import WATERSHED_DIR_NAME, aoi_root
+
 PathLike = Union[str, Path]
 
 
@@ -38,7 +40,17 @@ def resolve_aoi_dir(
     chosen = aoi_dir if aoi_dir is not None else huc_dir
     if chosen is None:
         raise TypeError("Either aoi_dir= or huc_dir= must be provided.")
-    return Path(chosen)
+    p = Path(chosen)
+    # Accept the AOI root, its watershed-data/ subfolder, or a legacy flat
+    # layout. Calibration operates on the folder that holds branches/.
+    if p.name != WATERSHED_DIR_NAME and (p / WATERSHED_DIR_NAME / "branches").is_dir():
+        return p / WATERSHED_DIR_NAME
+    return p
+
+
+def aoi_id_of(aoi_dir: PathLike) -> str:
+    # AOI identifier = the AOI root folder name (hops out of watershed-data/).
+    return aoi_root(Path(aoi_dir)).name
 
 
 def iter_branches(aoi_dir: Path, *, exclude_zero: bool = True):

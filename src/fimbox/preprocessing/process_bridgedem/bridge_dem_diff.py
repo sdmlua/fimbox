@@ -63,20 +63,12 @@ class BridgeDEMDiff:
         self.out_dir.mkdir(parents=True, exist_ok=True)
 
     def run(self) -> Path:
-        log_path = self.out_dir / "processing.log"
-        fh = logging.FileHandler(log_path, mode="a", encoding="utf-8")
-        fh.setLevel(logging.DEBUG)
-        fh.setFormatter(
-            logging.Formatter(
-                "%(asctime)s  %(levelname)-8s  %(message)s", datefmt="%Y-%m-%d %H:%M:%S"
-            )
-        )
-        log.addHandler(fh)
-        try:
-            return self._run()
-        finally:
-            log.removeHandler(fh)
-            fh.close()
+        # Route logs to the AOI-root processing.log in the standard format,
+        # same as every other stage.
+        from ...logging_utils import attach_case_log
+
+        attach_case_log(self.out_dir)
+        return self._run()
 
     def _run(self) -> Path:
         bridges = self._load_bridges()

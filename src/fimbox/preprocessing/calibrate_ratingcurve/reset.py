@@ -20,22 +20,19 @@ from typing import Optional
 
 import pandas as pd
 
-from ._common import PathLike, resolve_aoi_dir
+from ._common import PathLike, aoi_id_of, resolve_aoi_dir
 
 log = logging.getLogger(__name__)
 
 
-# Columns kept in src_full_crosswalked after a reset. Anything else is a
-# calibration artefact we want to clear.
+# Columns kept in src_full_crosswalked after a reset. Anything else (the
+# bankfull / subdivision columns) is a calibration artefact we clear.
+# Only the names that actually exist in a given file are kept, so optional
+# slope variants can be listed here even when they aren't present yet.
 _PRESERVE_COLUMNS = [
-    "SLOPE_RISE_RUN",
-    "ManningN",
     "HydroID",
     "NextDownID",
     "order_",
-    "SLOPE_HFAB",
-    "SLOPE_IRIS_SWORD",
-    "SLOPE",
     "feature_id",
     "Stage",
     "Number of Cells",
@@ -49,9 +46,16 @@ _PRESERVE_COLUMNS = [
     "WetArea (m2)",
     "HydraulicRadius (m)",
     "Discharge (m3s-1)",
+    "SLOPE",
+    "ManningN",
     "Bathymetry_source",
     "default_SLOPE",
     "default_ManningN",
+
+    # Slope variants carried from the crosswalk (kept only if present).
+    "SLOPE_RISE_RUN",
+    "SLOPE_HFAB",
+    "SLOPE_IRIS_SWORD",
 ]
 
 
@@ -61,7 +65,7 @@ class HydroTableReset:
 
     def run(self) -> None:
         aoi_dir = resolve_aoi_dir(self.aoi_dir)
-        aoi_id = aoi_dir.name
+        aoi_id = aoi_id_of(aoi_dir)
         log.info(f"--- HydroTableReset: {aoi_id} ---")
         branches_dir = aoi_dir / "branches"
         if not branches_dir.is_dir():
@@ -69,9 +73,9 @@ class HydroTableReset:
             return
         for bd in sorted(branches_dir.iterdir()):
             if bd.is_dir():
-                self._reset_one(bd, bd.name, aoi_id)
+                self._reset_one(bd, bd.name)
 
-    def _reset_one(self, branch_dir: Path, bid: str, aoi_id: str) -> None:
+    def _reset_one(self, branch_dir: Path, bid: str) -> None:
         src_base = branch_dir / f"src_base_{bid}.csv"
         src_full = branch_dir / f"src_full_crosswalked_{bid}.csv"
         htable = branch_dir / f"hydroTable_{bid}.csv"
@@ -140,7 +144,7 @@ class HydroTableReset:
         recalc.loc[recalc["Stage"] == 0, "Discharge (m3s-1)"] = 0
 
         if small_segs.is_file():
-            recalc = self._apply_small_segments(recalc, small_segs, aoi_id)
+            recalc = self._apply_small_segments(recalc, small_segs)
 
         # Push the recomputed discharge back into both files.
         full = full.set_index(["HydroID", "Stage"])
@@ -167,49 +171,34 @@ class HydroTableReset:
 
     @staticmethod
     def _apply_small_segments(
-        recalc: pd.DataFrame, small_segs_path: Path, aoi_id: str
+        recalc: pd.DataFrame, small_segs_path: Path
     ) -> pd.DataFrame:
-        # Replace short-reach SRC entries with the parent reach's values so
-        # very short reaches don't have noisy rating curves. Vector path for
-        # Alaska (HUC2=19), per-row path otherwise.
+        # Replace each short reach's rating curve with its parent reach's
+        # values (matched stage-by-stage) so very short reaches don't carry
+        # noisy curves. small_segments maps short_id -> update_id (parent).
         sml = pd.read_csv(small_segs_path, dtype=str)
         if sml.empty:
             return recalc
 
-        if aoi_id.startswith("19"):
-            new_values = recalc[recalc["HydroID"].isin(sml["update_id"])][
-                ["HydroID", "Stage", "Discharge (m3s-1)"]
-            ]
-            merged = sml.merge(
-                new_values,
-                left_on="update_id",
-                right_on="HydroID",
-                suffixes=("", "_new"),
-            )
-            merged = merged[["short_id", "Stage", "Discharge (m3s-1)"]]
-            recalc = recalc.merge(
-                merged.rename(columns={"short_id": "HydroID"}),
-                on=["HydroID", "Stage"],
-                how="left",
-                suffixes=("", "_sml"),
-            )
-            recalc["Discharge (m3s-1)"] = recalc["Discharge (m3s-1)_sml"].fillna(
-                recalc["Discharge (m3s-1)"]
-            )
-            recalc = recalc.drop(columns=["Discharge (m3s-1)_sml"], errors="ignore")
-            return recalc
+        # Parent (update_id) discharge at each stage, relabelled to the short
+        # reach, then merged back so the short reach inherits it.
+        parent_q = recalc[recalc["HydroID"].isin(sml["update_id"])][
+            ["HydroID", "Stage", "Discharge (m3s-1)"]
+        ]
+        relabelled = sml.merge(
+            parent_q, left_on="update_id", right_on="HydroID", suffixes=("", "_new")
+        )[["short_id", "Stage", "Discharge (m3s-1)"]]
 
-        for _, seg in sml.iterrows():
-            short_id, update_id = seg.iloc[0], seg.iloc[1]
-            new_vals = recalc.loc[
-                recalc["HydroID"] == update_id, ["Stage", "Discharge (m3s-1)"]
-            ]
-            for _, sv in new_vals.iterrows():
-                mask = (recalc["HydroID"] == short_id) & (
-                    recalc["Stage"] == sv["Stage"]
-                )
-                recalc.loc[mask, "Discharge (m3s-1)"] = sv["Discharge (m3s-1)"]
-        return recalc
+        recalc = recalc.merge(
+            relabelled.rename(columns={"short_id": "HydroID"}),
+            on=["HydroID", "Stage"],
+            how="left",
+            suffixes=("", "_sml"),
+        )
+        recalc["Discharge (m3s-1)"] = recalc["Discharge (m3s-1)_sml"].fillna(
+            recalc["Discharge (m3s-1)"]
+        )
+        return recalc.drop(columns=["Discharge (m3s-1)_sml"], errors="ignore")
 
 
 # Function-style wrapper for callers that prefer it.

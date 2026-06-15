@@ -22,6 +22,7 @@ import pandas as pd
 from ._common import (
     HYDROTABLE_DTYPES,
     PathLike,
+    aoi_id_of,
     not_yet_ported,
     resolve_aoi_dir,
 )
@@ -55,7 +56,7 @@ class ManualCalibrator:
         if not calib_path.exists():
             raise FileNotFoundError(f"No calibration file at {calib_path}")
 
-        aoi_id = aoi_dir.name
+        aoi_id = aoi_id_of(aoi_dir)
         log.info(f"--- ManualCalibrator: {aoi_id} ---")
 
         calib = pd.read_csv(calib_path, index_col=False)

@@ -65,9 +65,10 @@ nwm_subset_streams_levelPaths_dissolved_extended_{}.gpkg
 nwm_subset_streams_levelPaths_dissolved_headwaters_{}.gpkg
 nwm_subset_streams_levelPaths_extended_{}.gpkg
 #osm_bridge_centroids_{}.gpkg
-# fimbox-only output (road FIMpact diagnostic CSV); not part of the kept set
-# in the reference inundation-mapping pipeline.
-osm_roads_fimpact_{}.csv
+# Kept (commented out): the calibration aggregate rolls the per-branch road
+# FIMpact CSVs up into the AOI-level osm_roads_fimpact.csv, so they must
+# survive branch cleanup. Same reasoning as osm_bridge_centroids above.
+#osm_roads_fimpact_{}.csv
 #ras_elev_table.csv
 rem_{}.tif
 # rem_zeroed_masked_{}.tif

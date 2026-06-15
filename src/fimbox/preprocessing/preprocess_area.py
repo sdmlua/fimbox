@@ -701,8 +701,8 @@ class getAllInputData:
                             f"{_FILENAMES['levee_lines_burned']}"
                         )
                 else:
-                    self.logger.warning(
-                        "NLD: no levee lines found within this boundary."
+                    self.logger.info(
+                        "NLD: no levee lines in this area — skipping levee burn."
                     )
             except Exception as exc:
                 self.logger.error(
@@ -716,8 +716,8 @@ class getAllInputData:
                     f"Levee protected areas --> {_FILENAMES['levee_protected_areas']}"
                 )
             else:
-                self.logger.warning(
-                    "NLD: no levee protected-area polygons found within this boundary."
+                self.logger.info(
+                    "NLD: no levee protected areas in this area."
                 )
 
     def run_osm(self):

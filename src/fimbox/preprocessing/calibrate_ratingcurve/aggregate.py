@@ -28,6 +28,7 @@ from ._common import (
     ROAD_DTYPES,
     SRC_CROSS_DTYPES,
     USGS_DTYPES,
+    aoi_id_of,
     resolve_aoi_dir,
 )
 
@@ -53,7 +54,7 @@ class BranchAggregator:
         if not aoi_dir.is_dir():
             raise NotADirectoryError(aoi_dir)
 
-        aoi_id = aoi_dir.name
+        aoi_id = aoi_id_of(aoi_dir)
         log.info(f"--- BranchAggregator: {aoi_id} ---")
 
         branches_dir = aoi_dir / "branches"
@@ -273,7 +274,7 @@ class BranchAggregator:
             "is_backwater",
         ] = 1
 
-        bridge_pnts = bridge_pnts.astype(BRIDGE_DTYPES, errors="ignore")
+        bridge_pnts = _astype_present(bridge_pnts, BRIDGE_DTYPES)
         bridge_pnts = gpd.GeoDataFrame(bridge_pnts, geometry="geometry")
         if bridge_pnts.crs is None:
             bridge_pnts = bridge_pnts.set_crs(self.default_crs)
@@ -290,9 +291,18 @@ class BranchAggregator:
         out = pd.concat(frames, ignore_index=True)
         if out.empty:
             return
-        out = out.astype(ROAD_DTYPES, errors="ignore")
+        out = _astype_present(out, ROAD_DTYPES)
         out.to_csv(out_path, index=False)
         log.info(f"AOI roads FIMpact --> {out_path.name} ({len(out)} rows)")
+
+
+def _astype_present(df: pd.DataFrame, dtypes: dict) -> pd.DataFrame:
+    # Cast only the dtype-map columns that actually exist. pandas'
+    # astype(errors="ignore") ignores *conversion* failures but still raises
+    # KeyError on a missing column, so filter the map down to present columns
+    # first (live bridge/road exports don't always carry every schema column).
+    present = {c: t for c, t in dtypes.items() if c in df.columns}
+    return df.astype(present, errors="ignore")
 
 
 def _flow_lookup(stage: float, hydroid: int, htable: pd.DataFrame) -> float:

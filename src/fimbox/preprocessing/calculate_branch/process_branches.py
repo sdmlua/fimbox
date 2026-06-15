@@ -153,6 +153,10 @@ class AOIProcessingConfig:
         min_catchment_area: float = 0.25,
         min_stream_length: float = 0.5,
         crosswalk_max_distance_m: float = 100.0,
+        # SRC slope source: "iris_sword" (default) | "dem" | "hfab".
+        src_slope_source: str = "iris_sword",
+        iris_slope_csv: Optional[Path] = None,
+        hfab_slope_column: Optional[str] = None,
         evaluate_crosswalk: bool = False,
         convert_to_int16: bool = False,
         # gage crosswalk schema
@@ -160,6 +164,10 @@ class AOIProcessingConfig:
         # branch-zero post-CreateHAND steps
         run_branch_zero_usgs_crosswalk: bool = False,
         delete_deny_list: bool = True,
+        # When True, keep the output dir of branches that fail with
+        # no_flowlines / no_crosswalk / too_many_hydroids instead of wiping
+        # it. Useful for debugging why a branch produced no streams.
+        keep_failed_branches: bool = False,
         deny_branch_zero_list: Optional[Path] = None,
         deny_branches_list: Optional[Path] = None,
         # parallelism
@@ -213,10 +221,14 @@ class AOIProcessingConfig:
         self.min_catchment_area = min_catchment_area
         self.min_stream_length = min_stream_length
         self.crosswalk_max_distance_m = crosswalk_max_distance_m
+        self.src_slope_source = src_slope_source
+        self.iris_slope_csv = iris_slope_csv
+        self.hfab_slope_column = hfab_slope_column
         self.evaluate_crosswalk = evaluate_crosswalk
         self.convert_to_int16 = convert_to_int16
         self.gage_aoi_filter_column = gage_aoi_filter_column
         self.run_branch_zero_usgs_crosswalk = run_branch_zero_usgs_crosswalk
+        self.keep_failed_branches = bool(keep_failed_branches)
         self.delete_deny_list = bool(delete_deny_list)
         self.deny_branch_zero_list = (
             Path(deny_branch_zero_list) if deny_branch_zero_list else None
@@ -298,11 +310,17 @@ def process_branches(cfg: AOIProcessingConfig) -> list[BranchResult]:
         log.warning("No non-zero branches found — only branch zero will exist.")
 
     results: list[BranchResult] = []
-    if branch_ids:
+    if branch_ids and cfg.n_workers <= 1:
+        # True serial path: one branch at a time, no Dask. Use n_workers=1 to
+        # isolate concurrency effects from deterministic per-branch behaviour.
+        log.info("Processing %d branches serially (n_workers=1)", len(branch_ids))
+        for bid in branch_ids:
+            results.append(_process_single_branch(cfg, bid))
+    elif branch_ids:
         from ..._dask import get_client
         from distributed import as_completed as dask_as_completed
 
-        client = get_client(n_workers=cfg.n_workers if cfg.n_workers > 1 else None)
+        client = get_client(n_workers=cfg.n_workers)
         log.info(
             "Dispatching %d branches to Dask (%d workers, dashboard %s)",
             len(branch_ids),
@@ -384,6 +402,7 @@ def _cleanup_after_all(
                     src_dir=bzero_dir,
                     deny_list=deny_bz,
                     branch_id=cfg.branch_zero_id,
+                    identifier=detect_identifier(cfg.aoi_dir),
                     verbose=True,
                 )
             except Exception as exc:
@@ -398,6 +417,7 @@ def _cleanup_after_all(
         return
 
     log.info(f"--- per-branch outputs cleanup ({Path(deny_br).name}) ---")
+    aoi_identifier = detect_identifier(cfg.aoi_dir)
     for r in results:
         if r.status != "ok" or r.branch_id == cfg.branch_zero_id:
             continue
@@ -409,6 +429,7 @@ def _cleanup_after_all(
                 src_dir=branch_dir,
                 deny_list=deny_br,
                 branch_id=r.branch_id,
+                identifier=aoi_identifier,
                 verbose=False,
             )
         except Exception as exc:
@@ -690,6 +711,9 @@ def _process_single_branch(cfg: AOIProcessingConfig, branch_id: str) -> BranchRe
             min_catchment_area=cfg.min_catchment_area,
             min_stream_length=cfg.min_stream_length,
             crosswalk_max_distance_m=cfg.crosswalk_max_distance_m,
+            src_slope_source=cfg.src_slope_source,
+            iris_slope_csv=cfg.iris_slope_csv,
+            hfab_slope_column=cfg.hfab_slope_column,
         ).run()
 
         # USGS gage crosswalk (optional)
@@ -785,7 +809,13 @@ def _process_single_branch(cfg: AOIProcessingConfig, branch_id: str) -> BranchRe
         status = _classify_branch_error(msg)
         branch_log.error(f"Branch {branch_id} {status} ({elapsed:.1f}s): {exc}")
         if status in ("no_flowlines", "no_crosswalk", "too_many_hydroids"):
-            _wipe_branch_dir(branch_dir)
+            if cfg.keep_failed_branches:
+                branch_log.warning(
+                    f"Branch {branch_id} {status}: keeping dir for debugging "
+                    "(keep_failed_branches=True)"
+                )
+            else:
+                _wipe_branch_dir(branch_dir)
         return BranchResult(
             branch_id=branch_id, status=status, elapsed_s=elapsed, error=msg
         )

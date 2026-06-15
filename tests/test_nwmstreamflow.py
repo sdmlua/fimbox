@@ -26,16 +26,14 @@ from fimbox import (
 
 AOI_DIR = Path(".././out/test_smallB")
 
-START = "2020-05-19"
-END = "2020-05-22"
-EVENT = "2020-05-20 12:00:00"
-USGS_SITE = "07289000"
-FEATURE_ID = 25747229
+START = "2016-10-05"
+END = "2016-10-20"
+EVENT = "2020-10-10 21:00:00"
 
 
 # retrospective — different extraction combinations
-# def test_retrospective_event_date():
-#     getNWMretrospective(AOI_DIR, date=EVENT)
+def test_retrospective_event_date():
+    getNWMretrospective(AOI_DIR, date=EVENT)
 
 
 # def test_retrospective_range_continuous():
@@ -71,15 +69,15 @@ FEATURE_ID = 25747229
 #     USGSData(AOI_DIR).fetch([USGS_SITE], START, END)
 
 
-def test_usgs_feature_id_pairs():
-    # which USGS gage falls on which reach (feature_id) within the AOI
-    pairs = get_usgs_fid_pairs(AOI_DIR)
-    print(pairs)
+# def test_usgs_feature_id_pairs():
+#     # which USGS gage falls on which reach (feature_id) within the AOI
+#     pairs = get_usgs_fid_pairs(AOI_DIR)
+#     print(pairs)
 
 
-# plots
-def test_plot_feature_id():
-    plot_nwm(AOI_DIR, [FEATURE_ID], START, END)
+# # plots
+# def test_plot_feature_id():
+#     plot_nwm(AOI_DIR, [FEATURE_ID], START, END)
 
 
 # def test_plot_usgs():

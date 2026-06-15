@@ -21,6 +21,7 @@ import logging
 from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Optional
 
 import numpy as np
 
@@ -62,10 +63,16 @@ class FlowAccDEM:
     out_flowaccum: Path
     out_stream_pixels: Path
     threshold: float = 1.0
+    # Rasterized level-path network (flows_grid_boolean_{id}.tif). Used as a
+    # fallback seed when the single headwater point fails to produce a network
+    # (e.g. it rasterized into a nodata pocket away from the flow grid).
+    stream_raster: Optional[Path] = None
 
     def __post_init__(self):
         for attr in ("flowdir", "headwaters", "out_flowaccum", "out_stream_pixels"):
             setattr(self, attr, Path(getattr(self, attr)))
+        if self.stream_raster is not None:
+            self.stream_raster = Path(self.stream_raster)
         self.out_flowaccum.parent.mkdir(parents=True, exist_ok=True)
 
     def run(self) -> tuple[Path, Path]:
@@ -76,30 +83,69 @@ class FlowAccDEM:
             profile = src.profile.copy()
             d8_raw = src.read(1)
             nodata_d8 = src.nodata
+            d8_transform = src.transform
+            d8_crs = src.crs
 
         log.info("FlowAccDEM: reading headwaters raster --> %s", self.headwaters.name)
         with rasterio.open(str(self.headwaters)) as src:
             hw_raw = src.read(1).astype(np.float32)
             nodata_hw = src.nodata
+            hw_transform = src.transform
+            hw_crs = src.crs
 
-        # zero out nodata cells so they don't contribute
         if nodata_hw is not None:
             hw_raw[hw_raw == nodata_hw] = 0.0
-        # treat WBT nodata D8 cells as outlets (code = 0 --> no downstream)
+        # WBT nodata D8 cells -> outlets (no downstream)
         d8 = d8_raw.copy()
         if nodata_d8 is not None:
             d8[d8_raw == nodata_d8] = 0
+
+        # Headwaters and flowdir are clipped separately, so their grids can drift
+        # by a row/col; align the seeds onto the flowdir grid before accumulating.
+        if hw_raw.shape != d8.shape or hw_transform != d8_transform:
+            from rasterio.warp import Resampling, reproject
+
+            aligned = np.zeros(d8.shape, dtype=np.float32)
+            reproject(
+                source=hw_raw, destination=aligned,
+                src_transform=hw_transform, src_crs=hw_crs,
+                dst_transform=d8_transform, dst_crs=d8_crs,
+                resampling=Resampling.max,
+            )
+            log.info("FlowAccDEM: aligned headwaters %s -> %s", hw_raw.shape, d8.shape)
+            hw_raw = aligned
+
+        # Snap seeds off non-flowing cells onto the nearest flowing cell.
+        hw_raw = _snap_seeds_to_network(hw_raw, d8)
 
         log.info(
             "FlowAccDEM: topological BFS on %d × %d grid", d8.shape[0], d8.shape[1]
         )
         accum = _d8_flow_accum(d8, hw_raw)
 
-        stream_pix = np.where(accum >= self.threshold, 1.0, -9999.0).astype(np.float32)
-        stream_count = int((stream_pix == 1.0).sum())
+        accum, stream_count = self._stream_count(accum)
         log.info(
             "FlowAccDEM: %d stream cells (threshold=%.1f)", stream_count, self.threshold
         )
+
+        # The lone headwater point can rasterize into a nodata pocket far from
+        # the flow grid, yielding ~0 cells. Re-seed from the full rasterized
+        # level-path network so the real channel is always captured.
+        if stream_count <= 1 and self.stream_raster and self.stream_raster.is_file():
+            with rasterio.open(str(self.stream_raster)) as src:
+                sr = src.read(1)
+                sr_nodata = src.nodata
+            seeds = (sr > 0) if sr_nodata is None else ((sr > 0) & (sr != sr_nodata))
+            if seeds.shape == d8.shape and seeds.any():
+                accum = _d8_flow_accum(d8, seeds.astype(np.float32))
+                accum, stream_count = self._stream_count(accum)
+                log.info(
+                    "FlowAccDEM: re-seeded from level-path network "
+                    "(%d seed cells) -> %d stream cells",
+                    int(seeds.sum()), stream_count,
+                )
+
+        stream_pix = np.where(accum >= self.threshold, 1.0, -9999.0).astype(np.float32)
 
         _lzw_profile = dict(
             compress="lzw", tiled=True, blockxsize=512, blockysize=512, BIGTIFF="YES"
@@ -122,6 +168,36 @@ class FlowAccDEM:
         )
 
         return self.out_flowaccum, self.out_stream_pixels
+
+    def _stream_count(self, accum: np.ndarray) -> tuple[np.ndarray, int]:
+        # Cells at/above the threshold are stream cells.
+        return accum, int((accum >= self.threshold).sum())
+
+
+def _snap_seeds_to_network(hw: np.ndarray, d8: np.ndarray, radius: int = 3) -> np.ndarray:
+    """Move headwater seeds that landed on a non-flowing cell (D8 code 0) onto
+    the nearest flowing cell within ``radius``, so the weight enters the D8
+    network. Seeds already on a flowing cell are left untouched."""
+    seed_rc = np.argwhere(hw > 0)
+    if seed_rc.size == 0:
+        return hw
+    rows, cols = d8.shape
+    out = hw.copy()
+    for r, c in seed_rc:
+        if d8[r, c] != 0:
+            continue  # already on a flowing cell
+        best = None
+        for dr in range(-radius, radius + 1):
+            for dc in range(-radius, radius + 1):
+                nr, nc = r + dr, c + dc
+                if 0 <= nr < rows and 0 <= nc < cols and d8[nr, nc] != 0:
+                    dist = dr * dr + dc * dc
+                    if best is None or dist < best[0]:
+                        best = (dist, nr, nc)
+        if best is not None:
+            out[r, c] = 0.0
+            out[best[1], best[2]] += hw[r, c]
+    return out
 
 
 def _d8_flow_accum(d8: np.ndarray, hw: np.ndarray) -> np.ndarray:

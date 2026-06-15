@@ -13,10 +13,12 @@ ManualCalibrator, manual_calibration             per-feature_id manual ManningN
 SrcBankfull                                       identify bankfull stage
 SrcSubdiv                                         channel/overbank subdivision
 SrcNonmonotonic                                   force monotonic rating curves
+ThalwegNotchesAdjustment                          remove thalweg-notch artifacts
+LongitudinalFlowFilter                            smooth geometry along reaches
+BathymetricAdjustment                             add eHydro / AI channel depth
 
 Stubs
 ---------
-ThalwegNotchesAdjustment, LongitudinalFlowFilter, BathymetricAdjustment
 UsgsRatingCalibrator, Ras2fimCalibrator, SpatialObsCalibrator
 """
 
@@ -29,6 +31,7 @@ from .dem_adjust import (
     LongitudinalFlowFilter,
     ThalwegNotchesAdjustment,
 )
+from .logscan import LogScanner, scan_logs
 from .pipeline import CalibrationConfig, Calibrator, run_calibration
 from .reset import HydroTableReset, reset_hydro_and_src
 from .src_adjust import SrcBankfull, SrcNonmonotonic, SrcSubdiv
@@ -60,22 +63,28 @@ def nonmonotonic_src_adjustment(aoi_dir):
     return SrcNonmonotonic(aoi_dir=aoi_dir).run()
 
 
-def thalweg_notches_adjustment(aoi_dir):
-    return ThalwegNotchesAdjustment(aoi_dir=aoi_dir).run()
+def thalweg_notches_adjustment(aoi_dir, *, n_workers: int = 1):
+    return ThalwegNotchesAdjustment(aoi_dir=aoi_dir, n_workers=n_workers).run()
 
 
-def longitudinal_flow_adjustment(aoi_dir):
-    return LongitudinalFlowFilter(aoi_dir=aoi_dir).run()
+def longitudinal_flow_adjustment(aoi_dir, *, n_workers: int = 1):
+    return LongitudinalFlowFilter(aoi_dir=aoi_dir, n_workers=n_workers).run()
 
 
 def bathymetric_adjustment(
-    aoi_dir, bathy_file_ehydro=None, bathy_file_aibased=None, *, ai_toggle: int = 0
+    aoi_dir,
+    bathy_file_ehydro=None,
+    bathy_file_aibased=None,
+    *,
+    ai_toggle: int = 0,
+    ai_strm_order: int = 4,
 ):
     return BathymetricAdjustment(
         aoi_dir=aoi_dir,
         bathy_file_ehydro=bathy_file_ehydro,
         bathy_file_aibased=bathy_file_aibased,
         ai_toggle=ai_toggle,
+        ai_strm_order=ai_strm_order,
     ).run()
 
 
@@ -117,11 +126,13 @@ __all__ = [
     "Calibrator",
     "run_calibration",
     "CalibrationNotImplemented",
-    # aggregator + reset
+    # aggregator + reset + log scan
     "BranchAggregator",
     "aggregate_branches",
     "HydroTableReset",
     "reset_hydro_and_src",
+    "LogScanner",
+    "scan_logs",
     # SRC adjustments (implemented)
     "SrcBankfull",
     "SrcSubdiv",

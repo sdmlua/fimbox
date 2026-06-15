@@ -47,8 +47,7 @@ class ESRI_REST:
     def _get_metadata(self, params: dict) -> int:
         """Fetch total feature count for the given query parameters."""
         count_params = {**params, "returnCountOnly": "true", "f": "json"}
-        response = requests.get(self.url, params=count_params, timeout=60)
-        response.raise_for_status()
+        response = self._get_with_retry(count_params, timeout=60)
         return response.json().get("count", 0)
 
     # Page size and retry behaviour for ESRI paginated queries. ESRI servers
@@ -62,6 +61,34 @@ class ESRI_REST:
     MIN_PAGE_SIZE = 50
     MAX_PAGE_RETRIES = 4
     RETRY_BACKOFF_S = 2.0
+
+    def _get_with_retry(self, params: dict, timeout: int = 120):
+        """GET with retry on transient network errors (dropped streams,
+        connection resets, timeouts). The NLD ESRI server intermittently
+        ends responses prematurely; a short retry usually succeeds."""
+        last_exc = None
+        for attempt in range(self.MAX_PAGE_RETRIES):
+            try:
+                resp = requests.get(self.url, params=params, timeout=timeout)
+                resp.raise_for_status()
+                return resp
+            except (
+                requests.exceptions.ChunkedEncodingError,
+                requests.exceptions.ConnectionError,
+                requests.exceptions.Timeout,
+            ) as exc:
+                last_exc = exc
+                if attempt < self.MAX_PAGE_RETRIES - 1:
+                    wait = self.RETRY_BACKOFF_S * (attempt + 1)
+                    log.warning(
+                        "NLD request transient error (%s); retry %d/%d in %.0fs",
+                        type(exc).__name__,
+                        attempt + 1,
+                        self.MAX_PAGE_RETRIES - 1,
+                        wait,
+                    )
+                    time.sleep(wait)
+        raise last_exc
 
     def _execute_query(self, params: dict) -> gpd.GeoDataFrame:
         """Paginated ESRI Feature Service query with retry-on-truncation.
@@ -243,8 +270,7 @@ class ESRI_REST:
         ) as pbar:
             while limit_reached:
                 current_params = {**base_params, "resultOffset": offset}
-                resp = requests.get(self.url, params=current_params, timeout=120)
-                resp.raise_for_status()
+                resp = self._get_with_retry(current_params, timeout=120)
                 data = resp.json()
                 if "error" in data:
                     raise Exception(
@@ -362,7 +388,9 @@ class DownloadNLD:
                 gdf_raw = rest._execute_query_with_z(base_params)
 
             if gdf_raw.empty:
-                log.warning(f"NLD {layer_type}: service returned no features.")
+                # No data is a normal outcome (many AOIs have no levees), not a
+                # failure — report it plainly at INFO.
+                log.info(f"NLD {layer_type}: none in this area.")
                 return gdf_raw
 
             if gdf_raw.crs is None:
@@ -372,7 +400,7 @@ class DownloadNLD:
             clipped = gpd.clip(gdf_raw, boundary_4269)
 
             if clipped.empty:
-                log.warning(f"NLD {layer_type}: no features intersect boundary.")
+                log.info(f"NLD {layer_type}: none intersecting this area.")
                 return clipped
 
             # Lines: reproject XY but preserve Z — use set_crs + manual reproject

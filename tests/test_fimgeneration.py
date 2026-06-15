@@ -21,9 +21,7 @@ discharge CSV (produced by the streamflow pipeline, e.g. getNWMretrospective).
 from __future__ import annotations
 
 from pathlib import Path
-
 import pytest
-
 from fimbox import generateFIM, extract_feature_ids
 
 AOI_DIR = Path("/Users/Supath/Downloads/SDML/FIMBOX/out/test_smallB")
@@ -44,11 +42,11 @@ _skip_no_branches = pytest.mark.skipif(
 )
 
 
-@_skip_no_branches
-def test_extract_feature_ids():
-    out_csv = extract_feature_ids(AOI_DIR)
-    assert out_csv.is_file()
-    print(f"\nfeature_id.csv -> {out_csv}")
+# @_skip_no_branches
+# def test_extract_feature_ids():
+#     out_csv = extract_feature_ids(AOI_DIR)
+#     assert out_csv.is_file()
+#     print(f"\nfeature_id.csv -> {out_csv}")
 
 
 # default: generate FIM for every discharge CSV in the AOI

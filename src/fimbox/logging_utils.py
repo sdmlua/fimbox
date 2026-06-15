@@ -46,15 +46,23 @@ def aoi_root(case_dir: Union[str, Path]) -> Path:
     """Resolve the AOI root from any directory a stage operates on.
 
     Preprocessing writes input data + ``branches/`` into
-    ``<AOI_root>/watershed-data/`` and downstream stages take that subfolder as
-    their ``aoi_dir``. The single combined log, ``feature_id.csv``,
-    ``discharge-inputs/`` and ``fim-outputs/`` all live at the AOI root — one
-    level up. When ``case_dir`` is the ``watershed-data`` folder, return its
-    parent; otherwise return ``case_dir`` unchanged (so legacy flat layouts and
+    ``<AOI_root>/watershed-data/`` and downstream stages take that subfolder
+    (or something inside it, e.g. a branch dir) as their working dir. The
+    single combined log, ``feature_id.csv``, ``discharge-inputs/`` and
+    ``fim-outputs/`` all live at the AOI root. Return the parent of the first
+    ``watershed-data`` component found while walking up from ``case_dir``;
+    if there is none, return ``case_dir`` unchanged (legacy flat layouts and
     direct AOI-root callers still work).
     """
     p = Path(case_dir)
-    return p.parent if p.name == WATERSHED_DIR_NAME else p
+    if p.name == WATERSHED_DIR_NAME:
+        return p.parent
+    # A path nested under watershed-data (e.g. .../watershed-data/branches/0):
+    # hop up to the AOI root that holds watershed-data.
+    for parent in p.parents:
+        if parent.name == WATERSHED_DIR_NAME:
+            return parent.parent
+    return p
 
 
 def get_logger(name: Optional[str] = None) -> logging.Logger:

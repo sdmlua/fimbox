@@ -24,12 +24,11 @@ outputs are CSV files inside each branch directory; no rasters touched.
 from __future__ import annotations
 
 import logging
-import os
-import traceback
 from concurrent.futures import ProcessPoolExecutor, as_completed
-from dataclasses import dataclass, field
+from concurrent.futures.process import BrokenProcessPool
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, Optional, Union
+from typing import Callable
 
 import numpy as np
 import pandas as pd
@@ -45,6 +44,56 @@ from ._common import (
 )
 
 log = logging.getLogger(__name__)
+
+
+def _run_branches(
+    branches: list[tuple[str, Path]],
+    worker: Callable[..., str],
+    worker_args: tuple,
+    n_workers: int,
+    label: str,
+) -> dict[str, str]:
+    """Run ``worker(branch_dir, bid, *worker_args)`` over every branch.
+
+    Serial when ``n_workers <= 1``. Otherwise a ProcessPoolExecutor, with a
+    fallback to serial if the pool breaks (``BrokenProcessPool`` — seen when a
+    native lib can't fork, common on macOS). A broken pool would otherwise
+    record every branch as a silent "FAIL", so we re-run serially instead of
+    publishing an empty calibration. Individual branch exceptions are caught
+    and recorded as ``FAIL ...`` without sinking the batch.
+    """
+    results: dict[str, str] = {}
+    if n_workers <= 1:
+        for bid, bp in branches:
+            try:
+                results[bid] = worker(bp, bid, *worker_args)
+            except Exception as exc:  # one bad branch must not stop the rest
+                results[bid] = f"FAIL {exc}"
+                log.exception(f"{label} branch {bid} failed")
+        return results
+
+    try:
+        with ProcessPoolExecutor(max_workers=n_workers) as pool:
+            fut_to_bid = {
+                pool.submit(worker, bp, bid, *worker_args): bid
+                for bid, bp in branches
+            }
+            for fut in as_completed(fut_to_bid):
+                bid = fut_to_bid[fut]
+                try:
+                    results[bid] = fut.result()
+                except BrokenProcessPool:
+                    raise  # handled below — fall back to serial
+                except Exception as exc:
+                    results[bid] = f"FAIL {exc}"
+                    log.exception(f"{label} branch {bid} failed")
+    except BrokenProcessPool:
+        log.warning(
+            f"{label}: process pool broke (n_workers={n_workers}); "
+            f"falling back to serial execution"
+        )
+        return _run_branches(branches, worker, worker_args, 1, label)
+    return results
 
 
 # ---------------------------------------------------------------------------
@@ -80,24 +129,13 @@ class SrcBankfull:
             return {}
 
         log.info(f"SrcBankfull: {len(branches)} branches, {self.n_workers} workers")
-        results: dict[str, str] = {}
-        if self.n_workers <= 1:
-            for bid, bp in branches:
-                results[bid] = _bankfull_one_branch(bp, bid, df_bflows)
-        else:
-            with ProcessPoolExecutor(max_workers=self.n_workers) as pool:
-                fut_to_bid = {
-                    pool.submit(_bankfull_one_branch, bp, bid, df_bflows): bid
-                    for bid, bp in branches
-                }
-                for fut in as_completed(fut_to_bid):
-                    bid = fut_to_bid[fut]
-                    try:
-                        results[bid] = fut.result()
-                    except Exception as exc:
-                        results[bid] = f"FAIL {exc}"
-                        log.exception(f"SrcBankfull branch {bid} failed")
-        return results
+        return _run_branches(
+            branches,
+            _bankfull_one_branch,
+            (df_bflows,),
+            self.n_workers,
+            "SrcBankfull",
+        )
 
 
 def _bankfull_one_branch(branch_dir: Path, bid: str, df_bflows: pd.DataFrame) -> str:
@@ -106,6 +144,23 @@ def _bankfull_one_branch(branch_dir: Path, bid: str, df_bflows: pd.DataFrame) ->
         return "SKIP no src_full_crosswalked"
 
     df_src = pd.read_csv(src_path, dtype={"HydroID": int, "feature_id": int})
+
+    # Drop any bankfull columns left by a previous run so the merge below
+    # adds a clean "bankfull_flow" instead of colliding into
+    # bankfull_flow_x / _y (which would break the fillna that follows).
+    # Makes the step idempotent — safe to re-run on already-calibrated SRCs.
+    df_src = df_src.drop(
+        columns=[
+            "bankfull_flow",
+            "Stage_bankfull",
+            "BedArea_bankfull",
+            "Volume_bankfull",
+            "HRadius_bankfull",
+            "SurfArea_bankfull",
+            "bankfull_proxy",
+        ],
+        errors="ignore",
+    )
 
     # Merge external bankfull flow onto the SRC by feature_id.
     df_src = df_src.merge(df_bflows, how="left", on="feature_id")
@@ -211,33 +266,13 @@ class SrcSubdiv:
             iter_branches(aoi_dir, exclude_zero=not self.include_branch_zero)
         )
         log.info(f"SrcSubdiv: {len(branches)} branches, {self.n_workers} workers")
-        results: dict[str, str] = {}
-        if self.n_workers <= 1:
-            for bid, bp in branches:
-                results[bid] = _subdiv_one_branch(
-                    bp, bid, df_mann, self.default_channel_n, self.default_overbank_n
-                )
-        else:
-            with ProcessPoolExecutor(max_workers=self.n_workers) as pool:
-                fut_to_bid = {
-                    pool.submit(
-                        _subdiv_one_branch,
-                        bp,
-                        bid,
-                        df_mann,
-                        self.default_channel_n,
-                        self.default_overbank_n,
-                    ): bid
-                    for bid, bp in branches
-                }
-                for fut in as_completed(fut_to_bid):
-                    bid = fut_to_bid[fut]
-                    try:
-                        results[bid] = fut.result()
-                    except Exception as exc:
-                        results[bid] = f"FAIL {exc}"
-                        log.exception(f"SrcSubdiv branch {bid} failed")
-        return results
+        return _run_branches(
+            branches,
+            _subdiv_one_branch,
+            (df_mann, self.default_channel_n, self.default_overbank_n),
+            self.n_workers,
+            "SrcSubdiv",
+        )
 
 
 def _subdiv_geometry(df: pd.DataFrame) -> pd.DataFrame:

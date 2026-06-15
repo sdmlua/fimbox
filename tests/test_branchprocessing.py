@@ -60,6 +60,16 @@ PARAMS_CREATE_HAND = dict(
     min_catchment_area=0.25,  # km^2, short-reach replace threshold
     min_stream_length=0.5,  # km, short-reach replace threshold
     crosswalk_max_distance_m=100.0,  # m, midpoint-to-NWM-flowline cap
+    # SRC slope source feeding Manning's equation:
+    #   "iris_sword" (default) - IRIS-SWORD slope on order>=4 streams, else DEM
+    #   "dem"                  - DEM rise/run slope only
+    #   "hfab"                 - hydrofabric native slope, else DEM fallback
+    src_slope_source="iris_sword",
+    # IRIS-SWORD slope table (feature_id, slope_iris_sword). None -> the table
+    # shipped in fimbox/data is used when src_slope_source == "iris_sword".
+    iris_slope_csv=None,
+    # Hydrofabric slope column when it isn't the usual 'Slope'/'So'.
+    hfab_slope_column=None,
 )
 
 DEM = OUT_DIR / "dem.tif"
@@ -692,12 +702,20 @@ def test_step_B19_add_crosswalk():
         min_stream_length=0.5,
         max_distance_m=100.0,
         small_segments_csv=BRANCH_DIR / f"small_segments_{BRANCH_ID}.csv",
+        
+        # SRC slope source (optional): "iris_sword" (default) | "dem" | "hfab".
+        src_slope_source="iris_sword",
+        iris_slope_csv=None,        # None -> packaged fimbox/data table
+        hfab_slope_column=None,     # name the hydrofabric slope col if not Slope/So
     )
     import pandas as pd
 
     ht = pd.read_csv(HYDRO_TABLE, dtype={"HydroID": str})
     log.info(f"hydroTable: {len(ht)} rows  HydroIDs={ht['HydroID'].nunique()}")
     assert HYDRO_TABLE.exists() and (ht["discharge_cms"] >= 0).all()
+    # The three slope variants are carried so the chosen source is transparent.
+    for col in ("SLOPE", "SLOPE_RISE_RUN", "SLOPE_IRIS_SWORD"):
+        assert col in ht.columns, f"hydroTable missing {col}"
 
 
 def test_step_B20_heal_bridges_osm():
@@ -973,10 +991,18 @@ def test_step_C25_calculate_allbranches_live_run():
     # Pass the same tuning the branch-zero step tests use, so every branch in
     # this all-branches run and branch zero share one set of values. Editing
     # PARAMS_CREATE_HAND at the top of this file retunes both paths together.
+    # Auto-size workers to the machine (min of CPU count and RAM budget).
+    # Override with env FIMBOX_DASK_WORKERS=N; set N=1 to force serial.
+    from fimbox._dask import _resolve_n_workers
+
+    n_workers = _resolve_n_workers()
+    log.info(f"Branch processing with n_workers={n_workers}")
+
     cfg = AOIProcessingConfig(
         aoi_dir=OUT_DIR,
         branch_list_path=branch_list_path,
-        n_workers=int(os.environ.get("FIMBOX_BRANCH_WORKERS", "1")),
+        n_workers=n_workers,        # auto-sized; FIMBOX_DASK_WORKERS=1 forces serial
+        keep_failed_branches=True,  # keep a failed branch dir for inspection
         delete_deny_list=True,
         **PARAMS_CREATE_HAND,
     )

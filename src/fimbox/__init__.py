@@ -69,6 +69,7 @@ from .preprocessing import (
     manual_calibration,
     reset_hydro_and_src,
     run_calibration,
+    scan_logs,
 )
 
 __all__ = [
@@ -125,6 +126,7 @@ __all__ = [
     "manual_calibration",
     "reset_hydro_and_src",
     "run_calibration",
+    "scan_logs",
 ]
 
 # FIM generation: forecast -> per-branch inundation -> AOI mosaic

@@ -32,6 +32,7 @@ def remove_deny_list_files(
     deny_list: PathLike,
     branch_id: str,
     *,
+    identifier: str = "nwm",
     verbose: bool = False,
 ) -> int:
     src_dir = Path(src_dir)
@@ -50,7 +51,7 @@ def remove_deny_list_files(
     if not deny_list.is_file():
         raise FileNotFoundError(f"deny list not found: {deny_list}")
 
-    patterns = _read_deny_list(deny_list, branch_id)
+    patterns = _read_deny_list(deny_list, branch_id, identifier)
     log.info(
         f"outputs_cleanup: applying {len(patterns)} deny-list patterns "
         f"under {src_dir.name}"
@@ -68,15 +69,25 @@ def remove_deny_list_files(
     return n_removed
 
 
-def _read_deny_list(path: Path, branch_id: str) -> list[str]:
-    """Parse the deny-list text file into a list of filename patterns with
-    ``{}`` already substituted for the branch id."""
+def _read_deny_list(
+    path: Path, branch_id: str, identifier: str = "nwm"
+) -> list[str]:
+    """Parse the deny-list text file into filename patterns, with ``{}``
+    substituted for the branch id.
+
+    Source-derived files carry the AOI identifier prefix (``nwm`` by default,
+    ``nwmmr`` for medium-range, etc.). Deny entries are written with the
+    legacy ``nwm`` prefix, so a leading ``nwm_`` is rewritten to the AOI's
+    actual ``identifier`` so the files are matched whatever the prefix is."""
     out: list[str] = []
     for raw in path.read_text().splitlines():
         line = raw.strip()
         if not line or line.startswith("#"):
             continue
-        out.append(line.replace("{}", branch_id))
+        line = line.replace("{}", branch_id)
+        if identifier != "nwm" and line.startswith("nwm_"):
+            line = f"{identifier}_" + line[len("nwm_") :]
+        out.append(line)
     return out
 
 

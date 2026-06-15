@@ -298,6 +298,14 @@ class StreamNetReaches:
 
         log.info("StreamNet: %d reaches vectorised", len(reach_geoms))
 
+        # 0 reaches => sub-resolution branch; fail it (exit 61, dir wiped)
+        # instead of writing an empty gpkg with no downstream hydroTable.
+        if not reach_geoms:
+            raise NoFlowlinesError(
+                f"Branch {self.branch_id}: no valid flowlines "
+                f"(0 reaches from {stream_idx.size} stream cell(s))."
+            )
+
         # Write sn_catchments raster
         sn_profile = profile.copy()
         sn_profile.update(
