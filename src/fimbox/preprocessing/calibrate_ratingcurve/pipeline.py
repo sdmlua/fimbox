@@ -104,7 +104,7 @@ class CalibrationConfig:
     # Default Manning's n used by the subdivision step when a feature_id is absent from vmann_input_file.
     default_channel_n: float = 0.06
     default_overbank_n: float = 0.12
-    nonmonotonic_stream_order_min: int = 1
+    nonmonotonic_stream_order_min: int = 4
     include_branch_zero: bool = True
 
     # --- aggregation control ----

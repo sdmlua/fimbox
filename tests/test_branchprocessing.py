@@ -150,127 +150,78 @@ PIXEL_PTS = BRANCH_DIR / f"flows_points_pixels_{BRANCH_ID}.gpkg"
 GW_PIXELS = BRANCH_DIR / f"gw_catchments_pixels_{BRANCH_ID}.tif"
 
 
-# # Single steps — run in the file order so each step's output feeds the next.
-# def test_branch_derivation():
-#     """Derive level paths, branch polygons, and branch list from staged NWM data."""
-#     result = BranchDerivation(
+# # COMBINED — the whole branch pipeline in one go: derive branches, then build
+# # branch 0 + every non-zero branch in parallel. Every tunable parameter is
+# # spelled out so this doubles as the parameter reference; input paths resolve
+# # from OUT_DIR automatically, so only the knobs are listed here. Uncomment to run.
+# def test_branchprocessing_combined():
+#     """Derive level paths -> branch list, then run branch 0 and all non-zero
+#     branches through CreateHAND in parallel via calculate_allbranches. Editing
+#     the values below retunes branch 0 and every branch together."""
+#     from fimbox import AOIProcessingConfig, BranchDerivation, calculate_allbranches
+#     from fimbox._dask import _resolve_n_workers
+
+#     # Branch derivation — level paths, branch polygons, branch_ids.lst.
+#     BranchDerivation(
 #         out_dir=OUT_DIR,
-#         branch_id_attribute="levpa_id",
-#         reach_id_attribute="ID",
-#         branch_buffer_distance_meters=1000.0,
+#         branch_id_attribute="levpa_id",       # branch key on the level-path streams
+#         reach_id_attribute="ID",              # NWM reach id attribute
+#         branch_buffer_distance_meters=7000.0, # buffer around each level path
 #     ).run()
 
-#     assert result.dissolved_levelpaths.exists(), "dissolved levelpaths not written"
-#     assert result.branch_polygons.exists(), "branch polygons not written"
-#     assert result.branch_list.exists(), "branch list file not written"
-#     assert len(result.branch_dataframe) > 0, "branch dataframe is empty"
-
-#     log.info(f"Level paths     --> {result.levelpaths}")
-#     log.info(f"Dissolved       --> {result.dissolved_levelpaths}")
-#     log.info(f"Branch polygons --> {result.branch_polygons}")
-#     log.info(f"Branch list     --> {result.branch_list}")
-#     log.info(f"Branch count: {len(result.branch_dataframe)}")
-
-
-# def test_branch_zero_full():
-#     """Run the complete branch-zero preprocessing pipeline."""
-#     outputs = BranchZero(
-#         dem_path=DEM,
-#         streams_gpkg=STREAMS,
-#         boundary_gpkg=BOUNDARY_BUF,
-#         out_dir=OUT_DIR,
-#         bridge_elev_diff_path=BRIDGE_DIFF if BRIDGE_DIFF.exists() else None,
-#         headwaters_gpkg=HEADWATERS if HEADWATERS.exists() else None,
-#         levelpaths_extended_gpkg=LEVELPATH_EXT if LEVELPATH_EXT.exists() else None,
-#         agree_buffer_m=15.0,
-#         agree_smooth_drop=10.0,
-#         agree_sharp_drop=1000.0,
-#         branch_zero_id=BRANCH_ID,
-#     ).run()
-
-#     assert outputs["dem"].exists(), "clipped DEM not written"
-#     assert outputs["flows_grid_boolean"].exists(), "stream boolean grid not written"
-#     assert outputs["dem_burned"].exists(), "AGREE DEM not written"
-#     assert outputs["dem_burned_filled"].exists(), "pit-filled DEM not written"
-#     assert outputs["flowdir_d8"].exists(), "D8 flow direction not written"
-
-#     log.info(f"Branch-zero outputs ({len(outputs)} files):")
-#     for k, v in outputs.items():
-#         log.info(f"  {k:35s} --> {v.name}")
-
-
-# def test_create_hand():
-#     """
-#     Run the full HAND generation pipeline (22 steps) for branch zero.
-#     All standard input paths are resolved from OUT_DIR and BRANCH_DIR automatically.
-#     Tunable parameters live in ``PARAMS_CREATE_HAND`` at the top of this file.
-#     Requires: test_branch_zero_full outputs to exist.
-#     """
-#     assert DEM_BRANCH.exists(), f"Run test_branch_zero_full first — {DEM_BRANCH} missing"
-#     assert FLOWDIR.exists(), f"flowdir missing — run test_branch_zero_full first"
-
-#     outputs = CreateHAND(
+#     # Branch 0 and all branches, in parallel. AOIProcessingConfig carries every
+#     #    knob the step-by-step BranchZero / CreateHAND tests expose.
+#     n_workers = _resolve_n_workers()  # auto-sized; FIMBOX_DASK_WORKERS=1 = serial
+#     cfg = AOIProcessingConfig(
 #         aoi_dir=OUT_DIR,
-#         branch_dir=BRANCH_DIR,
-#         branch_id=BRANCH_ID,
-#         levee_protected_areas_gpkg=LEVEE_AREAS if LEVEE_AREAS.exists() else None,
-#         levee_levelpaths_csv=LEVEE_LP_CSV if LEVEE_LP_CSV.exists() else None,
-#         lakes_gpkg=LAKES if LAKES.exists() else None,
-#         boundary_gpkg=WBD8_CLP if WBD8_CLP.exists() else None,
-#         **PARAMS_CREATE_HAND,
-#     ).run()
+#         branch_list_path=OUT_DIR / "branch_ids.lst",
 
-#     log.info(f"CreateHAND outputs ({len(outputs)} files):")
-#     for k, v in outputs.items():
-#         log.info(f"  {k:35s} --> {v.name}  {'ok' if v.exists() else 'MISSING'}")
+#         # --- AGREE DEM conditioning (branch zero) ---
+#         agree_buffer_m=15.0,                  # m, stream buffer for AGREE
+#         agree_smooth_drop=10.0,               # m, smooth elevation drop
+#         agree_sharp_drop=1000.0,              # m, sharp in-channel drop
 
-#     # HAND base outputs
-#     assert THALWEG_COND.exists(), "dem_thalwegCond not produced"
-#     assert SLOPES_D8.exists(), "slopes_d8 not produced"
-#     assert DEM_REACHES.exists(), "demDerived_reaches not produced"
-#     assert SPLIT_REACHES.exists(), "demDerived_reaches_split not produced"
-#     assert SPLIT_PTS.exists(), "demDerived_reaches_split_points not produced"
-#     assert GW_REACHES.exists(), "gw_catchments_reaches not produced"
-#     assert PIXEL_PTS.exists(), "flows_points_pixels not produced"
-#     assert GW_PIXELS.exists(), "gw_catchments_pixels not produced"
-#     assert REM.exists(), "rem not produced"
-#     assert REM_ZEROED.exists(), "rem_zeroed_masked not produced"
-#     assert CATCH_POLY.exists(), "gw_catchments_reaches gpkg not produced"
-#     assert FILT_CATCH.exists(), "filtered catchments not produced"
-#     assert FILT_FLOWS.exists(), "filtered flows not produced"
-#     assert FILT_TIF.exists(), "filtered catchments tif not produced"
+#         # --- HAND geometry ---
+#         cost_distance_tolerance=50.0,         # m, lateral cost distance
+#         lateral_elevation_threshold=10,       # m, lateral thalweg drop cap
+#         max_split_distance_m=1500.0,          # m, split-reach max length
+#         slope_min=0.0001,                     # rise/run floor
+#         lakes_buffer_dist_m=100.0,            # m, lake-boundary buffer
 
-#     # SRC, crosswalk with hydroTable
-#     assert SLOPES_MASKED.exists(), "slopes mask not produced"
-#     assert STAGE_TXT.exists(), "stage list not produced"
-#     assert CATCHLIST_TXT.exists(), "catchlist file not produced"
-#     assert SRC_BASE_CSV.exists(), "SRC base CSV not produced"
-#     assert XWALK_CATCH.exists(), "crosswalked catchments not produced"
-#     assert XWALK_FLOWS.exists(), "crosswalked flows not produced"
-#     assert SRC_FULL_CSV.exists(), "SRC full CSV not produced"
-#     assert SRC_JSON.exists(), "SRC JSON not produced"
-#     assert XWALK_CSV.exists(), "crosswalk table not produced"
-#     assert HYDRO_TABLE.exists(), "hydroTable not produced"
+#         # --- SRC / crosswalk ---
+#         mannings_n=0.06,                      # channel roughness
+#         stage_min_m=0.0,                      # SRC stage ladder start
+#         stage_interval_m=0.3048,              # SRC stage step (1 ft)
+#         stage_max_m=25.2984,                  # SRC stage ladder end (~83 ft)
+#         min_catchment_area=0.25,              # km^2, short-reach replace threshold
+#         min_stream_length=0.5,                # km, short-reach replace threshold
+#         crosswalk_max_distance_m=100.0,       # m, midpoint-to-NWM-flowline cap
 
-#     # hydroTable sanity: required columns + monotonic stage→discharge per HydroID
-#     import pandas as pd
+#         # --- SRC slope source feeding Manning's equation ---
+#         #   "iris_sword" (default) - IRIS-SWORD slope on order>=4 streams, else DEM
+#         #   "dem"                  - DEM rise/run slope only
+#         #   "hfab"                 - hydrofabric native slope, else DEM fallback
+#         src_slope_source="iris_sword",
+#         iris_slope_csv=None,                  # None -> packaged fimbox/data table
+#         hfab_slope_column=None,               # name the hydrofabric slope col if not Slope/So
 
-#     ht = pd.read_csv(
-#         HYDRO_TABLE,
-#         dtype={"HydroID": str, "feature_id": str},
+#         # --- execution ---
+#         n_workers=n_workers,                  # parallel branch workers
+#         keep_failed_branches=True,            # keep a failed branch dir for inspection
+#         delete_deny_list=True,                # prune intermediates after each branch
 #     )
-#     required = {
-#         "HydroID", "feature_id",
-#         "stage", "discharge_cms", "ManningN", "SLOPE", "LENGTHKM",
-#     }
-#     missing = required - set(ht.columns)
-#     assert not missing, f"hydroTable missing columns: {missing}"
-#     assert (ht["stage"] >= 0).all(), "negative stage values in hydroTable"
-#     assert (ht["discharge_cms"] >= 0).all(), "negative discharge in hydroTable"
-#     log.info(
-#         f"hydroTable rows: {len(ht)}, HydroIDs: {ht['HydroID'].nunique()}, "
-#         f"feature_ids: {ht['feature_id'].nunique()}"
+#     result = calculate_allbranches(
+#         cfg,
+#         delete_deny_list=True,
+#         deny_unit_list=Path(__file__).resolve().parent.parent / "config" / "deny_unit.lst",
+#         branch_ids_csv=OUT_DIR / "branch_ids.csv",
 #     )
+
+#     assert result.n_branch_zero_recorded == 1, "branch zero not built"
+#     assert result.branch_ids_csv.exists(), "branch_ids.csv not created"
+#     ok = sum(1 for r in result.branch_results if r.status == "ok")
+#     log.info(f"combined branch run: branch_zero=1, non-zero ok={ok}")
+#     assert result.n_non_zero_recorded == ok
 
 
 # =============================================================================

@@ -100,13 +100,15 @@ def _thalweg_one_branch(
     notch = (df["Number of Cells"] == 0) & (df["Stage"] > 0)
     if notch.sum() > 0:
         kept = df[~notch].copy()
+        # Group on a renamed key so HydroID stays a column inside the worker
+        # (the lambdas read it), sidestepping the grouping-column deprecation.
         kept = (
-            kept.groupby("HydroID", group_keys=False)
+            kept.groupby(kept["HydroID"].rename("_grp"), group_keys=False)
             .apply(lambda g: _reset_stage(g, stage_interval_m))
             .reset_index(drop=True)
         )
         df = (
-            kept.groupby("HydroID", group_keys=False)
+            kept.groupby(kept["HydroID"].rename("_grp"), group_keys=False)
             .apply(lambda g: _extend_linear(g, stages_full, extrap_rows))
             .sort_values(["HydroID", "Stage"])
             .reset_index(drop=True)
@@ -275,6 +277,9 @@ def _longitudinal_one_branch(branch_dir: Path, bid: str, n_stages: int) -> str:
         adj_col = f"{key}_longitudinalAdjusted"
         src = src.merge(filtered[key], on=["HydroID", "Stage"], how="left")
         mask = src[adj_col].notna() & (src["LakeID"] < 0)
+        # Smoothed values are float; the raw geometry column may be int — cast
+        # before writing so the assignment doesn't downcast/warn.
+        src[key] = src[key].astype(float)
         src.loc[mask, key] = src.loc[mask, adj_col]
 
     # Recompute geometry + Q from the smoothed surface area / volume.
@@ -497,6 +502,29 @@ class BathymetricAdjustment:
         ]
 
 
+_OHRFC_SOURCE = "OHRFC provided bathymetry, compiled from USACE data"
+
+
+def _reconcile_bathy(bathy: pd.DataFrame) -> pd.DataFrame:
+    # One row per feature_id: keep the OHRFC survey verbatim where it exists,
+    # otherwise average the overlapping surveys' missing area / perimeter.
+    def pick(group: pd.DataFrame) -> pd.Series:
+        ohrfc = group[group["Bathymetry_source"] == _OHRFC_SOURCE]
+        if not ohrfc.empty:
+            return ohrfc.iloc[0]
+        row = group.iloc[0].copy()
+        row[["missing_xs_area_m2", "missing_wet_perimeter_m"]] = group[
+            ["missing_xs_area_m2", "missing_wet_perimeter_m"]
+        ].mean()
+        return row
+
+    return (
+        bathy.groupby("feature_id", group_keys=False)
+        .apply(pick, include_groups=False)
+        .reset_index()
+    )
+
+
 def _bathy_one_branch(branch_dir: Path, bid: str, bathy: pd.DataFrame) -> str:
     # Merge missing geometry by feature_id, add it in, recompute discharge.
     src_path = branch_dir / f"src_full_crosswalked_{bid}.csv"
@@ -517,24 +545,10 @@ def _bathy_one_branch(branch_dir: Path, bid: str, bathy: pd.DataFrame) -> str:
         src.to_csv(src_path, index=False)
         return "OK no bathy overlap"
 
-    # many_to_one merge; reconcile by feature_id mean when a feature_id repeats.
-    try:
-        src = src.merge(
-            bathy[cols], on="feature_id", how="left", validate="many_to_one"
-        )
-    except pd.errors.MergeError:
-        reconciled = (
-            bathy[cols]
-            .groupby("feature_id", as_index=False)
-            .agg(
-                {
-                    "missing_xs_area_m2": "mean",
-                    "missing_wet_perimeter_m": "mean",
-                    "Bathymetry_source": "first",
-                }
-            )
-        )
-        src = src.merge(reconciled, on="feature_id", how="left", validate="many_to_one")
+    # Collapse to one row per feature_id with OHRFC precedence (take the OHRFC
+    # survey verbatim where present, else average the surveys), then merge.
+    reconciled = _reconcile_bathy(bathy[cols])
+    src = src.merge(reconciled, on="feature_id", how="left", validate="many_to_one")
 
     src["missing_xs_area_m2"] = src["missing_xs_area_m2"].fillna(0.0)
     src["missing_wet_perimeter_m"] = src["missing_wet_perimeter_m"].fillna(0.0)

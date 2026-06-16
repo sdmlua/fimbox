@@ -465,10 +465,11 @@ def _subdiv_one_branch(
 class SrcNonmonotonic:
     # Walk each in-channel rating curve and force discharge to be
     # monotonically non-decreasing with stage. Floodplain portion is
-    # untouched. Defaults to stream_order >= 1 (apply everywhere).
+    # untouched. Applies on stream order >= stream_order_min; low-order
+    # reaches are left alone (their curves are noisy but not relied upon).
 
     aoi_dir: PathLike
-    stream_order_min: int = 1
+    stream_order_min: int = 4
     include_branch_zero: bool = True
     n_workers: int = 1
 
@@ -504,6 +505,9 @@ class SrcNonmonotonic:
         ht = pd.read_csv(ht0, low_memory=False)
 
         if "Bathymetry_source" in src.columns:
+            # Cast to object first — the column is float64 (all-NaN) when no
+            # bathymetry ran, and a string assignment into it would warn.
+            src["Bathymetry_source"] = src["Bathymetry_source"].astype(object)
             src.loc[
                 src["Bathymetry_source"].astype(str) == "0", "Bathymetry_source"
             ] = "No Bathymetry Applied"
@@ -547,7 +551,10 @@ def _nonmonotonic_one_branch(branch_dir: Path, bid: str, strm_order: int) -> str
         )
 
     original = df.copy()
-    fixed = df.groupby("HydroID", group_keys=False).apply(
+    # Group on a copy of the key so HydroID stays a real column inside the
+    # worker (and in the result), sidestepping the pandas grouping-column
+    # deprecation without dropping HydroID.
+    fixed = df.groupby(df["HydroID"].rename("_grp"), group_keys=False).apply(
         _fix_hydroid, strm_order=strm_order
     )
 
@@ -574,6 +581,8 @@ def _nonmonotonic_one_branch(branch_dir: Path, bid: str, strm_order: int) -> str
         fixed.loc[fixed["Stage"] == 0, "Discharge (m3s-1)_subdiv"] = 0
 
     if "Bathymetry_source" in fixed.columns:
+        # float64 (all-NaN) when no bathymetry ran — cast before string assign.
+        fixed["Bathymetry_source"] = fixed["Bathymetry_source"].astype(object)
         fixed.loc[
             fixed["Bathymetry_source"].astype(str) == "0", "Bathymetry_source"
         ] = "No Bathymetry Applied"
@@ -587,7 +596,46 @@ def _nonmonotonic_one_branch(branch_dir: Path, bid: str, strm_order: int) -> str
             fixed[col] = fixed.groupby("HydroID")[col].ffill()
 
     fixed.to_csv(src_path, index=False)
+
+    # Push the corrected geometry + discharge into the branch hydroTable so the
+    # fix reaches FIM generation (the SRC alone is not consumed downstream).
+    ht_path = branch_dir / f"hydroTable_{bid}.csv"
+    if ht_path.is_file():
+        _sync_htable_from_src(ht_path, fixed)
     return f"OK nonmonotonic on {len(fixed)} rows"
+
+
+# Geometry/discharge columns mirrored from the SRC into the hydroTable.
+_HT_SYNC_COLS = {
+    "Number of Cells": "Number of Cells",
+    "SurfaceArea (m2)": "SurfaceArea (m2)",
+    "BedArea (m2)": "BedArea (m2)",
+    "TopWidth (m)": "TopWidth (m)",
+    "WettedPerimeter (m)": "WettedPerimeter (m)",
+    "HydraulicRadius (m)": "HydraulicRadius (m)",
+    "WetArea (m2)": "WetArea (m2)",
+    "Volume (m3)": "Volume (m3)",
+    "discharge_cms": "Discharge (m3s-1)",
+    "subdiv_discharge_cms": "Discharge (m3s-1)_subdiv",
+    "Bathymetry_source": "Bathymetry_source",
+    "subdiv_applied": "subdiv_applied",
+    "channel_n": "channel_n",
+    "overbank_n": "overbank_n",
+}
+
+
+def _sync_htable_from_src(ht_path: Path, src: pd.DataFrame) -> None:
+    # Refresh the hydroTable's per-(HydroID, stage) geometry/discharge from the
+    # adjusted SRC via a merge (robust to row-order differences).
+    ht = pd.read_csv(ht_path, low_memory=False)
+    ht = ht.drop_duplicates(subset=["HydroID", "stage"], keep="first").reset_index(drop=True)
+    pull = {src_col: ht_col for ht_col, src_col in _HT_SYNC_COLS.items() if src_col in src.columns}
+    keyed = src[["HydroID", "Stage", *pull]].rename(
+        columns={"Stage": "stage", **pull}
+    )
+    ht = ht.drop(columns=[c for c in pull.values() if c in ht.columns], errors="ignore")
+    ht = ht.merge(keyed, on=["HydroID", "stage"], how="left")
+    ht.to_csv(ht_path, index=False)
 
 
 def _fix_hydroid(grp: pd.DataFrame, strm_order: int) -> pd.DataFrame:

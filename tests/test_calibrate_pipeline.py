@@ -145,7 +145,7 @@ _skip_no_spatial = pytest.mark.skipif(
 #         # --- tunables ----
 #         default_channel_n=0.06,
 #         default_overbank_n=0.12,
-#         nonmonotonic_stream_order_min=1,
+#         nonmonotonic_stream_order_min=4,
 #         include_branch_zero=True,
 #         # --- aggregation control -----
 #         aggregate_pre=True,                # assemble elev tables before adjust
@@ -168,39 +168,39 @@ _skip_no_spatial = pytest.mark.skipif(
 
 
 # STEP BY STEP — each stage on its own.
-# @_skip_no_aoi
-# def test_step_reset():
-#     """Reset per-branch hydroTable + src_full_crosswalked to baseline.
-#     Needed only for reruns; a no-op on a fresh AOI. Runs before aggregation."""
-#     HydroTableReset(aoi_dir=AOI_DIR).run()
+@_skip_no_aoi
+def test_step_reset():
+    """Reset per-branch hydroTable + src_full_crosswalked to baseline.
+    Needed only for reruns; a no-op on a fresh AOI. Runs before aggregation."""
+    HydroTableReset(aoi_dir=AOI_DIR).run()
 
 
-# @_skip_no_aoi
-# def test_step_aggregate_pre():
-#     """Pre-calibration aggregation: usgs/ras2fim elev tables if available (not integrated yet) -> AOI root."""
-#     BranchAggregator(aoi_dir=AOI_DIR, usgs_elev=True, ras_elev=True).run()
+@_skip_no_aoi
+def test_step_aggregate_pre():
+    """Pre-calibration aggregation: usgs/ras2fim elev tables if available (not integrated yet) -> AOI root."""
+    BranchAggregator(aoi_dir=AOI_DIR, usgs_elev=True, ras_elev=True).run()
 
 
-# @_skip_no_aoi
-# def test_step_thalweg_notches():
-#     """Remove thalweg-notch artifact rows and refill the stage ladder."""
-#     results = ThalwegNotchesAdjustment(
-#         aoi_dir=AOI_DIR,
-#         n_workers=JOB_BRANCH_LIMIT,  # branch-parallel
-#         stage_interval_m=0.3048,     # SRC stage step
-#         n_stages=84,                 # full ladder length
-#         extrap_rows=3,               # trailing rows fit for extrapolation
-#     ).run()
-#     assert results
+@_skip_no_aoi
+def test_step_thalweg_notches():
+    """Remove thalweg-notch artifact rows and refill the stage ladder."""
+    results = ThalwegNotchesAdjustment(
+        aoi_dir=AOI_DIR,
+        n_workers=JOB_BRANCH_LIMIT,  # branch-parallel
+        stage_interval_m=0.3048,     # SRC stage step
+        n_stages=84,                 # full ladder length
+        extrap_rows=3,               # trailing rows fit for extrapolation
+    ).run()
+    assert results
 
 
-# @_skip_no_aoi
-# def test_step_longitudinal():
-#     """Smooth hydraulic geometry along reach chains, recompute discharge."""
-#     results = LongitudinalFlowFilter(
-#         aoi_dir=AOI_DIR, n_workers=JOB_BRANCH_LIMIT, n_stages=84
-#     ).run()
-#     assert results
+@_skip_no_aoi
+def test_step_longitudinal():
+    """Smooth hydraulic geometry along reach chains, recompute discharge."""
+    results = LongitudinalFlowFilter(
+        aoi_dir=AOI_DIR, n_workers=JOB_BRANCH_LIMIT, n_stages=84
+    ).run()
+    assert results
 
 
 @_skip_no_aoi
@@ -251,7 +251,7 @@ def test_step_subdiv():
 def test_step_nonmonotonic():
     """Force monotonic in-channel rating curves."""
     results = SrcNonmonotonic(
-        aoi_dir=AOI_DIR, stream_order_min=1, include_branch_zero=True
+        aoi_dir=AOI_DIR, stream_order_min=4, include_branch_zero=True
     ).run()
     assert results
 
