@@ -24,7 +24,7 @@ from pathlib import Path
 import pytest
 from fimbox import generateFIM, extract_feature_ids
 
-AOI_DIR = Path("/Users/Supath/Downloads/SDML/FIMBOX/out/test_smallB")
+AOI_DIR = Path(".././out/test_smallB")
 N_WORKERS = 4
 
 # Optional selection filters (edit to match the CSVs you have).

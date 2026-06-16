@@ -92,21 +92,27 @@ class AllBranchesResult:
 def calculate_allbranches(
     cfg: AOIProcessingConfig,
     *,
+    run_branch_zero: bool = True,
     delete_deny_list: bool = True,
     deny_unit_list: Optional[Path] = None,
     branch_ids_csv: Optional[Path] = None,
 ) -> AllBranchesResult:
-    """Run the per-AOI branch loop + AOI-level cleanup.
+    """Run the whole-AOI branch zero, then all non-zero branches, then cleanup.
 
     Steps:
         1. Write branch_ids.csv with the full branch inventory (branch 0 first,
            then every id from branch_ids.lst).
-        2. Process every non-zero branch in parallel.
-        3. Apply the AOI-level deny-list cleanup to remove intermediates.
+        2. Run BranchZero for the whole AOI (branch_id="0") in the main process,
+           exactly as the step-by-step test does. Skip when ``run_branch_zero=False``
+           (outputs already exist from a previous run).
+        3. Dispatch every non-zero branch to Dask in parallel via process_branches.
+        4. Apply the AOI-level deny-list cleanup to remove intermediates.
 
     Returns an :class:`AllBranchesResult` summarising what got recorded and
     cleaned up.
     """
+    from .calculate_branchzero import BranchZero
+
     aoi_dir = Path(cfg.aoi_dir)
     branch_ids_csv = (
         Path(branch_ids_csv) if branch_ids_csv else aoi_dir / "branch_ids.csv"
@@ -139,8 +145,43 @@ def calculate_allbranches(
         f"(0 + {len(all_ids) - 1} from {Path(branch_list_path).name})"
     )
 
-    # parallel non-zero branch loop. process_branches runs them through the
-    # Dask LocalCluster and returns one BranchResult per branch.
+    # Step 2: whole-AOI BranchZero (serial, in the main process).
+    # Mirrors exactly what test_step_Z1_branch_zero_full does in the
+    # step-by-step path: DEM clip + stream rasterize + optional headwater /
+    # levelpath / levee rasters + AGREE + pit-fill + D8 flowdir for branch "0".
+    # Running it here before Dask workers start guarantees the shared flowdir
+    # and other branch-zero outputs are on disk before any worker needs them,
+    # and also pre-warms the WBT binary so workers don't race on the download.
+    if run_branch_zero:
+        log.info(f"--- BranchZero (whole-AOI, branch_id={cfg.branch_zero_id!r}) ---")
+        BranchZero(
+            dem_path=cfg.dem_path,
+            streams_gpkg=cfg.streams_gpkg,
+            boundary_gpkg=cfg.boundary_gpkg,
+            out_dir=aoi_dir,
+            bridge_elev_diff_path=cfg.bridge_elev_diff_path,
+            levee_gpkg_path=cfg.levee_gpkg_path,
+            levee_raster_path=cfg.levee_raster_path,
+            headwaters_gpkg=cfg.headwaters_gpkg,
+            levelpaths_extended_gpkg=cfg.levelpaths_extended_gpkg,
+            target_crs=(
+                f"EPSG:{cfg.target_crs}"
+                if str(cfg.target_crs).isdigit()
+                else cfg.target_crs
+            ),
+            agree_buffer_m=cfg.agree_buffer_m,
+            agree_smooth_drop=cfg.agree_smooth_drop,
+            agree_sharp_drop=cfg.agree_sharp_drop,
+            branch_zero_id=cfg.branch_zero_id,
+        ).run()
+        log.info(f"--- BranchZero complete (branch_id={cfg.branch_zero_id!r}) ---")
+    else:
+        log.info(
+            f"run_branch_zero=False — skipping whole-AOI BranchZero "
+            f"(branch_id={cfg.branch_zero_id!r}); assuming outputs already exist."
+        )
+
+    # Step 3: parallel non-zero branch loop via Dask.
     # Calibration is NOT invoked here — call ``fimbox.run_calibration``
     # separately after this function (and any deny-list cleanups) finish.
     results = process_branches(cfg)
@@ -183,7 +224,7 @@ def calculate_allbranches(
     n_ok = sum(1 for r in results if r.status == "ok")
     log.info(
         f"calculate_allbranches: {cfg.aoi_id} | "
-        f"branch_zero registered={n_b0_recorded} | "
+        f"branch_zero built={run_branch_zero} registered={n_b0_recorded} | "
         f"non-zero branches ok={n_ok}/{len(results)} | "
         f"unit files removed={n_removed} ==="
     )

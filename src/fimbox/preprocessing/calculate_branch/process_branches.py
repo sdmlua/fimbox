@@ -319,6 +319,9 @@ def process_branches(cfg: AOIProcessingConfig) -> list[BranchResult]:
     elif branch_ids:
         from ..._dask import get_client
         from distributed import as_completed as dask_as_completed
+        from ._wbt_safe import _ensure_wbt_source
+
+        _ensure_wbt_source(cfg.wbt_path if hasattr(cfg, "wbt_path") else None)
 
         client = get_client(n_workers=cfg.n_workers)
         log.info(
