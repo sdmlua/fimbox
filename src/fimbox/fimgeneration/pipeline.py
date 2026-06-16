@@ -536,6 +536,9 @@ class generateFIM:
         """Run FimGenerator for each CSV. Outputs land in <AOI>/fim-outputs/
         named after the input CSV: an inundation extent always, plus a depth
         raster only when ``self.depth`` is True."""
+        import numpy as np
+        import rasterio
+
         out_dir = self._root / "fim-outputs"
         out_dir.mkdir(parents=True, exist_ok=True)
         results: list[FimGenerationResult] = []
@@ -558,6 +561,30 @@ class generateFIM:
                 and Path(result.depth_path).exists()
             ):
                 Path(result.depth_path).unlink()
+
+            # Overwrite inundation extent in-place as binary: wet (> 0) -> 1, else 0.
+            extent_path = out_dir / f"{base}_inundation.tif"
+            if extent_path.exists():
+                tmp_path = out_dir / f"{base}_inundation_tmp.tif"
+                with rasterio.open(extent_path) as src:
+                    meta = src.meta.copy()
+                    meta.update(
+                        dtype="uint8",
+                        nodata=255,
+                        compress="lzw",
+                        tiled=True,
+                        blockxsize=512,
+                        blockysize=512,
+                        BIGTIFF="YES",
+                    )
+                    with rasterio.open(tmp_path, "w", **meta) as dst:
+                        for _, window in src.block_windows(1):
+                            data = src.read(1, window=window)
+                            binary = np.where(data > 0, np.uint8(1), np.uint8(0))
+                            dst.write(binary, 1, window=window)
+                tmp_path.replace(extent_path)
+                log.info(f"Binary inundation written -> {extent_path.name}")
+
             results.append(result)
         return results
 
