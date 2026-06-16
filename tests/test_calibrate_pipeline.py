@@ -103,8 +103,7 @@ _skip_no_spatial = pytest.mark.skipif(
 
 # COMBINED — the whole calibration pipeline in one call, matching the step-by-step
 # sequence: reset -> aggregate_pre -> thalweg -> longitudinal -> bathymetry ->
-# bankfull -> subdiv -> nonmonotonic -> usgs -> spatial -> manual ->
-# aggregate_post -> log_scan.
+# bankfull -> subdiv -> nonmonotonic -> usgs -> spatial -> manual -> aggregate_post -> log_scan.
 # File-dependent steps (bathy, usgs, spatial, manual) self-skip when their
 # input file is absent, matching the step-by-step skip decorators.
 @_skip_no_aoi
