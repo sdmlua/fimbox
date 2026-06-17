@@ -5,13 +5,16 @@ Step 2 (BridgeDEMDiff):        computes lidar_elev - dem_elev and saves bridge_e
 """
 
 import logging
+from pathlib import Path
+
 import fimbox
 
 log = logging.getLogger(__name__)
 
-bridge_gpkg = ".././out/test_smallB/watershed-data/osm_bridges_subset.gpkg"
-dem_path = ".././out/test_smallB/watershed-data/dem.tif"
-out_dir = ".././out/test_smallB/watershed-data"
+OUT_DIR = Path(".././out/test_smallB/watershed-data")
+bridge_gpkg = OUT_DIR / "osm_bridges_subset.gpkg"
+dem_path = OUT_DIR / "dem.tif"
+out_dir = OUT_DIR
 
 
 # check which bridges already have rasters vs still pending (safe to run anytime)
@@ -40,7 +43,7 @@ def test_generate_bridge_raster():
 def test_bridge_dem_diff():
     out_path = fimbox.BridgeDEMDiff(
         dem_path=dem_path,
-        lidar_tif_dir=f"{out_dir}/bridge_dem/lidar_osm_rasters",
+        lidar_tif_dir=OUT_DIR / "bridge_dem" / "lidar_osm_rasters",
         bridge_gpkg=bridge_gpkg,
         out_dir=out_dir,
         out_name="bridge_elev_diff.tif",

@@ -149,7 +149,7 @@ GW_REACHES = BRANCH_DIR / f"gw_catchments_reaches_{BRANCH_ID}.tif"
 PIXEL_PTS = BRANCH_DIR / f"flows_points_pixels_{BRANCH_ID}.gpkg"
 GW_PIXELS = BRANCH_DIR / f"gw_catchments_pixels_{BRANCH_ID}.tif"
 
-
+#==========================
 # COMBINED — the whole branch pipeline in one go, matching the step-by-step
 # sequence exactly:
 #   Step Z0  BranchDerivation  — level paths, branch polygons, branch_ids.lst
@@ -161,74 +161,75 @@ GW_PIXELS = BRANCH_DIR / f"gw_catchments_pixels_{BRANCH_ID}.tif"
 # Optional inputs (bridge_diff, levees, headwaters, levelpaths_extended) are
 # resolved from OUT_DIR and passed only when the file exists on disk, matching
 # the step-by-step behaviour.
+# ============================
 def test_branchprocessing_combined():
-    """Run the full branch pipeline — derivation, whole-AOI branch zero, then
-    all non-zero branches in parallel — in one call.
+    """Run the full branch pipeline in one call.
 
-    Mirrors the step-by-step test sequence (Z0 → Z1 → B-series) so the combined
-    path produces an identical ``branches/0/`` folder and the same per-branch
-    outputs as running the individual tests.
+    Order inside calculate_allbranches:
+      1. BranchZero for branch 0 — serial in main process, always first.
+         Branch 0 gets DEM clip / AGREE / pit-fill / D8 flowdir only.
+         CreateHAND does NOT run on branch 0; its flowdir is the shared
+         input every non-zero branch reads. After deny-list cleanup
+         branches/0/ keeps only what is NOT listed in deny_branch_zero.lst
+         (no hydroTable — that is expected and correct by design).
+      2. All non-zero branches in parallel via Dask — BranchZero then the
+         full 22-step CreateHAND. Non-zero branches produce hydroTable.
+      3. Deny-list cleanup removes intermediates from every branch dir.
     """
     from fimbox import AOIProcessingConfig, BranchDerivation, calculate_allbranches
     from fimbox._dask import _resolve_n_workers
 
-    # Step Z0 — BranchDerivation: level paths, branch polygons, branch_ids.lst
     BranchDerivation(
         out_dir=OUT_DIR,
-        branch_id_attribute="levpa_id",       # branch key on the level-path streams
-        reach_id_attribute="ID",              # NWM reach id attribute
-        branch_buffer_distance_meters=7000.0, # m, buffer around each level path
+        branch_id_attribute="levpa_id",
+        reach_id_attribute="ID",
+        branch_buffer_distance_meters=7000.0,
     ).run()
 
-    # whole-AOI BranchZero: optional inputs, passed only when on disk
-    bridge_diff         = BRIDGE_DIFF  if BRIDGE_DIFF.exists()   else None
-    levee_gpkg          = NLD_LEVEES   if NLD_LEVEES.exists()    else None
-    headwaters          = HEADWATERS   if HEADWATERS.exists()     else None
+    bridge_diff         = BRIDGE_DIFF   if BRIDGE_DIFF.exists()    else None
+    levee_gpkg          = NLD_LEVEES    if NLD_LEVEES.exists()     else None
+    headwaters          = HEADWATERS    if HEADWATERS.exists()     else None
     levelpaths_extended = LEVELPATH_EXT if LEVELPATH_EXT.exists() else None
 
-    # all knobs for BranchZero and CreateHAND; edit here to retune the whole AOI
-    n_workers = _resolve_n_workers()  # auto-sized; set FIMBOX_DASK_WORKERS=N to override
+    n_workers = _resolve_n_workers()
     cfg = AOIProcessingConfig(
         aoi_dir=OUT_DIR,
         branch_list_path=OUT_DIR / "branch_ids.lst",
 
-        # Z1 BranchZero inputs (whole-AOI, branch_id="0")
+        # BranchZero inputs (whole-AOI, branch_id="0")
         dem_path=DEM,
         streams_gpkg=STREAMS,
         boundary_gpkg=BOUNDARY_BUF,
-        bridge_elev_diff_path=bridge_diff,            # None -> skipped
-        levee_gpkg_path=levee_gpkg,                   # None -> no levee burn
-        headwaters_gpkg=headwaters,                   # None -> skipped
-        levelpaths_extended_gpkg=levelpaths_extended, # None -> skipped
+        bridge_elev_diff_path=bridge_diff,
+        levee_gpkg_path=levee_gpkg,
+        headwaters_gpkg=headwaters,
+        levelpaths_extended_gpkg=levelpaths_extended,
 
-        # Z1 AGREE DEM conditioning
-        agree_buffer_m=15.0,      # m, stream buffer for AGREE
-        agree_smooth_drop=10.0,   # m, smooth elevation drop
-        agree_sharp_drop=1000.0,  # m, sharp in-channel drop
+        # AGREE DEM conditioning
+        agree_buffer_m=15.0,
+        agree_smooth_drop=10.0,
+        agree_sharp_drop=1000.0,
 
-        # B CreateHAND geometry
-        cost_distance_tolerance=50.0,    # m, lateral cost distance
-        lateral_elevation_threshold=10,  # m, lateral thalweg drop cap
-        max_split_distance_m=1500.0,     # m, split-reach max length
-        slope_min=0.0001,                # rise/run floor
-        lakes_buffer_dist_m=100.0,       # m, lake-boundary buffer
+        # CreateHAND geometry
+        cost_distance_tolerance=50.0,
+        lateral_elevation_threshold=10,
+        max_split_distance_m=1500.0,
+        slope_min=0.0001,
+        lakes_buffer_dist_m=100.0,
 
-        # B SRC / crosswalk (Manning's hydroTable)
-        mannings_n=0.06,                # channel roughness
-        stage_min_m=0.0,                # SRC stage ladder start
-        stage_interval_m=0.3048,        # SRC stage step (1 ft)
-        stage_max_m=25.2984,            # SRC stage ladder end (~83 ft)
-        min_catchment_area=0.25,        # km^2, short-reach replacement threshold
-        min_stream_length=0.5,          # km, short-reach replacement threshold
-        crosswalk_max_distance_m=100.0, # m, midpoint-to-NWM-flowline snap cap
+        # SRC / crosswalk
+        mannings_n=0.06,
+        stage_min_m=0.0,
+        stage_interval_m=0.3048,
+        stage_max_m=25.2984,
+        min_catchment_area=0.25,
+        min_stream_length=0.5,
+        crosswalk_max_distance_m=100.0,
 
-        # B SRC slope source for Manning's equation:
-        #   "iris_sword" (default) - IRIS-SWORD slope on order>=4 streams, else DEM
-        #   "dem"                  - DEM rise/run slope only
-        #   "hfab"                 - hydrofabric native slope, else DEM fallback
+        # SRC slope source: "iris_sword" | "dem" | "hfab"
         src_slope_source="iris_sword",
-        iris_slope_csv=None,    # None -> packaged fimbox/data table
-        hfab_slope_column=None, # column name when not "Slope"/"So"
+        iris_slope_csv=None,
+        hfab_slope_column=None,
 
         # execution
         n_workers=n_workers,
@@ -238,19 +239,35 @@ def test_branchprocessing_combined():
 
     result = calculate_allbranches(
         cfg,
-        run_branch_zero=True,  # run whole-AOI BranchZero (Z1) before Dask workers start
+        run_branch_zero=True,
         delete_deny_list=True,
         deny_unit_list=Path(__file__).resolve().parent.parent / "config" / "deny_unit.lst",
         branch_ids_csv=OUT_DIR / "branch_ids.csv",
     )
 
-    assert (OUT_DIR / "branches" / "0").exists(), \
-        "branches/0/ not created — whole-AOI BranchZero did not run"
-    assert result.n_branch_zero_recorded == 1, "branch zero not registered in branch_ids.csv"
+    # Branch 0 now runs BranchZero + full CreateHAND (same as every non-zero branch).
+    b0 = OUT_DIR / "branches" / "0"
+    assert (b0 / "branch_zero_complete.txt").exists(), "branch_zero_complete.txt missing"
+    assert (b0 / "dem_0.tif").exists(),                      "dem_0.tif missing from branch 0"
+    assert (b0 / "flowdir_d8_burned_filled_0.tif").exists(), "flowdir missing from branch 0"
+    assert (b0 / "hydroTable_0.csv").exists(),               "hydroTable_0.csv missing from branch 0"
+    assert result.n_branch_zero_recorded == 1, "branch zero not in branch_ids.csv"
     assert result.branch_ids_csv.exists(), "branch_ids.csv not created"
-    ok = sum(1 for r in result.branch_results if r.status == "ok")
-    log.info(f"combined branch run: branch_zero=1, non-zero ok={ok}")
+
+    # branch_results now includes branch 0 at index 0.
+    b0_res = next((r for r in result.branch_results if r.branch_id == "0"), None)
+    assert b0_res is not None and b0_res.status == "ok", f"branch 0 status: {b0_res}"
+
+    non_zero = [r for r in result.branch_results if r.branch_id != "0"]
+    ok = sum(1 for r in non_zero if r.status == "ok")
+    log.info(f"combined: branch_zero=ok  non-zero ok={ok}/{len(non_zero)}")
     assert result.n_non_zero_recorded == ok
+
+    # Spot-check one non-zero branch hydroTable.
+    ok_branches = [r.branch_id for r in non_zero if r.status == "ok"]
+    if ok_branches:
+        sample_ht = OUT_DIR / "branches" / ok_branches[0] / f"hydroTable_{ok_branches[0]}.csv"
+        assert sample_ht.exists(), f"hydroTable missing from branch {ok_branches[0]}"
 
 
 # =============================================================================
@@ -969,11 +986,8 @@ def test_branchprocessing_combined():
 #     deny_unit_list = Path(__file__).resolve().parent.parent / "config" / "deny_unit.lst"
 #     assert deny_unit_list.is_file(), f"deny_unit.lst missing: {deny_unit_list}"
 
-#     # Pass the same tuning the branch-zero step tests use, so every branch in
-#     # this all-branches run and branch zero share one set of values. Editing
-#     # PARAMS_CREATE_HAND at the top of this file retunes both paths together.
-#     # Auto-size workers to the machine (min of CPU count and RAM budget).
-#     # Override with env FIMBOX_DASK_WORKERS=N; set N=1 to force serial.
+#     # Reuse branch-zero tuning so both paths stay in sync.
+#     # Auto-size workers to the machine; set FIMBOX_DASK_WORKERS=1 for serial.
 #     from fimbox._dask import _resolve_n_workers
 
 #     n_workers = _resolve_n_workers()

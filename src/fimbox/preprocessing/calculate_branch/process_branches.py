@@ -635,27 +635,30 @@ def _process_single_branch(cfg: AOIProcessingConfig, branch_id: str) -> BranchRe
                 source_name("lp_catchments", identifier, branch_id),
             )
 
-        # BranchZero raster prep
-        BranchZero(
-            dem_path=cfg.dem_path,
-            streams_gpkg=branch_streams,
-            boundary_gpkg=branch_boundary,
-            out_dir=cfg.aoi_dir,
-            bridge_elev_diff_path=cfg.bridge_elev_diff_path,
-            levee_gpkg_path=cfg.levee_gpkg_path,
-            levee_raster_path=cfg.levee_raster_path,
-            headwaters_gpkg=branch_headwaters,
-            levelpaths_extended_gpkg=branch_levelpaths_extended,
-            target_crs=(
-                f"EPSG:{cfg.target_crs}"
-                if str(cfg.target_crs).isdigit()
-                else cfg.target_crs
-            ),
-            agree_buffer_m=cfg.agree_buffer_m,
-            agree_smooth_drop=cfg.agree_smooth_drop,
-            agree_sharp_drop=cfg.agree_sharp_drop,
-            branch_zero_id=branch_id,
-        ).run()
+        _bz_sentinel = branch_dir / "branch_zero_complete.txt"
+        if _bz_sentinel.exists():
+            branch_log.info("BranchZero already complete — skipping raster prep")
+        else:
+            BranchZero(
+                dem_path=cfg.dem_path,
+                streams_gpkg=branch_streams,
+                boundary_gpkg=branch_boundary,
+                out_dir=cfg.aoi_dir,
+                bridge_elev_diff_path=cfg.bridge_elev_diff_path,
+                levee_gpkg_path=cfg.levee_gpkg_path,
+                levee_raster_path=cfg.levee_raster_path,
+                headwaters_gpkg=branch_headwaters,
+                levelpaths_extended_gpkg=branch_levelpaths_extended,
+                target_crs=(
+                    f"EPSG:{cfg.target_crs}"
+                    if str(cfg.target_crs).isdigit()
+                    else cfg.target_crs
+                ),
+                agree_buffer_m=cfg.agree_buffer_m,
+                agree_smooth_drop=cfg.agree_smooth_drop,
+                agree_sharp_drop=cfg.agree_sharp_drop,
+                branch_zero_id=branch_id,
+            ).run()
 
         # adjust_floodplains is optional (requires NFHL gpkg + branch polygons)
         if cfg.fema_nfhl_gpkg and cfg.branch_polygons_gpkg.exists():

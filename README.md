@@ -30,8 +30,24 @@ cd fimbox
 # uv-based environment (recommended)
 pip install uv
 uv venv
-source .venv/bin/activate            # Windows: .venv\Scripts\activate
 uv pip install -e .
+```
+
+Activate the virtual environment before running any commands:
+
+**Mac / Linux**
+```bash
+source .venv/bin/activate
+```
+
+**Windows (Command Prompt)**
+```cmd
+.venv\Scripts\activate.bat
+```
+
+**Windows (PowerShell)**
+```powershell
+.venv\Scripts\Activate.ps1
 ```
 
 If you prefer Conda, create and activate the environment first, then run

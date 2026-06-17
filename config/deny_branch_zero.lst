@@ -1,6 +1,7 @@
-# List of files for branch zero to delete
-# Use comment to allow list the file
-# Use curly braces to denote branch_id
+# Files to delete from branches/0/ after the branch loop completes.
+# Use # to keep a file. Use {} for the branch_id placeholder.
+# DO NOT add branch_zero_complete.txt — it is the only durable proof that
+# BranchZero ran successfully and must survive cleanup.
 agree_binary_bufgrid.tif
 agree_bufgrid.tif
 agree_bufgrid_allo.tif
@@ -43,14 +44,14 @@ demDerived_streamPixels_{}_ids_dist.tif
 # fimbox writes dem_{bid}.tif as the per-branch working DEM (the levee-masked
 # copy CreateHAND reads from). inundation-mapping called it dem_meters_{bid}.tif
 # — catch both.
-dem_{}.tif
+# dem_{}.tif                    — kept: clipped whole-AOI DEM
 dem_burned_{}.tif
 dem_burned_filled_{}.tif
 dem_lateral_thalweg_adj_{}.tif
 dem_meters_{}.tif
 dem_thalwegCond_{}.tif
 flowaccum_d8_burned_filled_{}.tif
-flowdir_d8_burned_filled_{}.tif
+# flowdir_d8_burned_filled_{}.tif  — kept: whole-AOI D8 flow direction, shared input for all non-zero branches
 flowdir_d8_burned_filled_flows_{}.tif
 flows_grid_boolean_{}.tif
 flows_points_pixels_{}.gpkg

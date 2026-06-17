@@ -1,7 +1,9 @@
 # Example Usage:
+from pathlib import Path
+
 import fimbox
 
-test_boundary = "./docs/test_boundary/test_smallB.shp"
+test_boundary = Path("./docs/test_boundary/test_smallB.shp")
 test_huc8 = "08060202"  # Yazoo River basin, MS
 
 

@@ -124,6 +124,12 @@ class BranchZero:
             )
             result = self._run()
             log.info(f"BranchZero complete: {len(result)} output files written")
+            # Write a sentinel that survives deny-list cleanup. The cleanup
+            # removes all raster/vector intermediates from branches/{id}/, so
+            # the directory looks empty after a production run. This file is
+            # the only durable proof that BranchZero ran successfully.
+            sentinel = self.out_dir / "branches" / self.branch_zero_id / "branch_zero_complete.txt"
+            sentinel.write_text(f"branch_id={self.branch_zero_id}\nfiles_written={len(result)}\n")
             return result
         except Exception:
             log.exception("BranchZero failed")

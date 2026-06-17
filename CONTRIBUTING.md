@@ -23,7 +23,28 @@ git clone https://github.com/sdmlua/fimbox.git
 cd fimbox
 pip install uv
 uv venv
-source .venv/bin/activate        # Windows: .venv\Scripts\activate
+```
+
+Activate the virtual environment:
+
+**Mac / Linux**
+```bash
+source .venv/bin/activate
+```
+
+**Windows (Command Prompt)**
+```cmd
+.venv\Scripts\activate.bat
+```
+
+**Windows (PowerShell)**
+```powershell
+.venv\Scripts\Activate.ps1
+```
+
+Then install the package:
+
+```bash
 uv pip install -e .
 uv pip install -e ".[dev]"
 ```
@@ -85,22 +106,33 @@ Tests that need real AOI data are gated with
 `@pytest.mark.skipif(not (AOI_DIR / "branches").is_dir(), ...)` so they
 skip automatically when the fixture isn't present.
 
-Run the full suite:
+Always run pytest via `python -m pytest`, not the bare `pytest` command.
+When conda is active alongside the uv venv, the shell resolves `pytest` to
+conda's copy, which doesn't have fimbox installed and fails immediately.
+`python -m pytest` uses whichever Python is first on `PATH` — the venv's
+Python — so it always finds the installed package.
 
+**Mac / Linux**
 ```bash
 black .
-pytest tests/
+python -m pytest tests/
 ```
 
-If `pytest` is not on your shell path:
-
-```bash
+**Windows**
+```cmd
 python -m pytest tests/
 ```
 
 Narrower test target while developing:
 
+**Mac / Linux**
 ```bash
+python -m pytest tests/test_fimgeneration.py -s
+python -m pytest tests/test_branchprocessing.py::test_step_C25_calculate_allbranches_live_run -s
+```
+
+**Windows**
+```cmd
 python -m pytest tests/test_fimgeneration.py -s
 python -m pytest tests/test_branchprocessing.py::test_step_C25_calculate_allbranches_live_run -s
 ```

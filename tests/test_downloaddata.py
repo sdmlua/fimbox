@@ -1,8 +1,10 @@
 # Example Usage:
 import logging
+from pathlib import Path
+
 import fimbox
 
-test_boundary = "././docs/test_boundary/test_smallB.shp"
+test_boundary = Path("././docs/test_boundary/test_smallB.shp")
 
 # # Testing the entire NHDPlus data extraction process along with National Flood Hazard Layer data extraction
 # # This is OLDER VERSION using EPA AWS S3 Bucket which will get for whole HUC6 region--> not very effective

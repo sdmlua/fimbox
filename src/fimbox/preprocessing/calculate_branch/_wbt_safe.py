@@ -74,9 +74,15 @@ def _ensure_wbt_source(wbt_path: Optional[str] = None) -> None:
     with _WBT_LOCK:
         if _WBT_SRC_READY:
             return
+        import webbrowser
         import whitebox as _wbt_mod
 
-        inst = _wbt_mod.WhiteboxTools()  # triggers download_wbt() exactly once
+        _real_browser_open = webbrowser.open
+        webbrowser.open = lambda *a, **kw: None  # suppress the post-download homepage
+        try:
+            inst = _wbt_mod.WhiteboxTools()  # triggers download_wbt() exactly once
+        finally:
+            webbrowser.open = _real_browser_open
         inst.set_verbose_mode(False)
         wbt_dir = wbt_path or os.environ.get("WBT_PATH")
         if wbt_dir:
