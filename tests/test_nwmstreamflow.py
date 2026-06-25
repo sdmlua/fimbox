@@ -24,7 +24,7 @@ from fimbox import (
     calculate_statistics,
 )
 
-AOI_DIR = Path(".././out/test_smallB")
+AOI_DIR = Path(__file__).resolve().parents[2] / "out" / "test_smallB"
 
 START = "2016-10-05"
 END = "2016-10-20"

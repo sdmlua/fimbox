@@ -155,8 +155,10 @@ class HUC8Finder:
         out_dir: Optional[Union[str, Path]] = None,
         debug: bool = False,
     ):
+        from ...logging_utils import default_output_dir
+
         self.save = save
-        self.out_dir = Path(out_dir) if out_dir else Path.cwd()
+        self.out_dir = Path(out_dir) if out_dir else default_output_dir()
         self.debug = debug
 
     def _log(self, msg):

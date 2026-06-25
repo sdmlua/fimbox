@@ -27,7 +27,7 @@ class DEMProcessor:
         self,
         boundary: Union[str, gpd.GeoDataFrame],
         layer: Optional[str] = None,
-        output_dir: str = "./dem_output",
+        output_dir: Optional[Union[str, Path]] = None,
         out_name: Optional[str] = None,
         dem_file: Optional[str] = None,
         resolution: int = 10,
@@ -44,8 +44,10 @@ class DEMProcessor:
         self.tile_size_deg = tile_size_deg
         self.max_workers = max_workers or min(8, (os.cpu_count() or 4))
 
+        from ...logging_utils import default_output_dir
+
         self.out_name = out_name
-        self.output_dir = Path(output_dir)
+        self.output_dir = Path(output_dir) if output_dir else default_output_dir()
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
         # Setup Logger - Uses "DEMProcessor" name to link to pipeline logger

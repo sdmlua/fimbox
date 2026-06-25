@@ -41,6 +41,16 @@ _DATEFMT = "%H:%M:%S"
 # Name of the watershed-data subfolder that holds all input data + branches.
 WATERSHED_DIR_NAME = "watershed-data"
 
+# Single fallback output folder used by every entry point when the caller does
+# not pass an output directory, so outputs never scatter across CWD-relative
+# folders. Resolved to an absolute path for predictability on macOS + Windows.
+DEFAULT_OUTPUT_DIR_NAME = "out"
+
+
+def default_output_dir() -> Path:
+    """Absolute fallback output directory (``<cwd>/out``) for no-arg callers."""
+    return (Path.cwd() / DEFAULT_OUTPUT_DIR_NAME).resolve()
+
 
 def aoi_root(case_dir: Union[str, Path]) -> Path:
     """Resolve the AOI root from any directory a stage operates on.

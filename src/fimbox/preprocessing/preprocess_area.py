@@ -47,7 +47,12 @@ from shapely.geometry import LineString, MultiLineString
 
 from shapely.geometry import box as shapely_box
 
-from ..logging_utils import WATERSHED_DIR_NAME, attach_case_log, get_logger
+from ..logging_utils import (
+    WATERSHED_DIR_NAME,
+    attach_case_log,
+    default_output_dir,
+    get_logger,
+)
 from .download_data.dem_process import DEMProcessor
 from .download_data.area_masks import DownloadDEMDomain, DownloadLandSea
 from .download_data.nfhl_data import DownloadFEMANFHL
@@ -356,7 +361,7 @@ class getAllInputData:
         # stage (branch derivation/processing, calibration, FIM) takes as its
         # aoi_dir. case_dir is kept as an alias for that watershed-data folder
         # so the rest of this class is unchanged.
-        root = Path(out_dir) if out_dir else Path("fimbox_preprocess")
+        root = Path(out_dir) if out_dir else default_output_dir()
         self.aoi_dir = root / self.case_name
         self.watershed_dir = self.aoi_dir / WATERSHED_DIR_NAME
         self.case_dir = self.watershed_dir

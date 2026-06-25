@@ -43,7 +43,7 @@ from fimbox.preprocessing.calibrate_ratingcurve import (
 )
 
 # Live AOI + input files. Edit these to point at your data; tests skip when the AOI is absent.
-AOI_DIR = Path(".././out/test_smallB")
+AOI_DIR = Path(__file__).resolve().parents[2] / "out" / "test_smallB"
 
 # Bundled lookup tables shipped in the repo (all calibration inputs live here).
 DATA = Path(__file__).resolve().parents[1] / "data"

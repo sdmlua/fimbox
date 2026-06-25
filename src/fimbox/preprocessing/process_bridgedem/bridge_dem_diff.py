@@ -49,17 +49,19 @@ class BridgeDEMDiff:
     dem_path: Union[str, Path]
     lidar_tif_dir: Union[str, Path]
     bridge_gpkg: Union[str, Path]
-    out_dir: Union[str, Path] = Path("bridge_dem_output")
+    out_dir: Optional[Union[str, Path]] = None
     out_name: str = "bridge_elev_diff.tif"
     n_workers: int = field(default_factory=lambda: min(os.cpu_count() or 4, 8))
     id_col: Optional[str] = "osmid"
     cleanup_lidar_tifs: bool = True
 
     def __post_init__(self):
+        from ...logging_utils import default_output_dir
+
         self.dem_path = Path(self.dem_path)
         self.lidar_tif_dir = Path(self.lidar_tif_dir)
         self.bridge_gpkg = Path(self.bridge_gpkg)
-        self.out_dir = Path(self.out_dir)
+        self.out_dir = Path(self.out_dir) if self.out_dir else default_output_dir()
         self.out_dir.mkdir(parents=True, exist_ok=True)
 
     def run(self) -> Path:

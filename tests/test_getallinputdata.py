@@ -3,7 +3,11 @@ from pathlib import Path
 
 import fimbox
 
-test_boundary = Path("./docs/test_boundary/test_smallB.shp")
+PKG_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = Path(__file__).resolve().parents[2]
+
+test_boundary = PKG_ROOT / "docs" / "test_boundary" / "test_smallB.shp"
+OUT_DIR = REPO_ROOT / "out"
 test_huc8 = "08060202"  # Yazoo River basin, MS
 
 
@@ -12,7 +16,7 @@ test_huc8 = "08060202"  # Yazoo River basin, MS
 def test_preprocess_all_from_boundary():
     pp = fimbox.getAllInputData(
         boundary=test_boundary,
-        out_dir="../out",
+        out_dir=OUT_DIR,
         buffer_m=5000,  # metres to buffer boundary for data downloads
         headwater_buffer_cells=8,  # pixels to shrink buffer for headwater clip
         get_flowlines=True,  # set False to use your own flowlines and corresponding catchments
@@ -31,7 +35,7 @@ def test_preprocess_all_from_boundary():
 # def test_preprocess_byo_inputs():
 #     pp = fimbox.getAllInputData(
 #         boundary=test_boundary,
-#         out_dir="../out",
+#         out_dir=OUT_DIR,
 #         flowlines="path/to/my_flowlines.gpkg",
 #         catchments="path/to/my_catchments.gpkg",
 #         stream_fields={"ID": "nhdplusid", "order_": "streamorde", "levpa_id": "levelpathi"},
@@ -49,7 +53,7 @@ def test_preprocess_all_from_boundary():
 # def test_preprocess_all_from_huc8():
 #     pp = fimbox.getAllInputData(
 #         huc8=test_huc8,
-#         out_dir="../out",
+#         out_dir=OUT_DIR,
 #         buffer_m=2000,
 #         headwater_buffer_cells=8,
 #         get_flowlines=True,  # set False to use your own flowlines and corresponding catchments
@@ -63,7 +67,7 @@ def test_preprocess_all_from_boundary():
 # def test_preprocess_all_byo_flowlines_catchments():
 #     pp = fimbox.getAllInputData(
 #         huc8=test_huc8,
-#         out_dir="../out",
+#         out_dir=OUT_DIR,
 #         buffer_m=2000,
 #         headwater_buffer_cells=8,
 #         get_flowlines=False,
@@ -74,17 +78,17 @@ def test_preprocess_all_from_boundary():
 
 # Run individual steps
 # def test_preprocess_dem_only():
-#     pp = fimbox.getAllInputData(boundary=test_boundary, out_dir="../out")
+#     pp = fimbox.getAllInputData(boundary=test_boundary, out_dir=OUT_DIR)
 #     pp.run_dem()
 
 # def test_preprocess_nhd_only():
-#     pp = fimbox.getAllInputData(boundary=test_boundary, out_dir="../out")
+#     pp = fimbox.getAllInputData(boundary=test_boundary, out_dir=OUT_DIR)
 #     pp.run_nhd()
 
 # def test_preprocess_nld_only():
-#     pp = fimbox.getAllInputData(boundary=test_boundary, out_dir="../out")
+#     pp = fimbox.getAllInputData(boundary=test_boundary, out_dir=OUT_DIR)
 #     pp.run_nld()
 
 # def test_preprocess_osm_only():
-#     pp = fimbox.getAllInputData(boundary=test_boundary, out_dir="../out")
+#     pp = fimbox.getAllInputData(boundary=test_boundary, out_dir=OUT_DIR)
 #     pp.run_osm()

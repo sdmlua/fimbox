@@ -337,7 +337,9 @@ class DownloadNLD:
 
         self.logger = log
 
-        self.output_dir = Path(out_dir) if out_dir else Path.cwd() / "nld_data"
+        from ...logging_utils import default_output_dir
+
+        self.output_dir = Path(out_dir) if out_dir else default_output_dir()
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
         # Process Boundary
@@ -440,7 +442,7 @@ if __name__ == "__main__":
     )
     parser.add_argument("--boundary", required=True, help="Path to boundary file")
     parser.add_argument("--layer-name", default=None)
-    parser.add_argument("--out-dir", default="nld_data")
+    parser.add_argument("--out-dir", default=None)
     parser.add_argument("--epsg", type=int, default=5070)
     parser.add_argument("--lines-name", default=None)
     parser.add_argument("--polys-name", default=None)

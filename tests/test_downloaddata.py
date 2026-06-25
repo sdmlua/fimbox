@@ -4,7 +4,11 @@ from pathlib import Path
 
 import fimbox
 
-test_boundary = Path("././docs/test_boundary/test_smallB.shp")
+PKG_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = Path(__file__).resolve().parents[2]
+
+test_boundary = PKG_ROOT / "docs" / "test_boundary" / "test_smallB.shp"
+OUT_DIR = REPO_ROOT / "out"
 
 # # Testing the entire NHDPlus data extraction process along with National Flood Hazard Layer data extraction
 # # This is OLDER VERSION using EPA AWS S3 Bucket which will get for whole HUC6 region--> not very effective
@@ -24,7 +28,7 @@ test_boundary = Path("././docs/test_boundary/test_smallB.shp")
 # def test_get_nfhl():
 #     fimbox.DownloadFEMANFHL(
 #         boundary=test_boundary,
-#         out_dir="../out",
+#         out_dir=OUT_DIR,
 #         out_name="fema_nfhl.gpkg",
 #         # log_path=None,
 #     )
@@ -32,7 +36,7 @@ test_boundary = Path("././docs/test_boundary/test_smallB.shp")
 # def test_download_nld():
 #     fimbox.DownloadNLD(
 #         boundary=test_boundary,
-#         out_dir="../out",
+#         out_dir=OUT_DIR,
 #         lines_name="NLD_Lines.gpkg",       # default; override as needed
 #         polys_name="NLD_Polygons.gpkg",    # default; override as needed
 #     )
@@ -41,7 +45,7 @@ test_boundary = Path("././docs/test_boundary/test_smallB.shp")
 # def test_get_nhddata():
 #     fimbox.NWMFlowlinesDownloader().download(
 #         boundary=test_boundary,
-#         out_dir="../out",
+#         out_dir=OUT_DIR,
 #         out_name="nwm_subset_streams.gpkg",
 #         out_layer="flowlines",
 #     )
@@ -50,7 +54,7 @@ test_boundary = Path("././docs/test_boundary/test_smallB.shp")
 # def test_get_catchments():
 #     fimbox.NWMCatchmentsDownloader().download(
 #         boundary=test_boundary,
-#         out_dir="../out",
+#         out_dir=OUT_DIR,
 #         out_name="nwm_subset_catchments.gpkg",
 #         out_layer="catchments",
 #     )
@@ -58,7 +62,7 @@ test_boundary = Path("././docs/test_boundary/test_smallB.shp")
 # def test_get_lakes():
 #     fimbox.NWMLakesDownloader().download(
 #         boundary=test_boundary,
-#         out_dir="../out",
+#         out_dir=OUT_DIR,
 #         out_name="nwm_subset_lakes.gpkg",
 #         out_layer="lakes",
 #     )
@@ -68,7 +72,7 @@ test_boundary = Path("././docs/test_boundary/test_smallB.shp")
 def test_get_nhd_all():
     fimbox.getNHDPlusData(
         boundary=test_boundary,
-        out_dir="../out",
+        out_dir=OUT_DIR,
         download_flowlines=True,
         download_catchments=True,
         download_lakes=True,
@@ -81,7 +85,7 @@ def test_get_nhd_all():
 # def test_get_nhd_hr():
 #     fimbox.getNHDPlusHRData(
 #         boundary=test_boundary,
-#         out_dir="../out",
+#         out_dir=OUT_DIR,
 #         download_flowlines=True,
 #         download_catchments=True,
 #         identifier="nwm",  # prefix for saved files
@@ -105,7 +109,7 @@ def test_get_nhd_all():
 # def test_get_dem():
 #     fimbox.DEMProcessor(
 #         boundary=test_boundary,
-#         output_dir="../out",
+#         output_dir=OUT_DIR,
 #         out_name="dem.tif",             # default is 3dep_dem_10m.tif
 #         resolution=10,
 #     )
@@ -115,7 +119,7 @@ def test_get_nhd_all():
 # def test_process_byo_dem():
 #     fimbox.DEMProcessor(
 #         boundary=test_boundary,
-#         output_dir="../out",
+#         output_dir=OUT_DIR,
 #         out_name="dem.tif",
 #         resolution=10,
 #         dem_file="path/to/my_dem.tif",
@@ -124,7 +128,7 @@ def test_get_nhd_all():
 # def test_get_osm_roads():
 #     fimbox.DownloadOSMRoads().download(
 #         boundary=test_boundary,
-#         out_dir="../out",
+#         out_dir=OUT_DIR,
 #         out_name="osm_roads.gpkg",
 #         out_layer="osm_roads",
 #     )
@@ -132,7 +136,7 @@ def test_get_nhd_all():
 # def test_get_osm_bridges():
 #     fimbox.DownloadOSMBridges().download(
 #         boundary=test_boundary,
-#         out_dir="../out",
+#         out_dir=OUT_DIR,
 #         out_name="osm_bridges.gpkg",
 #         out_layer="osm_bridges",
 #     )
@@ -144,7 +148,7 @@ def test_get_nhd_all():
 #         boundary=test_boundary,
 #         calc_overlap=True,
 #         save=True,
-#         out_dir="../out",
+#         out_dir=OUT_DIR,
 #     )
 #     logging.getLogger(__name__).info(f"HUC8 info:\n{huc8_info}")
 
@@ -157,7 +161,7 @@ def test_get_nhd_all():
 #     gdf = fimbox.DownloadUSGSGages().download(
 #         boundary=test_boundary,
 #         aoi_id="08060202",
-#         out_dir="../out",
+#         out_dir=OUT_DIR,
 #         out_name="usgs_gages.gpkg",
 #         out_layer="usgs_gages",
 #     )

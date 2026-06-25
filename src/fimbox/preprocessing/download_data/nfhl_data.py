@@ -59,10 +59,12 @@ class DownloadFEMANFHL:
             p = Path(out_dir)
             self.output_path = p if p.suffix else p / (out_name or "fema_nfhl.gpkg")
         else:
+            from ...logging_utils import default_output_dir
+
             base_name = (
                 Path(boundary).stem if isinstance(boundary, str) else "flood_zones"
             )
-            self.output_path = Path.cwd() / "nfhl_data" / f"fema_nfhl_{base_name}.gpkg"
+            self.output_path = default_output_dir() / f"fema_nfhl_{base_name}.gpkg"
         self.output_dir = self.output_path.parent
         self.output_dir.mkdir(parents=True, exist_ok=True)
 

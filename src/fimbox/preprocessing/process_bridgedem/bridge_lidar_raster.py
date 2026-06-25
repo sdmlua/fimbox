@@ -209,7 +209,7 @@ class generateBridgeRaster:
     """
 
     bridge_gpkg: Union[str, Path]
-    out_dir: Union[str, Path] = Path("bridge_dem_output")
+    out_dir: Optional[Union[str, Path]] = None
     resolution: float = 10.0
     buffer_m: float = 10.0
     n_workers: int = field(default_factory=lambda: os.cpu_count() or 4)
@@ -221,8 +221,11 @@ class generateBridgeRaster:
     skip_ids: list = field(default_factory=lambda: ["229091666"])
 
     def __post_init__(self):
+        from ...logging_utils import default_output_dir
+
         self.bridge_gpkg = Path(self.bridge_gpkg)
-        self._log_dir = Path(self.out_dir)  # log lives in the user-supplied root
+        # log lives in the user-supplied root (falls back to <cwd>/out)
+        self._log_dir = Path(self.out_dir) if self.out_dir else default_output_dir()
         self.out_dir = self._log_dir / "bridge_dem"
         self._tif_dir = self.out_dir / "lidar_osm_rasters"
         self._tif_dir.mkdir(parents=True, exist_ok=True)
