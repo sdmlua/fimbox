@@ -2,15 +2,23 @@
 name = "fimbox"
 version = "0.1.0"
 description = "A modular open-source testbed framework to standardize Flood Inundation Mapping simulations and evaluation with custom datasets and hydrologic parameters with reproducible workflows."
-authors = [{ name = "Supath Dhital", email = "sdhital@ua.edu" }]
-maintainers = [{ name = "Supath Dhital", email = "sdhital@ua.edu" }]
+authors = [
+  { name = "Surface Dynamics Modeling Lab (SDML), The University of Alabama" },
+  { name = "Supath Dhital", email = "sdhital@ua.edu" },
+]
+maintainers = [
+  { name = "Surface Dynamics Modeling Lab (SDML), The University of Alabama" },
+  { name = "Supath Dhital", email = "sdhital@ua.edu" },
+]
+
+keywords = ["flood inundation mapping", "terrain modeling", "hydrology", "hydraulics", "floodplain mapping", "cloud computing"]
+
 license = { text = "GPL-3.0" }
 readme = "README.md"
 requires-python = ">=3.10,<3.13"
 dependencies = [
     "pynhd",
     "pygeohydro",
-    "py3dep",
     "geopandas",
     "tqdm>=4.67.1",
     "osmnx>=2.0.7",
@@ -32,6 +40,9 @@ dependencies = [
     "requests",
     "matplotlib",
     "plotly",
+    "pystac-client>=0.8",
+    "planetary-computer>=1.0",
+    "odc-stac>=0.3",
 ]
 
 [project.optional-dependencies]
@@ -60,3 +71,11 @@ exclude = ["tests*"]
 minversion = "6.0"
 addopts = "-ra -q"
 testpaths = ["tests"]
+# Silence third-party DeprecationWarnings we don't control: py3dep/pygeoutils
+# and rioxarray emit `include_z` positional-arg warnings (legacy DEM path), and
+# planetary-computer emits a Pydantic v2 class-based-config warning. None come
+# from fimbox code; filtering keeps test output clean.
+filterwarnings = [
+    "ignore:positional argument `include_z`:DeprecationWarning",
+    "ignore:Support for class-based `config`:DeprecationWarning",
+]

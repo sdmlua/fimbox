@@ -1,5 +1,8 @@
-# 3DEP DEM and custom DEM processing module
-from .dem_process import DEMProcessor
+# 3DEP DEM (Planetary Computer STAC) + custom DEM processing module
+from .dem_process import (
+    DEMProcessor,
+    DEMResolutionUnavailable,
+)
 
 # Utils
 from .utils import NHDBoundaryFinder, HUC8Finder, getHUC8Info
@@ -32,6 +35,7 @@ from .usgs_gages import DownloadUSGSGages
 
 __all__ = [
     "DEMProcessor",
+    "DEMResolutionUnavailable",
     "NHDBoundaryFinder",
     "HUC8Finder",
     "getHUC8Info",

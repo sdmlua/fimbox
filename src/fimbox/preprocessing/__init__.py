@@ -157,6 +157,7 @@ except ImportError:
 try:
     from .download_data import (
         DEMProcessor,
+        DEMResolutionUnavailable,
         NHDBoundaryFinder,
         HUC8Finder,
         getHUC8Info,
@@ -178,6 +179,7 @@ try:
 
     __all__ += [
         "DEMProcessor",
+        "DEMResolutionUnavailable",
         "NHDBoundaryFinder",
         "HUC8Finder",
         "getHUC8Info",

@@ -68,17 +68,17 @@ OUT_DIR = REPO_ROOT / "out"
 #     )
 
 
-# Get all NHD Plus Data
-def test_get_nhd_all():
-    fimbox.getNHDPlusData(
-        boundary=test_boundary,
-        out_dir=OUT_DIR,
-        download_flowlines=True,
-        download_catchments=True,
-        download_lakes=True,
-        resolution="medium",  # "high" -> NHDPlus HR flowlines/catchments via pynhd; "medium" (default) -> NWM. Lakes always NWM.
-        identifier="nwmmr",  # filename prefix; default "nwm" -> nwm_subset_streams.gpkg etc.
-    )
+# # Get all NHD Plus Data
+# def test_get_nhd_all():
+#     fimbox.getNHDPlusData(
+#         boundary=test_boundary,
+#         out_dir=OUT_DIR,
+#         download_flowlines=True,
+#         download_catchments=True,
+#         download_lakes=True,
+#         resolution="medium",  # "high" -> NHDPlus HR flowlines/catchments via pynhd; "medium" (default) -> NWM. Lakes always NWM.
+#         identifier="nwmmr",  # filename prefix; default "nwm" -> nwm_subset_streams.gpkg etc.
+#     )
 
 
 # High-resolution flowlines + catchments only (NHDPlus HR via pynhd).
@@ -105,17 +105,37 @@ def test_get_nhd_all():
 #     assert {"ID", "order_", "levpa_id", "feature_id"}.issubset(fl.columns)
 #     assert "ID" in cat.columns
 
-# Download + process a 3DEP DEM (reproject, clip, hole-fill).
-# def test_get_dem():
+# Download + process a 3DEP DEM. Reads only the AOI window straight from the
+# Planetary Computer COGs over HTTP (no national VRT parse), one snapped
+# reprojection, then hole-fill + clip. ~8x faster than the old py3dep path.
+# Resolutions: 10 / 30 m seamless nationwide; 1 / 3 m from project lidar where
+# it covers the AOI; 60 m is Alaska-only. A resolution with no data for the AOI
+# logs + raises DEMResolutionUnavailable (default stays 10 m).
+def test_get_dem():
+    fimbox.DEMProcessor(
+        boundary=test_boundary,
+        output_dir=OUT_DIR,
+        resolution=10,                  # 1, 3, 10 (default), 30, 60
+        out_name="dem.tif",             # default is 3dep_dem_<res>m.tif
+        # epsg=None,                     # output CRS; None -> auto UTM zone
+        # layer=None,                    # layer name if boundary has multiple
+        # use_dask=True,                 # dask chunking for reproject/heal
+        # chunksize=None,                # None -> auto from CPU count; or set px
+    )
+
+# "give me 1 m, else just 10 m": fallback_to_10m downgrades to 10 m (and logs)
+# when the requested resolution isn't available for the AOI.
+# def test_get_dem_fallback():
 #     fimbox.DEMProcessor(
 #         boundary=test_boundary,
 #         output_dir=OUT_DIR,
-#         out_name="dem.tif",             # default is 3dep_dem_10m.tif
-#         resolution=10,
+#         resolution=1,                   # 1 m where lidar exists, else fall back
+#         out_name="dem.tif",
+#         fallback_to_10m=True,           # default False -> raises if unavailable
 #     )
 
 # Bring your own DEM: pass dem_file and it gets the SAME conditioning as a
-# downloaded one (reproject -> clip to boundary -> fill interior nodata holes).
+# downloaded one (reproject -> hole-fill -> clip to boundary).
 # def test_process_byo_dem():
 #     fimbox.DEMProcessor(
 #         boundary=test_boundary,

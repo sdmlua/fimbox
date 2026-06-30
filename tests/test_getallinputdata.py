@@ -7,7 +7,7 @@ PKG_ROOT = Path(__file__).resolve().parents[1]
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 test_boundary = PKG_ROOT / "docs" / "test_boundary" / "test_smallB.shp"
-OUT_DIR = REPO_ROOT / "out"
+OUT_DIR = REPO_ROOT / "out1"
 test_huc8 = "08060202"  # Yazoo River basin, MS
 
 
