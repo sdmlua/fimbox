@@ -16,11 +16,11 @@ import pandas as pd
 # ── CONFIG ────────────────────────────────────────────────────────
 EXCEL_PATH    = Path(r"C:\Users\Ali\OneDrive - CUNY\Desktop\SI\fimbox_SI26\data\study_area.xlsx")
 HUC_CODE_COL  = "HUC_CODE"
-DEM_TILES_DIR = Path("D:/SI/out/study_area/watershed-data/dem_tiles")
-OUT_DIR       = Path("D:/SI/out")
+DEM_TILES_DIR = Path("E:/SI/out/study_area/watershed-data/dem_tiles")
+OUT_DIR       = Path("E:/SI/out")
 IDENTIFIER    = "nwmmr"
 BUFFER_M      = 5000
-TASK_LOG      = Path("D:/SI/out/stage1_status.txt")   # records pass/fail per HUC
+TASK_LOG      = Path("E:/SI/out/stage1_status.txt")   # records pass/fail per HUC
 # ─────────────────────────────────────────────────────────────────
 
 logging.basicConfig(level=logging.INFO,

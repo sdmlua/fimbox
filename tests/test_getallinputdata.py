@@ -3,22 +3,29 @@ from pathlib import Path
 
 import fimbox
 
-test_boundary = Path("./docs/test_boundary/test_smallB.shp")
+# ── EDIT THIS for each HUC8 you want to process ──────────────────
+CURRENT_HUC8 = "03020102"
+DEM_TILES_DIR = Path("D:/SI/out/study_area/watershed-data/dem_tiles")
+# ─────────────────────────────────────────────────────────────────
+
+test_boundary = Path("./docs/study_boundary/study_area.gpkg")
 test_huc8 = "08060202"  # Yazoo River basin, MS
 
 
-# Combined preprocessing pipeline tests
-# Run full pipeline from a boundary shapefile
+# Run full pipeline for a single HUC8 using the pre-downloaded DEM tile.
+# Change CURRENT_HUC8 above and re-run for each HUC in your study area.
 def test_preprocess_all_from_boundary():
+    dem_path = DEM_TILES_DIR / f"dem_{CURRENT_HUC8}.tif"
     pp = fimbox.getAllInputData(
-        boundary=test_boundary,
+        huc8=CURRENT_HUC8,
         out_dir="../out",
-        buffer_m=5000,  # metres to buffer boundary for data downloads
-        headwater_buffer_cells=8,  # pixels to shrink buffer for headwater clip
-        get_flowlines=True,  # set False to use your own flowlines and corresponding catchments
-        get_catchments=True,  # set False to skip NWM catchments--> use
-        resolution="medium",  # "high" -> NHDPlus HR flowlines/catchments via pynhd; "medium" (default) -> NWM. Lakes always NWM.
-        identifier="nwmmr",  # filename prefix for ALL source files; flows download->processing. Default "nwm".
+        buffer_m=5000,
+        headwater_buffer_cells=8,
+        get_flowlines=True,
+        get_catchments=True,
+        resolution="medium",
+        identifier="nwmmr",
+        dem=dem_path,        # use pre-downloaded 10m tile — skips 3DEP download
     )
     pp.run()
 

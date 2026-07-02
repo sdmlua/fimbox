@@ -20,8 +20,8 @@ EPSG = 5070           # CONUS Albers — matches the rest of the fimbox pipeline
 RESOLUTION = 10       # metres
 # ──────────────────────────────────────────────────────────────────
 
-TEMP_DIR = Path("D:/SI/out/study_area/watershed-data/dem_tiles")
-OUT_DEM  = Path("D:/SI/out/study_area/watershed-data/3dep_dem_10m.tif")
+TEMP_DIR = Path("E:/SI/out/study_area/watershed-data/dem_tiles")
+OUT_DEM  = Path("E:/SI/out/study_area/watershed-data/3dep_dem_10m.tif")
 
 from fimbox.preprocessing.download_data.utils import HUC8Finder
 

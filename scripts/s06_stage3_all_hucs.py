@@ -12,14 +12,16 @@ Run:
     .venv\\Scripts\\python.exe scripts/run_stage3_streamflow.py
 """
 import logging
+import time
 import traceback
+from datetime import datetime
 from pathlib import Path
 import pandas as pd
 
 # ── CONFIG ────────────────────────────────────────────────────────
 EXCEL_PATH   = Path(r"C:\Users\Ali\OneDrive - CUNY\Desktop\SI\fimbox_SI26\data\study_area.xlsx")
 HUC_CODE_COL = "HUC_CODE"
-OUT_DIR      = Path("D:/SI/out")
+OUT_DIR      = Path("E:/SI/out")
 
 # NWM retrospective event — edit to your flood event of interest
 # Use "date" for a single instant, or set START + END for a continuous range.
@@ -27,7 +29,7 @@ EVENT_DATE   = "2020-10-10 21:00:00"   # single event
 # START      = "2016-10-05"            # uncomment for range
 # END        = "2016-10-20"
 
-TASK_LOG     = Path("D:/SI/out/stage3_status.txt")
+TASK_LOG     = Path("E:/SI/out/stage3_status.txt")
 # ─────────────────────────────────────────────────────────────────
 
 logging.basicConfig(level=logging.INFO,
@@ -69,6 +71,17 @@ def run_huc(huc8: str) -> None:
     # getNWMretrospective(aoi_root, start=START, end=END)
 
 
+def _fmt(seconds: float) -> str:
+    seconds = int(seconds)
+    h, rem = divmod(seconds, 3600)
+    m, s   = divmod(rem, 60)
+    if h:
+        return f"{h}h {m:02d}m {s:02d}s"
+    if m:
+        return f"{m}m {s:02d}s"
+    return f"{s}s"
+
+
 def main():
     df = pd.read_excel(EXCEL_PATH)
     hucs = [str(int(c)).zfill(8) for c in df[HUC_CODE_COL]]
@@ -76,24 +89,51 @@ def main():
     remaining = [h for h in hucs if h not in done]
 
     log.info(f"Stage 3: {len(hucs)} total | {len(done)} already done | {len(remaining)} to run")
+    log.info(f"Started: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 
+    batch_start = time.time()
+    huc_times: list[tuple[str, float, str]] = []
     passed, failed = list(done), []
+
     for i, huc8 in enumerate(remaining, 1):
-        log.info(f"  [{i}/{len(remaining)}] HUC8 = {huc8}")
+        huc_start = time.time()
+        log.info(f"  [{i}/{len(remaining)}] HUC8 = {huc8}  |  "
+                 f"batch elapsed: {_fmt(huc_start - batch_start)}")
         try:
             run_huc(huc8)
+            elapsed = time.time() - huc_start
             _log_result(huc8, "PASS")
             passed.append(huc8)
-            log.info(f"  [{huc8}] PASS")
+            huc_times.append((huc8, elapsed, "PASS"))
+            completed   = [t for _, t, s in huc_times if s == "PASS"]
+            avg_s       = sum(completed) / len(completed)
+            remaining_n = len(remaining) - i
+            eta_s       = avg_s * remaining_n
+            log.info(f"  [{huc8}] PASS  |  this HUC: {_fmt(elapsed)}  |  "
+                     f"avg: {_fmt(avg_s)}  |  remaining: {remaining_n}  |  "
+                     f"ETA: {_fmt(eta_s)}"
+                     + (f"  (~{datetime.fromtimestamp(time.time() + eta_s).strftime('%H:%M')})"
+                        if remaining_n > 0 else "  (last HUC)"))
         except Exception:
+            elapsed = time.time() - huc_start
             err = traceback.format_exc().splitlines()[-1]
             _log_result(huc8, "FAIL", err)
             failed.append(huc8)
-            log.error(f"  [{huc8}] FAIL: {err}")
+            huc_times.append((huc8, elapsed, "FAIL"))
+            log.error(f"  [{huc8}] FAIL after {_fmt(elapsed)}  |  {err}")
 
-    log.info(f"\nStage 3 done. Passed: {len(passed)}  Failed: {len(failed)}")
+    total = time.time() - batch_start
+    log.info(f"\n{'─'*60}")
+    log.info(f"Stage 3 complete  |  total time: {_fmt(total)}")
+    log.info(f"Finished: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    log.info(f"Passed: {len(passed)}  |  Failed: {len(failed)}")
+    if huc_times:
+        log.info(f"\nPer-HUC timing summary:")
+        for huc8, elapsed, status in huc_times:
+            log.info(f"  {huc8}  {status:4s}  {_fmt(elapsed)}")
     if failed:
-        log.warning(f"Failed HUCs: {failed}")
+        log.warning(f"\nFailed HUCs: {failed}")
+        log.warning("Re-run this script to retry (FAIL lines are automatically retried).")
 
 
 if __name__ == "__main__":
