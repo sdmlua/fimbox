@@ -4,77 +4,60 @@ from __future__ import annotations
 
 # calculate_branch
 # level path derivation, dissolved outputs, branch list
-from .calculate_branch import (
-    BranchDerivation,
-    BranchDerivationResult,
-    derive_area_branches,
-    discover_area_inputs,
-)
-
 # full branch-zero raster preprocessing pipeline
-from .calculate_branch import BranchZero
-
 # D8 flow direction pointer
-from .calculate_branch import FlowdirDEM
-
 # AGREE DEM conditioning
-from .calculate_branch import HydroenforceDEM
-
 # stream / level-path / headwater boolean grids
-from .calculate_branch import (
-    HeadwaterRasterizer,
-    LevelPathBooleanRasterizer,
-    StreamBooleanRasterizer,
-)
-
 # 3D NLD levee rasterization, DEM burning, and levee-area masking
-from .calculate_branch import (
-    burn_levee_elevations,
-    mask_levee_dem,
-    rasterize_3d_levee_lines,
-)
-
 # HAND components
-from .calculate_branch import CreateHAND
-from .calculate_branch import D8SlopeDEM
-from .calculate_branch import FlowAccDEM
-from .calculate_branch import (
-    GageCatchments,
-    OutletBackpoolMitigate,
-    stream_pixel_points,
-)
-from .calculate_branch import MakeREM
-from .calculate_branch import FilterCatchments, NoFlowlinesError
-from .calculate_branch import StreamNetReaches
-from .calculate_branch import ThalwegAdjustment
-from .calculate_branch import split_derived_reaches
-from .calculate_branch import mask_slopes_to_catchments, rem_zeroed_masked
-from .calculate_branch import make_stages_and_catchlist
-from .calculate_branch import build_src_base
-from .calculate_branch import NoCrosswalkError, add_crosswalk
-from .calculate_branch import heal_bridges_osm
-from .calculate_branch import process_roads_fimpact
-from .calculate_branch import (
-    GageBranchAssignment,
-    assign_gages_to_branches,
-    run_branch_crosswalk,
-)
-from .calculate_branch import adjust_floodplains
-from .calculate_branch import (
-    CannotConvertHydroIDsToInt16,
-    convert_branch_to_int16,
-    evaluate_crosswalk,
-    remove_deny_list_files,
-)
 from .calculate_branch import (
     AllBranchesResult,
-    calculate_allbranches,
-)
-from .calculate_branch import (
-    BranchResult,
     AOIProcessingConfig,
+    BranchDerivation,
+    BranchDerivationResult,
+    BranchResult,
+    BranchZero,
+    CannotConvertHydroIDsToInt16,
+    CreateHAND,
+    D8SlopeDEM,
+    FilterCatchments,
+    FlowAccDEM,
+    FlowdirDEM,
+    GageBranchAssignment,
+    GageCatchments,
+    HeadwaterRasterizer,
     HucProcessingConfig,
+    HydroenforceDEM,
+    LevelPathBooleanRasterizer,
+    MakeREM,
+    NoCrosswalkError,
+    NoFlowlinesError,
+    OutletBackpoolMitigate,
+    StreamBooleanRasterizer,
+    StreamNetReaches,
+    ThalwegAdjustment,
+    add_crosswalk,
+    adjust_floodplains,
+    assign_gages_to_branches,
+    build_src_base,
+    burn_levee_elevations,
+    calculate_allbranches,
+    convert_branch_to_int16,
+    derive_area_branches,
+    discover_area_inputs,
+    evaluate_crosswalk,
+    heal_bridges_osm,
+    make_stages_and_catchlist,
+    mask_levee_dem,
+    mask_slopes_to_catchments,
     process_branches,
+    process_roads_fimpact,
+    rasterize_3d_levee_lines,
+    rem_zeroed_masked,
+    remove_deny_list_files,
+    run_branch_crosswalk,
+    split_derived_reaches,
+    stream_pixel_points,
 )
 
 # calibrate_ratingcurve subpackage: SRC calibration pipeline + entry points
@@ -157,27 +140,29 @@ except ImportError:
 try:
     from .download_data import (
         DEMProcessor,
-        NHDBoundaryFinder,
+        DEMResolutionUnavailable,
+        DownloadDEMDomain,
+        DownloadFEMANFHL,
+        DownloadLandSea,
+        DownloadNLD,
+        DownloadOSMBridges,
+        DownloadOSMRoads,
+        DownloadUSGSGages,
         HUC8Finder,
+        NHDBoundaryFinder,
+        NWMCatchmentsDownloader,
+        NWMFlowlinesDownloader,
+        NWMLakesDownloader,
         getHUC8Info,
         getNHDPlusData,
         getNHDPlusHRData,
-        normalize_flowlines,
         normalize_catchments,
-        NWMFlowlinesDownloader,
-        NWMCatchmentsDownloader,
-        NWMLakesDownloader,
-        DownloadDEMDomain,
-        DownloadLandSea,
-        DownloadFEMANFHL,
-        DownloadNLD,
-        DownloadOSMRoads,
-        DownloadOSMBridges,
-        DownloadUSGSGages,
+        normalize_flowlines,
     )
 
     __all__ += [
         "DEMProcessor",
+        "DEMResolutionUnavailable",
         "NHDBoundaryFinder",
         "HUC8Finder",
         "getHUC8Info",
@@ -202,7 +187,7 @@ except ImportError:
 # huc_test
 # HUC ID format validation and lookup utilities
 try:
-    from .huc_test import HUCChecker, HUCValidationError, HUCCheckResult
+    from .huc_test import HUCChecker, HUCCheckResult, HUCValidationError
 
     __all__ += ["HUCChecker", "HUCValidationError", "HUCCheckResult"]
 except ImportError:
@@ -211,7 +196,7 @@ except ImportError:
 # process_bridgedem
 # LiDAR bridge point cloud --> raster, generate DEM difference raster
 try:
-    from .process_bridgedem import generateBridgeRaster, BridgeDEMDiff
+    from .process_bridgedem import BridgeDEMDiff, generateBridgeRaster
 
     __all__ += ["generateBridgeRaster", "BridgeDEMDiff"]
 except ImportError:

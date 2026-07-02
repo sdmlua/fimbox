@@ -16,10 +16,13 @@ OUT_DIR = REPO_ROOT / "out"
 def test_process_dem():
     output_path = fimbox.DEMProcessor(
         boundary=boundary,
-        resolution=10,  # desired DEM resolution in meters (1, 3, or 10), for 3DEP fetch and other
+        resolution=10,  # 3DEP resolution in m: 1, 3, 10 (default), 30, 60
         output_dir=OUT_DIR / "dem_test",
-        # layer: Optional[str] = None,     #if boundary is geopackage with multiple layers
-        # dem_file: Optional[str] = None,  #path to local DEM file if available or outside CONUS
-        # epsg: Optional[int] = None       #desired output CRS EPSG code for projection, if None auto-detects UTM zone
-    )
+        # layer=None,            # if boundary is a geopackage with multiple layers
+        # dem_file=None,         # local DEM to condition instead of fetching
+        # epsg=None,             # output CRS EPSG; None auto-detects the UTM zone
+        # fallback_to_10m=False, # if resolution unavailable, use 10m not raise
+        # use_dask=True,         # dask chunking for the reproject/heal stage
+        # chunksize=None,        # dask chunk edge in px; None -> auto from CPU count
+    ).result_path
     log.info(f"3DEP DEM --> {output_path}")
