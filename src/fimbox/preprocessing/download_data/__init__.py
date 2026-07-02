@@ -1,37 +1,36 @@
 # 3DEP DEM (Planetary Computer STAC) + custom DEM processing module
+# Get static area masks
+from .area_masks import DownloadDEMDomain, DownloadLandSea
 from .dem_process import (
     DEMProcessor,
     DEMResolutionUnavailable,
 )
 
-# Utils
-from .utils import NHDBoundaryFinder, HUC8Finder, getHUC8Info
+# FEMA National Flood Hazard Layer (NFHL) data processing module
+from .nfhl_data import DownloadFEMANFHL
 
 # Get NHDPlus Dataset
 from .nhdplus import (
+    NWMCatchmentsDownloader,
+    NWMFlowlinesDownloader,
+    NWMLakesDownloader,
     getNHDPlusData,
     getNHDPlusHRData,
-    normalize_flowlines,
     normalize_catchments,
-    NWMFlowlinesDownloader,
-    NWMCatchmentsDownloader,
-    NWMLakesDownloader,
+    normalize_flowlines,
 )
-
-# Get static area masks
-from .area_masks import DownloadDEMDomain, DownloadLandSea
-
-# FEMA National Flood Hazard Layer (NFHL) data processing module
-from .nfhl_data import DownloadFEMANFHL
 
 # Get the NLD Dataset
 from .nld_data import DownloadNLD
 
 # Get the OSM Roads
-from .osm_data import DownloadOSMRoads, DownloadOSMBridges
+from .osm_data import DownloadOSMBridges, DownloadOSMRoads
 
 # Download USGS gauge points (CONUS) from ArcGIS Online FeatureServer
 from .usgs_gages import DownloadUSGSGages
+
+# Utils
+from .utils import HUC8Finder, NHDBoundaryFinder, getHUC8Info
 
 __all__ = [
     "DEMProcessor",

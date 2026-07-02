@@ -1,9 +1,17 @@
 <div align="center">
-  <img src="docs/images/fimbox.png" alt="fimbox" width="100" />
+  <img src="docs/images/fimbox.png" alt="fimbox" width="150" />
+  <h2>FIMbox- A Testbed for Flood Inundation Mapping Experimentation</h2>
+  <p>
+    <a href="https://github.com/sdmlua/fimbox/releases"><img src="https://img.shields.io/github/v/release/sdmlua/fimbox?include_prereleases" alt="Release" /></a>
+    <a href="https://github.com/sdmlua/fimbox/issues"><img src="https://img.shields.io/github/issues/sdmlua/fimbox" alt="Issues" /></a>
+    <a href="https://github.com/sdmlua/fimbox/blob/main/LICENSE"><img src="https://img.shields.io/badge/License-GPLv3-blue.svg" alt="License: GPL v3" /></a><br>
+    <a href="https://github.com/astral-sh/ruff"><img src="https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json" alt="Ruff" /></a>
+    <a href="https://www.python.org/"><img src="https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12-blue" alt="Python versions" /></a><br>
+    <a href="https://pypi.org/project/fimbox/"><img src="https://badge.fury.io/py/fimbox.svg?icon=si%3Apython" alt="PyPI version" /></a>
+    <a href="https://pepy.tech/projects/fimbox"><img src="https://static.pepy.tech/badge/fimbox" alt="PyPI Downloads" /></a>
+  </p>
 </div>
 
-## `FIMbox` — A testbed for Flood Inundation Mapping Experimentation
----
 A modular open-source testbed framework to standardize Flood Inundation
 Mapping (FIM) simulations and evaluation with custom datasets and
 hydrologic parameters in reproducible workflows.

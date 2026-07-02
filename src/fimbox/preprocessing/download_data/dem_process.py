@@ -24,14 +24,13 @@ from typing import List, Optional, Union
 
 import geopandas as gpd
 import numpy as np
-import rioxarray 
+import rioxarray
 import xarray as xr
 from affine import Affine
 from rasterio.enums import Resampling
 from shapely.geometry import box
 
 from ..._skip_if_valid import should_skip
-
 
 # Planetary Computer STAC endpoint.
 PC_STAC_URL = "https://planetarycomputer.microsoft.com/api/stac/v1"
@@ -47,23 +46,37 @@ _USGS_VRT = {
     60: f"{_USGS_BASE}/2/TIFF/USGS_Seamless_DEM_2.vrt",  # Alaska-only
 }
 
+# The seamless products are 1-degree COG tiles at deterministic URLs, e.g.
+# .../13/TIFF/current/n36w079/USGS_13_n36w079.tif covers 79-78 W, 35-36 N.
+# Constructing these directly (instead of going through the national VRT)
+# skips the VRT fetch/parse AND lets each tile download on its own TCP
+# connection — S3 caps a single connection at ~2-3 MB/s but scales with
+# parallel connections, so large AOIs (more tiles) speed up proportionally.
+_USGS_TILE = {
+    10: (f"{_USGS_BASE}/13/TIFF/current", "USGS_13_{cell}.tif"),
+    30: (f"{_USGS_BASE}/1/TIFF/current", "USGS_1_{cell}.tif"),
+    60: (f"{_USGS_BASE}/2/TIFF/current", "USGS_2_{cell}.tif"),
+}
+
 # Default resolution when the caller asks for nothing.
 DEFAULT_RESOLUTION = 10
 
 # How each requested resolution is served.
-#   "usgs_vrt"   : USGS national seamless VRT via /vsicurl/ (10/30/60 m). Read
-#                  windowed, this is markedly faster from most US networks than
-#                  the PC COG endpoint (measured ~4.6 vs ~0.8 MB/s), so it is the
-#                  primary source for the seamless tiers. (60 m is Alaska-only.)
-#   "stac_lidar" : PC 3dep-lidar-dtm (2 m), AOI-dependent (serves 1/3 m best-effort)
-# If a USGS VRT read fails (e.g. S3 hiccup), the seamless tiers fall back to PC
-# 3dep-seamless automatically in _fetch(). Third tuple element is source gsd.
+#   "usgs_seamless" : USGS 1-degree COG tiles read in parallel (10/30/60 m),
+#                     falling back to the national VRT, then to PC 3dep-seamless.
+#                     USGS S3 is markedly faster than the PC COG endpoint from
+#                     most US networks (~4.6 vs ~0.8 MB/s single-connection),
+#                     and per-tile parallelism scales with AOI size. (60 m is
+#                     Alaska-only.)
+#   "stac_lidar"    : PC 3dep-lidar-dtm (2 m), AOI-dependent (serves 1/3 m
+#                     best-effort).
+# Third tuple element is the source gsd actually read.
 RESOLUTION_PLAN = {
     1: ("stac_lidar", _LIDAR_DTM, 2),
     3: ("stac_lidar", _LIDAR_DTM, 2),
-    10: ("usgs_vrt", _SEAMLESS, 10),
-    30: ("usgs_vrt", _SEAMLESS, 30),
-    60: ("usgs_vrt", None, 60),
+    10: ("usgs_seamless", _SEAMLESS, 10),
+    30: ("usgs_seamless", _SEAMLESS, 30),
+    60: ("usgs_seamless", None, 60),
 }
 
 SUPPORTED_RESOLUTIONS = tuple(sorted(RESOLUTION_PLAN))
@@ -256,9 +269,9 @@ class DEMProcessor:
     def _log_coverage(self, items) -> float:
         """Log what fraction of the AOI the STAC item footprints cover.
 
-        Seamless tiers return ~100 %; lidar tiers (1/2/3 m) are project-based, this reports the 
-        overlapping and warns if the AOI is only partially covered. Returns the fraction (0.0-1.0) 
-        or -1.0 if the footprints are unavailable (e.g. a STAC item has no geometry).
+        Seamless tiers return ~100%; lidar tiers (1/2/3 m) are project-based, so
+        this reports the overlap and warns if the AOI is only partially covered.
+        Returns the fraction (0.0-1.0), or -1.0 if footprints are unavailable.
         """
         from shapely.geometry import shape
         from shapely.ops import unary_union
@@ -354,6 +367,10 @@ class DEMProcessor:
                 f"{self.resolution} m DEM has no valid data over your AOI{detail}."
             )
 
+        return self._wrap_dataarray(arr, transform, crs0, nodata)
+
+    def _wrap_dataarray(self, arr, transform, crs, nodata) -> xr.DataArray:
+        """Wrap a merged window as a georeferenced (optionally dask) DataArray."""
         ny, nx = arr.shape
         xs = transform.c + transform.a * (np.arange(nx) + 0.5)
         ys = transform.f + transform.e * (np.arange(ny) + 0.5)
@@ -365,8 +382,10 @@ class DEMProcessor:
 
                 cs = self._auto_chunksize(ny, nx)
                 data = dskarr.from_array(arr, chunks=(cs, cs))
-                self.logger.info(f"Dask chunking: edge={cs} px on {os.cpu_count()} CPUs")
-            except Exception as exc: 
+                self.logger.info(
+                    f"Dask chunking: edge={cs} px on {os.cpu_count()} CPUs"
+                )
+            except Exception as exc:  # noqa: BLE001 - dask is an optimisation, not required
                 self.logger.warning(
                     f"Dask unavailable/failed ({exc}); using normal numpy path."
                 )
@@ -375,7 +394,7 @@ class DEMProcessor:
         da = xr.DataArray(
             data, coords={"y": ys, "x": xs}, dims=("y", "x"), name="elevation"
         )
-        da = da.rio.write_crs(crs0)
+        da = da.rio.write_crs(crs)
         if nodata is not None:
             da = da.rio.write_nodata(nodata)
         return da
@@ -399,6 +418,153 @@ class DEMProcessor:
                 f"No USGS seamless VRT for {self.resolution} m."
             )
         return self._read_window([url])
+
+    def _seamless_tile_urls(self) -> List[str]:
+        """Deterministic USGS 1-degree tile URLs covering the AOI bbox.
+
+        Tile ``n36w079`` covers lon [-79, -78], lat [35, 36]: the name is the
+        cell's top-left corner (n = ceil of top lat, w/e = abs of west lon).
+        """
+        base, tmpl = _USGS_TILE[self.resolution]
+        minx, miny, maxx, maxy = self.boundary_geom.bounds
+        urls = []
+        for lat0 in range(math.floor(miny), math.floor(maxy) + 1):
+            for lon0 in range(math.floor(minx), math.floor(maxx) + 1):
+                ns = f"n{lat0 + 1:02d}" if lat0 >= 0 else f"s{-lat0:02d}"
+                ew = f"w{-lon0:03d}" if lon0 < 0 else f"e{lon0:03d}"
+                cell = f"{ns}{ew}"
+                urls.append(f"{base}/{cell}/{tmpl.format(cell=cell)}")
+        return urls
+
+    def _read_tiles_parallel(self, urls: List[str]) -> xr.DataArray:
+        """Windowed read of the 1-degree tiles, parallel across tiles AND strips.
+
+        S3 caps a single connection at ~2-3 MB/s but scales with parallel
+        connections, and GDAL parallelises fine when each thread reads a direct
+        tile URL (the national VRT serialised everything). Each tile's AOI
+        window is split into row-strips so even a 1-tile AOI uses several
+        connections; total threads are capped at ~8 (~ the measured network
+        ceiling). Missing cells (ocean, outside coverage) are skipped. The
+        per-tile windows are merged in memory — instant, pixels already local.
+        """
+        from concurrent.futures import ThreadPoolExecutor
+
+        import rasterio
+        from rasterio.io import MemoryFile
+        from rasterio.merge import merge
+        from rasterio.windows import Window, from_bounds
+
+        self._apply_gdal_env()
+        MAX_CONNS = 8
+
+        # Phase 1 (parallel, metadata only): each tile's AOI-intersection
+        # window, grid transform, and profile. Failed/missing cells drop out.
+        def probe(url):
+            try:
+                with rasterio.open("/vsicurl/" + url) as ds:
+                    tb = self._aoi_bbox_in(ds.crs)
+                    w = from_bounds(*tb, ds.transform).round_offsets().round_lengths()
+                    w = w.intersection(Window(0, 0, ds.width, ds.height))
+                    if w.width <= 0 or w.height <= 0:
+                        return None
+                    profile = {
+                        "driver": "GTiff",
+                        "height": int(w.height),
+                        "width": int(w.width),
+                        "count": 1,
+                        "dtype": ds.dtypes[0],
+                        "crs": ds.crs,
+                        "transform": ds.window_transform(w),
+                        "nodata": ds.nodata,
+                    }
+                    return url, w, profile
+            except Exception as exc:  # noqa: BLE001 - missing cell or fetch error
+                self.logger.info(f"Tile skipped ({url.rsplit('/', 1)[-1]}): {exc}")
+                return None
+
+        with ThreadPoolExecutor(max_workers=min(MAX_CONNS, len(urls))) as ex:
+            tiles = [t for t in ex.map(probe, urls) if t is not None]
+        if not tiles:
+            raise RuntimeError(
+                f"No {self.resolution} m seamless tiles could be read for the AOI."
+            )
+
+        # Phase 2 (parallel pixels): split each tile window into row-strips so
+        # the connection budget is used even when there are few tiles.
+        strips_per_tile = max(1, MAX_CONNS // len(tiles))
+        arrays = {
+            url: np.empty((prof["height"], prof["width"]), dtype=prof["dtype"])
+            for url, _, prof in tiles
+        }
+        jobs = []
+        for url, w, _ in tiles:
+            edges = np.linspace(0, int(w.height), strips_per_tile + 1).astype(int)
+            for r0, r1 in zip(edges[:-1], edges[1:]):
+                if r1 > r0:
+                    jobs.append((url, w, int(r0), int(r1 - r0)))
+
+        def read_strip(job):
+            url, w, r0, rh = job
+            sw = Window(w.col_off, w.row_off + r0, w.width, rh)
+            for attempt in (1, 2):  # one retry on a flaky range request
+                try:
+                    with rasterio.open("/vsicurl/" + url) as ds:
+                        arrays[url][r0 : r0 + rh] = ds.read(1, window=sw)
+                    return
+                except Exception:  # noqa: BLE001
+                    if attempt == 2:
+                        raise
+
+        with ThreadPoolExecutor(max_workers=min(MAX_CONNS, len(jobs))) as ex:
+            list(ex.map(read_strip, jobs))  # re-raises any strip failure
+
+        parts = [(arrays[url], prof) for url, _, prof in tiles]
+        self.logger.info(
+            f"Read {len(tiles)}/{len(urls)} tiles x {strips_per_tile} strip(s)"
+        )
+
+        # Merge the in-memory windows (already downloaded -> this is instant).
+        memfiles = []
+        try:
+            for arr, profile in parts:
+                mf = MemoryFile()
+                with mf.open(**profile) as mds:
+                    mds.write(arr, 1)
+                memfiles.append(mf)
+            srcs = [mf.open() for mf in memfiles]
+            tb = self._aoi_bbox_in(srcs[0].crs)
+            arr, transform = merge(srcs, bounds=tuple(tb))
+            nodata = srcs[0].nodata
+            crs0 = srcs[0].crs
+            for s in srcs:
+                s.close()
+        finally:
+            for mf in memfiles:
+                mf.close()
+
+        if arr.ndim == 3:
+            arr = arr[0]
+        if not self._has_valid_data(arr, nodata):
+            detail = (
+                " (the 60 m product is Alaska-only; no 60 m DEM exists for the "
+                "lower 48)"
+                if self.resolution == 60
+                else " (source does not cover this area)"
+            )
+            raise DEMResolutionUnavailable(
+                f"{self.resolution} m DEM has no valid data over your AOI{detail}."
+            )
+        return self._wrap_dataarray(arr, transform, crs0, nodata)
+
+    def _from_usgs_seamless(self) -> xr.DataArray:
+        """USGS seamless read: parallel direct tiles first, national VRT second."""
+        try:
+            return self._read_tiles_parallel(self._seamless_tile_urls())
+        except DEMResolutionUnavailable:
+            raise  # genuine no-data — don't retry the same data via the VRT
+        except Exception as exc:  # noqa: BLE001 - tile path failed; VRT still works
+            self.logger.warning(f"Parallel tile read failed ({exc}); using VRT.")
+            return self._from_usgs_vrt()
 
     def _from_local_file(self) -> xr.DataArray:
         """Open a bring-your-own DEM file as the source array (native grid)."""
@@ -426,8 +592,15 @@ class DEMProcessor:
 
         left, bottom, right, top = da.rio.bounds()
         transform, width, height = calculate_default_transform(
-            src_crs, dst_crs, da.rio.width, da.rio.height,
-            left=left, bottom=bottom, right=right, top=top, resolution=res,
+            src_crs,
+            dst_crs,
+            da.rio.width,
+            da.rio.height,
+            left=left,
+            bottom=bottom,
+            right=right,
+            top=top,
+            resolution=res,
         )
         # Snap origin outward to a whole multiple of the resolution, extend the
         # grid so the snapped extent still covers everything, rebuild transform.
@@ -438,7 +611,9 @@ class DEMProcessor:
         snapped = Affine(res, 0.0, snap_x, 0.0, -res, snap_y)
 
         da = da.rio.reproject(
-            dst_crs, transform=snapped, shape=(height, width),
+            dst_crs,
+            transform=snapped,
+            shape=(height, width),
             resampling=Resampling.bilinear,
         )
 
@@ -521,9 +696,7 @@ class DEMProcessor:
         except DEMResolutionUnavailable as exc:
             # "give me 1 m, else just 10 m": optionally retry at the default.
             if self.fallback_to_10m and self.resolution != DEFAULT_RESOLUTION:
-                self.logger.warning(
-                    f"{exc} Falling back to {DEFAULT_RESOLUTION} m."
-                )
+                self.logger.warning(f"{exc} Falling back to {DEFAULT_RESOLUTION} m.")
                 self.resolution = DEFAULT_RESOLUTION
                 da = self._fetch()
             else:
@@ -550,16 +723,18 @@ class DEMProcessor:
         )
         if backend == "stac_lidar":
             return self._from_stac(collection, source_gsd)
-        if backend == "usgs_vrt":
+        if backend == "usgs_seamless":
             try:
-                return self._from_usgs_vrt()
+                return self._from_usgs_seamless()  # parallel tiles -> VRT
             except DEMResolutionUnavailable:
                 raise  # genuine no-data (e.g. CONUS 60 m) -> don't mask it
-            except Exception as exc:  # noqa: BLE001 - VRT read failed; try PC instead
+            except Exception as exc:  # noqa: BLE001 - USGS read failed; try PC instead
                 if collection is None:  # 60 m has no PC equivalent
                     raise
                 self.logger.warning(
-                    f"USGS VRT read failed ({exc}); falling back to PC STAC."
+                    f"USGS seamless read failed ({exc}); falling back to PC STAC."
                 )
                 return self._from_stac(collection, source_gsd)
-        raise DEMResolutionUnavailable(f"No backend for {self.resolution} m.")  # pragma: no cover
+        raise DEMResolutionUnavailable(
+            f"No backend for {self.resolution} m."
+        )  # pragma: no cover

@@ -6,70 +6,60 @@ Each group is annotated with the source file it originates from.
 from __future__ import annotations
 
 from .preprocessing import (
+    AllBranchesResult,
+    AOIProcessingConfig,
     BranchDerivation,
     BranchDerivationResult,
-    derive_area_branches,
-    discover_area_inputs,
-)
-
-from .preprocessing import BranchZero
-from .preprocessing import HydroenforceDEM
-from .preprocessing import FlowdirDEM
-from .preprocessing import (
-    StreamBooleanRasterizer,
-    LevelPathBooleanRasterizer,
-    HeadwaterRasterizer,
-)
-from .preprocessing import (
-    burn_levee_elevations,
-    mask_levee_dem,
-    rasterize_3d_levee_lines,
-)
-from .preprocessing import D8SlopeDEM
-from .preprocessing import FlowAccDEM
-from .preprocessing import ThalwegAdjustment
-from .preprocessing import StreamNetReaches
-from .preprocessing import split_derived_reaches
-from .preprocessing import GageCatchments, OutletBackpoolMitigate, stream_pixel_points
-from .preprocessing import MakeREM
-from .preprocessing import FilterCatchments, NoFlowlinesError
-from .preprocessing import CreateHAND
-from .preprocessing import mask_slopes_to_catchments, rem_zeroed_masked
-from .preprocessing import make_stages_and_catchlist
-from .preprocessing import build_src_base
-from .preprocessing import NoCrosswalkError, add_crosswalk
-from .preprocessing import heal_bridges_osm
-from .preprocessing import process_roads_fimpact
-from .preprocessing import (
-    GageBranchAssignment,
-    assign_gages_to_branches,
-    run_branch_crosswalk,
-)
-from .preprocessing import adjust_floodplains
-from .preprocessing import (
-    CannotConvertHydroIDsToInt16,
-    convert_branch_to_int16,
-    evaluate_crosswalk,
-    remove_deny_list_files,
-)
-from .preprocessing import (
-    AllBranchesResult,
-    calculate_allbranches,
-)
-from .preprocessing import (
     BranchResult,
-    AOIProcessingConfig,
-    HucProcessingConfig,
-    process_branches,
-)
-from .preprocessing import (
+    BranchZero,
     CalibrationConfig,
     CalibrationNotImplemented,
+    CannotConvertHydroIDsToInt16,
+    CreateHAND,
+    D8SlopeDEM,
+    FilterCatchments,
+    FlowAccDEM,
+    FlowdirDEM,
+    GageBranchAssignment,
+    GageCatchments,
+    HeadwaterRasterizer,
+    HucProcessingConfig,
+    HydroenforceDEM,
+    LevelPathBooleanRasterizer,
+    MakeREM,
+    NoCrosswalkError,
+    NoFlowlinesError,
+    OutletBackpoolMitigate,
+    StreamBooleanRasterizer,
+    StreamNetReaches,
+    ThalwegAdjustment,
+    add_crosswalk,
+    adjust_floodplains,
     aggregate_branches,
+    assign_gages_to_branches,
+    build_src_base,
+    burn_levee_elevations,
+    calculate_allbranches,
+    convert_branch_to_int16,
+    derive_area_branches,
+    discover_area_inputs,
+    evaluate_crosswalk,
+    heal_bridges_osm,
+    make_stages_and_catchlist,
     manual_calibration,
+    mask_levee_dem,
+    mask_slopes_to_catchments,
+    process_branches,
+    process_roads_fimpact,
+    rasterize_3d_levee_lines,
+    rem_zeroed_masked,
+    remove_deny_list_files,
     reset_hydro_and_src,
+    run_branch_crosswalk,
     run_calibration,
     scan_logs,
+    split_derived_reaches,
+    stream_pixel_points,
 )
 
 __all__ = [
@@ -131,11 +121,11 @@ __all__ = [
 
 # FIM generation: forecast -> per-branch inundation -> AOI mosaic
 from .fimgeneration import (
-    FimGenerator,
-    FimGenerationResult,
-    Inundator,
-    InundationResult,
     BranchMosaic,
+    FimGenerationResult,
+    FimGenerator,
+    InundationResult,
+    Inundator,
     MosaicResult,
     NoForecastMatch,
     extract_feature_ids,
@@ -160,20 +150,20 @@ __all__ += [
 # fimbox`.
 try:
     from .streamflow import (
-        NWMRetrospective,
-        NWMForecast,
-        USGSData,
         GeoglowsData,
+        NWMForecast,
+        NWMRetrospective,
+        StreamflowMetrics,
         StreamflowPipeline,
-        getNWMretrospective,
-        getNWMforecast,
-        get_usgs_fid_pairs,
-        plot_nwm,
-        plot_usgs,
-        plot_comparison,
+        USGSData,
         calculate_statistics,
         compute_metrics,
-        StreamflowMetrics,
+        get_usgs_fid_pairs,
+        getNWMforecast,
+        getNWMretrospective,
+        plot_comparison,
+        plot_nwm,
+        plot_usgs,
     )
 
     __all__ += [
@@ -203,7 +193,7 @@ except ImportError:
     pass
 
 try:
-    from .preprocessing import HUCChecker, HUCValidationError, HUCCheckResult
+    from .preprocessing import HUCChecker, HUCCheckResult, HUCValidationError
 
     __all__ += ["HUCChecker", "HUCValidationError", "HUCCheckResult"]
 except ImportError:
@@ -215,23 +205,23 @@ try:
     from .preprocessing import (
         DEMProcessor,
         DEMResolutionUnavailable,
-        NHDBoundaryFinder,
+        DownloadDEMDomain,
+        DownloadFEMANFHL,
+        DownloadLandSea,
+        DownloadNLD,
+        DownloadOSMBridges,
+        DownloadOSMRoads,
+        DownloadUSGSGages,
         HUC8Finder,
+        NHDBoundaryFinder,
+        NWMCatchmentsDownloader,
+        NWMFlowlinesDownloader,
+        NWMLakesDownloader,
         getHUC8Info,
         getNHDPlusData,
         getNHDPlusHRData,
-        normalize_flowlines,
         normalize_catchments,
-        NWMFlowlinesDownloader,
-        NWMCatchmentsDownloader,
-        NWMLakesDownloader,
-        DownloadDEMDomain,
-        DownloadLandSea,
-        DownloadFEMANFHL,
-        DownloadNLD,
-        DownloadOSMRoads,
-        DownloadOSMBridges,
-        DownloadUSGSGages,
+        normalize_flowlines,
     )
 
     __all__ += [
@@ -260,7 +250,7 @@ except ImportError:
 
 # preprocessing.process_bridgedem (bridge_lidar_raster / bridge_dem_diff)
 try:
-    from .preprocessing import generateBridgeRaster, BridgeDEMDiff
+    from .preprocessing import BridgeDEMDiff, generateBridgeRaster
 
     __all__ += ["generateBridgeRaster", "BridgeDEMDiff"]
 except ImportError:

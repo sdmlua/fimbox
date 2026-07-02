@@ -48,7 +48,7 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
     "pytest>=8.3,<8.4",
-    "black"
+    "ruff>=0.6",
 ]
 
 [project.urls]
@@ -66,6 +66,14 @@ include-package-data = true
 [tool.setuptools.packages.find]
 where = ["src"]
 exclude = ["tests*"]
+
+[tool.ruff]
+line-length = 88
+target-version = "py310"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]  # pyflakes + pycodestyle errors + import sorting
 
 [tool.pytest.ini_options]
 minversion = "6.0"

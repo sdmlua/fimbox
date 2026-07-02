@@ -1,5 +1,4 @@
 # Example Usage:
-import logging
 from pathlib import Path
 
 import fimbox
@@ -105,6 +104,7 @@ OUT_DIR = REPO_ROOT / "out"
 #     assert {"ID", "order_", "levpa_id", "feature_id"}.issubset(fl.columns)
 #     assert "ID" in cat.columns
 
+
 # Download + process a 3DEP DEM. Reads only the AOI window straight from the
 # Planetary Computer COGs over HTTP (no national VRT parse), one snapped
 # reprojection, then hole-fill + clip. ~8x faster than the old py3dep path.
@@ -115,13 +115,14 @@ def test_get_dem():
     fimbox.DEMProcessor(
         boundary=test_boundary,
         output_dir=OUT_DIR,
-        resolution=10,                  # 1, 3, 10 (default), 30, 60
-        out_name="dem.tif",             # default is 3dep_dem_<res>m.tif
+        resolution=10,  # 1, 3, 10 (default), 30, 60
+        out_name="dem.tif",  # default is 3dep_dem_<res>m.tif
         # epsg=None,                     # output CRS; None -> auto UTM zone
         # layer=None,                    # layer name if boundary has multiple
         # use_dask=True,                 # dask chunking for reproject/heal
         # chunksize=None,                # None -> auto from CPU count; or set px
     )
+
 
 # "give me 1 m, else just 10 m": fallback_to_10m downgrades to 10 m (and logs)
 # when the requested resolution isn't available for the AOI.

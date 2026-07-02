@@ -78,6 +78,21 @@ The main locations in this repository are:
 
 - Follow the existing code style and naming patterns used in the
   relevant module.
+- Any new or updated code must run within, and continue to support, the
+  full `fimbox` pipeline — `getAllInputData` (input staging) through
+  branch derivation/processing, calibration, and FIM generation. A
+  change to one stage should not break the ones that consume its output;
+  verify with an end-to-end test (e.g. `tests/test_fimgeneration.py` or
+  `tests/test_getallinputdata.py`) before opening a pull request.
+- Format and lint with [`ruff`](https://docs.astral.sh/ruff/) before
+  committing:
+  ```bash
+  uv run ruff format .
+  uv run ruff check --fix .
+  ```
+  `ruff` is installed via `uv pip install -e ".[dev]"`. CI/reviewers may
+  reject pull requests that fail `ruff check` or are not
+  `ruff format`-clean.
 - Add or update tests when changing behaviour. `tests/test_fimgeneration.py`
   is a good template for a real-AOI test: parameters live at the top of
   the file, the test is skipped automatically when the fixture isn't
@@ -145,8 +160,10 @@ The branch-processing live-run test (`test_step_C25_*`) is opt-in via
 When your changes are ready:
 
 1. Create a feature branch from the latest main branch.
-2. Commit your changes with a clear commit message.
-3. Open a pull request against `sdmlua/fimbox`.
+2. Run `ruff format .` and `ruff check --fix .`, and confirm your change
+   still runs through the `fimbox` pipeline end-to-end.
+3. Commit your changes with a clear commit message.
+4. Open a pull request against `sdmlua/fimbox`.
 
 Please include the following in the pull request description:
 
