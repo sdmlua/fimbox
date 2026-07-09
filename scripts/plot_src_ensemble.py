@@ -85,13 +85,16 @@ def _load_shared():
 
 
 def _load_src(branch_dir: Path, bid: str, original: bool) -> pd.DataFrame | None:
+    """Rating curves from the hydroTable (calibration's single source of truth):
+    current file = calibrated, .pre_n_calib backup = baseline."""
     suffix = ".pre_n_calib.csv" if original else ".csv"
-    p = branch_dir / f"src_full_crosswalked_{bid}{suffix}"
+    p = branch_dir / f"hydroTable_{bid}{suffix}"
     if not p.exists() and original:
-        p = branch_dir / f"src_full_crosswalked_{bid}.csv"
+        p = branch_dir / f"hydroTable_{bid}.csv"
     if not p.exists():
         return None
-    df = pd.read_csv(p, low_memory=False)
+    df = pd.read_csv(p, low_memory=False).rename(
+        columns={"stage": "Stage", "discharge_cms": "Discharge (m3s-1)"})
     df["HydroID"] = df["HydroID"].astype(int)
     return df
 
@@ -100,6 +103,16 @@ def _discover_calibrated(huc8: str, rc: pd.DataFrame, elev: pd.DataFrame) -> lis
     branches_dir = OUT_DIR / f"HUC{huc8}" / "watershed-data" / "branches"
     if not branches_dir.exists():
         return []
+
+    # v2 source of truth: per-gauge diagnostics written by s05 (status == calibrated).
+    diag_path = OUT_DIR / f"HUC{huc8}" / "ncalib_diagnostics.csv"
+    calibrated_keys = None
+    if diag_path.exists():
+        diag = pd.read_csv(diag_path, dtype={"location_id": str, "branch": str})
+        ok = diag[diag["status"] == "calibrated"]
+        calibrated_keys = set(zip(ok["location_id"].str.zfill(8),
+                                  ok["hydroid"].astype(int)))
+
     rc_ids = set(rc["location_id"].astype(str))
     results = []
     for branch_dir in sorted(branches_dir.iterdir()):
@@ -108,16 +121,19 @@ def _discover_calibrated(huc8: str, rc: pd.DataFrame, elev: pd.DataFrame) -> lis
         bid = branch_dir.name
         if bid == "0":
             continue
-        if not (branch_dir / f"src_full_crosswalked_{bid}.pre_n_calib.csv").exists():
+        if not (branch_dir / f"hydroTable_{bid}.pre_n_calib.csv").exists():
             continue
         for _, gage in elev[elev["levpa_id"].astype(str) == bid].iterrows():
             loc_id = str(gage["location_id"]).zfill(8)
             if loc_id not in rc_ids or pd.isna(gage.get("feature_id")):
                 continue
+            hydroid = int(gage["HydroID"])
+            if calibrated_keys is not None and (loc_id, hydroid) not in calibrated_keys:
+                continue
             results.append({
                 "bid":        bid,
                 "location_id": loc_id,
-                "hydroid":    int(gage["HydroID"]),
+                "hydroid":    hydroid,
                 "feature_id": int(gage["feature_id"]),
                 "dem_adj_m":  float(gage["dem_adj_elevation"]),
                 "branch_dir": branch_dir,
