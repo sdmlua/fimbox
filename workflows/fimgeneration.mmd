@@ -1,0 +1,25 @@
+flowchart LR
+    subgraph S1[" "]
+        direction TB
+        A["<b>Forecast Discharge</b><br/>CSV or DataFrame (feature_id, discharge_cms)<br/>from the streamflow module <b>or</b> your own"]
+        B["<b>Preprocessed AOI</b><br/>per-branch HAND rasters +<br/>calibrated hydroTables"]
+        A ~~~ B
+    end
+    subgraph S2[" "]
+        direction TB
+        C["<b>Stage Interpolation</b>: per branch<br/>forecast discharge &rarr; water stage<br/>through the branch hydroTable"]
+        D["<b>HAND Thresholding</b><br/>flood every cell with HAND below the stage<br/>depth = stage &minus; HAND &middot; lake reaches skipped<br/>depths below min_depth_m dropped"]
+        C --> D
+    end
+    subgraph S3[" "]
+        direction TB
+        E["<b>Branch Mosaic</b><br/>all branch rasters combined<br/>over the branch-zero base"]
+        F["<b>AOI Rasters</b><br/>extent + depth GeoTIFFs in fim-outputs/<br/>named after the forecast timestamp"]
+        E --> F
+    end
+    A --> C
+    B --> C
+    D --> E
+    style S1 fill:none,stroke:none
+    style S2 fill:none,stroke:none
+    style S3 fill:none,stroke:none

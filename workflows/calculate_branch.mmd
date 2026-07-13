@@ -1,0 +1,19 @@
+flowchart LR
+    subgraph S1[" "]
+        direction TB
+        IN["<b>Staged Inputs</b><br/>DEM + boundary &middot; streams + headwaters<br/>levees + FEMA zones &middot; NWM catchments<br/>bridge elev diff (optional)"]
+        A["<b>1 &middot; Branch Derivation</b><br/>level paths &rarr; branch polygons<br/>+ branch list"]
+        Z["<b>2 &middot; Branch Zero</b><br/>DEM clip &middot; AGREE conditioning<br/>pit fill &middot; D8 flow direction"]
+        IN --> A --> Z
+    end
+    subgraph PAR["3 &middot; All branches in parallel: Dask scheduler on n_workers cores"]
+        direction TB
+        B1["Flow Routing (headwater-seeded)<br/>&rarr; <b>HAND raster</b> &rarr; Bridge Healing"]
+        B2["Reach Split + Catchments &rarr; NWM Crosswalk<br/>&rarr; <b>Rating Curve + hydroTable</b>"]
+        BN["branch 2 &nbsp;&sdot;&sdot;&sdot;&nbsp; branch N<br/>identical steps, running concurrently"]
+        B1 --> B2
+    end
+    OUT["<b>4 &middot; Branch Outputs</b><br/>HAND raster &middot; crosswalked reaches<br/>SRC &middot; hydroTable per branch<br/>+ branch_ids.csv"]
+    Z --> PAR
+    PAR --> OUT
+    style S1 fill:none,stroke:none

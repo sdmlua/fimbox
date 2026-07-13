@@ -1,0 +1,24 @@
+flowchart LR
+    subgraph S1["Define the AOI"]
+        direction TB
+        A["<b>AOI Input</b><br/>your own boundary polygon (gpkg / shp)<br/><b>or</b> an 8-digit HUC8 ID"]
+        B["<b>1 &middot; HUC Validation</b><br/>codes checked against the<br/>packaged HUC lists"]
+        A --> B
+    end
+    subgraph S2["Stage the data"]
+        direction TB
+        C["<b>2 &middot; Data Download</b><br/>DEM: 3DEP 1&ndash;60 m <b>or</b> your own raster<br/>hydrography: NWM medium / NHDPlus HR<br/><b>or</b> your own flowlines + catchments<br/>FEMA &middot; levees &middot; OSM roads + bridges &middot; gages"]
+        G["<b>Bridge DEM</b> (optional)<br/>LiDAR deck rasters &rarr;<br/>bridge_elev_diff.tif"]
+        C -.-> G
+    end
+    subgraph S3["Process + calibrate"]
+        direction TB
+        D["<b>3 &middot; Branch Processing</b><br/>DEM conditioning &middot; HAND rasters per branch<br/>reaches &middot; SRCs &middot; hydroTables"]
+        E["<b>4 &middot; Rating Curve Calibration</b><br/>bathymetry &middot; bankfull &middot; subdivision<br/>USGS / spatial / manual coefficients"]
+        D --> E
+    end
+    F["<b>FIM-Ready AOI</b><br/>calibrated hydroTables<br/>+ HAND rasters"]
+    B --> C
+    C --> D
+    G -.-> D
+    E --> F

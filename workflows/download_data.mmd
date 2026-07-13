@@ -1,0 +1,20 @@
+flowchart LR
+    A["<b>AOI Input</b><br/>your own boundary polygon<br/>(gpkg / shp) <b>or</b> an 8-digit HUC8 ID<br/>&rarr; boundary resolved automatically<br/>buffered before every download"]
+    subgraph SRC["Independent downloads: every dataset swappable"]
+        direction LR
+        B["<b>DEM</b><br/>USGS 3DEP 1 / 3 / 10 / 30 / 60 m<br/><b>or</b> your own DEM raster"]
+        C["<b>Hydrography</b><br/>NWM medium res &middot; NHDPlus High Res<br/><b>or</b> your own flowlines + catchments"]
+        D["<b>Hazard Layers</b><br/>FEMA NFHL flood zones<br/>USACE NLD 3D levees"]
+        E["<b>Structures + Gages</b><br/>OSM roads &middot; OSM bridges<br/>USGS gages"]
+        B ~~~ C
+        D ~~~ E
+    end
+    subgraph S3[" "]
+        direction TB
+        F["<b>Standardize</b><br/>reproject to EPSG:5070<br/>clip to buffered boundary<br/>normalize schema"]
+        G["<b>watershed-data/</b><br/>dem.tif &middot; wbd &middot; streams &middot; catchments<br/>lakes &middot; headwaters &middot; FEMA &middot; levees<br/>roads &middot; bridges &middot; gages"]
+        F --> G
+    end
+    A --> SRC
+    SRC --> F
+    style S3 fill:none,stroke:none

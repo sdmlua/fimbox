@@ -3,7 +3,7 @@ ifeq ($(OS),Windows_NT)
 	PYTHON := .venv/Scripts/python.exe
 endif
 
-.PHONY: install test fmt
+.PHONY: install test fmt workflows
 
 install:
 	pip install uv
@@ -15,3 +15,6 @@ test:
 
 fmt:
 	$(PYTHON) -m black .
+
+workflows:
+	python3 workflows/generate_workflows.py $(ARGS)
