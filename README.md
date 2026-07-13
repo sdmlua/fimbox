@@ -12,19 +12,19 @@
   </p>
 </div>
 
-A modular open-source testbed framework to standardize Flood Inundation
-Mapping (FIM) simulations and evaluation with custom datasets and
-hydrologic parameters in reproducible workflows.
+| | |
+| --- | --- |
+| <a href="https://sdml.ua.edu"><img src="docs/images/SDML_logo.png" alt="SDML Logo" width="400"></a> | A modular open source testbed framework to standardize Flood Inundation Mapping (FIM) simulations and evaluation with custom datasets and hydrologic parameters in reproducible workflows. `fimbox` provides a streamlined, user friendly and cloud enabled pipeline to generate operational flood inundation maps using the NOAA Office of Water Prediction (OWP) Height Above Nearest Drainage (HAND) FIM framework, driven by National Water Model retrospective and forecasted streamflow. It is developed under the [Surface Dynamics Modeling Lab (SDML)](https://sdml.ua.edu) at The University of Alabama. |
 
 ## High-level workflow
 ---
-It consists of extentsive Height Above Nearest Drainage (HAND) based flood-inundation mapping. The workflow provice greater flexibility on changing different datasets  (e.g. resolution and source of river networks, catchments, DEMs), investigate different research questions (e.g. changing manning n, better representation of synthetic rating curve, stream network segmentation, slope improvement and many more terrain conditioning) to improve the FIM extent and depths!
+`fimbox` implements an extensive Height Above Nearest Drainage (HAND) based flood inundation mapping workflow. It offers great flexibility to change datasets (e.g. resolution and source of river networks, catchments, DEMs) and to investigate different research questions (e.g. changing Manning's n, better representation of the synthetic rating curve, stream network segmentation, slope improvement and many more terrain conditioning options) to improve FIM extents and depths. The HAND preprocessing logic follows the NOAA OWP HAND FIM framework, whose reference implementation lives at https://github.com/NOAA-OWP/inundation-mapping. Ongoing work expands the modeling capability beyond a single model, integrating different models to enable multimodel FIM extents, and more.
 
-The ongoing work is includes expand the FIM modeling capability beyond a single model- integrating different model to enable multimodel FIM extent, and more. 
 <div align="center">
   <img src="docs/images/fimbox-flowchart.png" alt="fimbox-workflow" width="700" />
 </div>
----
+
+Every module shown above ships its own README with a detailed workflow diagram and step by step usage: what the module does, every class and parameter it exposes, and runnable examples (see the [Module documentation](#module-documentation) table below). Worked end to end examples for each stage live in [`tests/`](tests/) and the package documentation in [`docs/`](docs/).
 
 ## Install
 ---
@@ -78,7 +78,26 @@ getAllInputData(
     out_dir="out/my_basin",
 )
 ```
-see the ```tests/``` folder for further detailed steps inclduing- HAND processing, SRC genetation, calibration and FIM generation. User can change different parameters based on requirements.
+See the [`tests/`](tests/) folder for further detailed steps including HAND processing, SRC generation, calibration, and FIM generation. Users can change different parameters based on requirements.
+
+## Module documentation
+---
+Each module has its own README documenting what it contains, the full parameter surface (including optional parameters), and usage examples:
+
+| Module | Documentation | Purpose |
+|---|---|---|
+| `fimbox.preprocessing` | [README](src/fimbox/preprocessing/README.md) | Overview of the preprocessing stages and the combined `getAllInputData` pipeline. |
+| `fimbox.preprocessing.download_data` | [README](src/fimbox/preprocessing/download_data/README.md) | Download and standardize AOI inputs (DEM, hydrography, NFHL, levees, OSM, gages). |
+| `fimbox.preprocessing.huc_test` | [README](src/fimbox/preprocessing/huc_test/README.md) | Validate HUC8 codes against the packaged acceptable lists. |
+| `fimbox.preprocessing.process_bridgedem` | [README](src/fimbox/preprocessing/process_bridgedem/README.md) | Per-bridge LiDAR rasters and the bridge/DEM difference raster. |
+| `fimbox.preprocessing.calculate_branch` | [README](src/fimbox/preprocessing/calculate_branch/README.md) | Branch derivation, HAND generation, crosswalk, and SRC/hydroTable build. |
+| `fimbox.preprocessing.calibrate_ratingcurve` | [README](src/fimbox/preprocessing/calibrate_ratingcurve/README.md) | SRC calibration (bathymetry, bankfull, subdivision, USGS/spatial/manual). |
+| `fimbox.streamflow` | [README](src/fimbox/streamflow/README.md) | NWM retrospective/forecast, GEOGLOWS, and USGS retrieval, plots, statistics. |
+| `fimbox.fimgeneration` | [README](src/fimbox/fimgeneration/README.md) | Per-branch inundation and AOI mosaicking from discharge CSVs. |
+| Tests | [README](tests/README.md) | What each test file demonstrates and how to run the suite. |
+| Workflow diagrams | [README](workflows/README.md) | Editable Mermaid sources + generator script for every module workflow SVG (`make workflows`). |
+
+**For more usage notes refer to the [tests](tests/) or [docs](docs/) for the `fimbox` python package.**
 
 ## Contribution
 ---
@@ -86,13 +105,9 @@ For contribution guidelines see [`CONTRIBUTING.md`](CONTRIBUTING.md).
 
 ## Acknowledgements
 ---
-In `fimbox`, the HAND preprocessing implementation uses logic and workflow from NOAA OWP HAND-FIM
-framework. The original reference implementation lives at:
-https://github.com/NOAA-OWP/inundation-mapping
-
-## Funding
----
-Funding for this project was provided by the National Oceanic & Atmospheric Administration (NOAA), awarded to the Cooperative Institute for Research to Operations in Hydrology (CIROH) through the NOAA Cooperative Agreement with The University of Alabama (NA22NWS4320003).
+| | |
+| --- | --- |
+| <a href="https://ciroh.ua.edu"><img src="docs/images/CIROH-logo.jpg" alt="CIROH Logo" width="300"></a> | Funding for this project was provided by the National Oceanic & Atmospheric Administration (NOAA), awarded to the Cooperative Institute for Research to Operations in Hydrology (CIROH) through the NOAA Cooperative Agreement with The University of Alabama (NA22NWS4320003). |
 
 
 ## Contact
@@ -103,4 +118,4 @@ University of Alabama.
 
 Sagy Cohen (sagy.cohen@ua.edu), Supath Dhital (sdhital@ua.edu)
 
-‼️ NOTE- This repository is still in active development, and might contain bugs, please let us know or create pull request , if you have better ideas. THANK YOU.
+NOTE- This repository is still in active development and might contain bugs. Please let us know or create a pull request if you have better ideas. THANK YOU.
