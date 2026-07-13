@@ -255,3 +255,31 @@ try:
     __all__ += ["generateBridgeRaster", "BridgeDEMDiff"]
 except ImportError:
     pass
+
+# FIM evaluation: benchmark discovery/download from the FIMbench database and
+# candidate-vs-benchmark evaluation through the FIMeval framework. fimbench and
+# fimeval install with fimbox; they are still imported lazily inside the
+# functions so `import fimbox` stays light.
+from .fimevaluation import (
+    BenchmarkQuery,
+    BenchmarkQueryResult,
+    EvaluationResult,
+    FIMEvaluator,
+    evaluateFIM,
+    queryBenchmarkFIM,
+)
+
+__all__ += [
+    "BenchmarkQuery",
+    "BenchmarkQueryResult",
+    "queryBenchmarkFIM",
+    "FIMEvaluator",
+    "EvaluationResult",
+    "evaluateFIM",
+]
+
+# On-the-fly access to the bundled reference/calibration lookup tables, fetched
+# anonymously from the public SDML S3 bucket via pooch (see fimbox.datasets).
+from .datasets import fetch_data
+
+__all__ += ["fetch_data"]

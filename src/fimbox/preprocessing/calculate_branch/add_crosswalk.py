@@ -79,11 +79,13 @@ IRIS_MIN_STREAM_ORDER = 4
 #   "hfab"                 -> NWM hydrofabric slope (Slope/So), else DEM fallback.
 VALID_SLOPE_SOURCES = ("iris_sword", "dem", "hfab")
 
-# Default IRIS-SWORD slope table shipped with the package
-# (fimbox/data/FIMHF_IRIS_v1.0.csv: columns feature_id, slope_iris_sword, ...).
-DEFAULT_IRIS_SLOPE_CSV = (
-    Path(__file__).resolve().parents[4] / "data" / "FIMHF_IRIS_v1.0.csv"
-)
+# Default IRIS-SWORD slope table (columns feature_id, slope_iris_sword, ...).
+# Fetched on demand from the public SDML bucket via pooch and cached locally, so
+# the installed package doesn't need to ship the ~8 MB table. See
+# ``fimbox.datasets``. The fetch is lazy (only when src_slope_source ==
+# "iris_sword" and the caller passes no explicit table) to avoid any network I/O
+# on import or for the "dem"/"hfab" slope sources.
+DEFAULT_IRIS_SLOPE_KEY = "iris_sword_slopes"
 
 
 class NoCrosswalkError(RuntimeError):
@@ -146,11 +148,12 @@ def add_crosswalk(
     # IRIS-SWORD slope is only needed when that source is selected. Fall back
     # to the table shipped with the package when the caller doesn't pass one.
     if src_slope_source == "iris_sword":
-        iris_slope_csv = (
-            Path(iris_slope_csv)
-            if iris_slope_csv is not None
-            else DEFAULT_IRIS_SLOPE_CSV
-        )
+        if iris_slope_csv is not None:
+            iris_slope_csv = Path(iris_slope_csv)
+        else:
+            from fimbox.datasets import fetch_data
+
+            iris_slope_csv = fetch_data(DEFAULT_IRIS_SLOPE_KEY)
     else:
         iris_slope_csv = None
 

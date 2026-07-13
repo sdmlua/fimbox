@@ -27,6 +27,7 @@ import pytest
 
 from fimbox import CalibrationConfig, run_calibration
 from fimbox._dask import _resolve_n_workers
+from fimbox.datasets import fetch_data
 from fimbox.preprocessing.calibrate_ratingcurve import (
     BathymetricAdjustment,
     BranchAggregator,
@@ -45,23 +46,23 @@ from fimbox.preprocessing.calibrate_ratingcurve import (
 # Live AOI + input files. Edit these to point at your data; tests skip when the AOI is absent.
 AOI_DIR = Path(__file__).resolve().parents[2] / "out" / "test_smallB"
 
-# Bundled lookup tables shipped in the repo (all calibration inputs live here).
-DATA = Path(__file__).resolve().parents[1] / "data"
+# Calibration lookup tables, fetched on demand from the public SDML S3 bucket
+# (anonymous, cached locally) via the pooch registry in ``fimbox.datasets``.
 
 # Bankfull recurrence flows (NWM v3)
-BANKFULL_FLOWS_FILE = DATA / "nwm3_high_water_threshold_cms.parquet"
+BANKFULL_FLOWS_FILE = fetch_data("nwm3_high_water_threshold")
 
 # Optimized variable-roughness Manning's n table (per feature_id channel/overbank n)
-VMANN_INPUT_FILE = DATA / "mannings_global_optz.parquet"
+VMANN_INPUT_FILE = fetch_data("mannings_optz")
 
 # USGS rating-curve calibration. Rating curve + NWM recurrence flows (v3) are
 # required; the acceptable-gage quality filter refines which gages qualify.
-USGS_RATING_CURVE_CSV = DATA / "usgs_rating_curves.parquet"
-NWM_RECUR_FILE = DATA / "nwm3_17C_recurrence_flows_cfs.parquet"
-USGS_ACCEPTABLE_GAGES = DATA / "acceptable_sites_for_rating_curves.parquet"
+USGS_RATING_CURVE_CSV = fetch_data("usgs_rating_curves")
+NWM_RECUR_FILE = fetch_data("nwm3_recurrence_flows")
+USGS_ACCEPTABLE_GAGES = fetch_data("acceptable_gages")
 
-# Bathymetry: eHydro surveyed channels (.gpkg). Supply it in data/, then set:
-BATHY_EHYDRO_FILE = DATA / "final_bathymetry_ehydro_ohrfc.gpkg"
+# Bathymetry: eHydro surveyed channels (.gpkg).
+BATHY_EHYDRO_FILE = fetch_data("bathymetry_ehydro_ohrfc")
 
 # Spatial-observation calibration: per-AOI benchmark points (.parquet). Yet to
 # be added — left unset for now.
