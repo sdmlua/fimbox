@@ -15,13 +15,6 @@ from pathlib import Path
 
 from fimbox import (
     getNWMretrospective,
-    getNWMforecast,
-    get_usgs_fid_pairs,
-    USGSData,
-    plot_nwm,
-    plot_usgs,
-    plot_comparison,
-    calculate_statistics,
 )
 
 AOI_DIR = Path(__file__).resolve().parents[2] / "out" / "test_smallB"

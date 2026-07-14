@@ -181,8 +181,14 @@ class BenchmarkQuery:
             kwargs["raster_path"] = str(raster)
         if self.boundary_path is not None:
             kwargs["boundary_path"] = str(self.boundary_path)
-        for name in ("huc8", "tier", "event_date", "start_date", "end_date",
-                     "file_name"):
+        for name in (
+            "huc8",
+            "tier",
+            "event_date",
+            "start_date",
+            "end_date",
+            "file_name",
+        ):
             value = getattr(self, name)
             if value is not None:
                 kwargs[name] = value

@@ -15,8 +15,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
-
 AOI_DIR = Path(__file__).resolve().parents[2] / "out" / "test_smallB"
 
 # Boundary-extraction method: "smallest_extent" | "convex_hull" | "AOI"
@@ -34,6 +32,7 @@ TIER = None  # e.g. "HWM", "tier1"
 # contingency maps + metric plots) on the staged case.
 def test_fimevaluation_combined():
     from fimbox import evaluateFIM, queryBenchmarkFIM
+
     query = queryBenchmarkFIM(
         AOI_DIR,  # footprint = newest extent raster in <aoi>/fim-outputs/
         # raster_path="my_fim.tif",     # explicit candidate raster instead
@@ -67,7 +66,8 @@ def test_fimevaluation_combined():
     assert result.output_dir.is_dir()
     assert "benchmark" in result.benchmark.name.lower()
     assert result.metrics_files, "FIMeval produced no metrics CSV"
-    print(result.metrics)  
+    print(result.metrics)
+
 
 # # STEP BY STEP — each stage on its own.
 

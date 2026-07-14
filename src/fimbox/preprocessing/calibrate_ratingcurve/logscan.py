@@ -18,7 +18,6 @@ Empty summaries are not written.
 from __future__ import annotations
 
 import logging
-import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional

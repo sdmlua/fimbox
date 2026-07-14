@@ -28,20 +28,6 @@ import pytest
 from fimbox import CalibrationConfig, run_calibration
 from fimbox._dask import _resolve_n_workers
 from fimbox.datasets import fetch_data
-from fimbox.preprocessing.calibrate_ratingcurve import (
-    BathymetricAdjustment,
-    BranchAggregator,
-    HydroTableReset,
-    LongitudinalFlowFilter,
-    LogScanner,
-    ManualCalibrator,
-    SpatialObsCalibrator,
-    SrcBankfull,
-    SrcNonmonotonic,
-    SrcSubdiv,
-    ThalwegNotchesAdjustment,
-    UsgsRatingCalibrator,
-)
 
 # Live AOI + input files. Edit these to point at your data; tests skip when the AOI is absent.
 AOI_DIR = Path(__file__).resolve().parents[2] / "out" / "test_smallB"
@@ -116,55 +102,42 @@ def test_calibrate_full_pipeline():
         # reset — revert hydroTables to uncalibrated baseline before re-applying.
         # Set True when re-calibrating an AOI that was already calibrated.
         calibration_rerun=True,
-
         # aggregate_pre — assemble usgs/ras2fim elev tables before adjustments
         aggregate_pre=True,
-
         # thalweg — remove thalweg-notch artifact rows, refill stage ladder
         thalweg_notches_adjustment=True,
-
         # longitudinal — smooth hydraulic geometry along reach chains
         longitudinal_filter=True,
-
         # bathymetry — add missing in-channel area below the DEM (needs bathy_file_ehydro)
         bathymetry_adjust=True,
         bathy_file_ehydro=BATHY_EHYDRO_FILE,
-
         # bankfull — identify bankfull stage in every branch SRC
         src_bankfull_toggle=True,
         bankfull_flows_file=BANKFULL_FLOWS_FILE,
         include_branch_zero=True,
-
         # subdiv — channel/overbank subdivision (needs vmann + bankfull on)
         src_subdiv_toggle=True,
         vmann_input_file=VMANN_INPUT_FILE,
         default_channel_n=0.06,  # used when feature_id missing from vmann table
         default_overbank_n=0.12,
-
         # nonmonotonic — force monotonic in-channel rating curves
         nonmonotonic_src_adjustment=True,
         nonmonotonic_stream_order_min=4,
-
         # usgs — calibrate SRCs against USGS rating curves at NWM recurrence flows
         src_adjust_usgs=True,
         usgs_rating_curve_csv=USGS_RATING_CURVE_CSV,
         usgs_acceptable_gages=USGS_ACCEPTABLE_GAGES,
         nwm_recur_file=NWM_RECUR_FILE,
-
         # spatial — calibrate SRCs against benchmark inundation points
         src_adjust_spatial=True,
         calib_points_file=CALIB_POINTS_FILE,  # None -> step self-skips
-
         # manual — apply a per-feature_id coefficient table
         manual_calb_toggle=True,
         man_calb_file=MAN_CALB_FILE,  # None -> step self-skips
-
         # aggregate_post — publish htable + bridge + road to AOI root
         aggregate_post=True,
-
         # log scan — collect error/warning lines into per-AOI summary files
         scan_logs=True,
-
         # execution
         job_branch_limit=JOB_BRANCH_LIMIT,
         skip_unimplemented=True,  # warn instead of raising on stubs

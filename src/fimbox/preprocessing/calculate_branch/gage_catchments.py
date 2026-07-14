@@ -18,7 +18,7 @@ Inputs / outputs:
 from __future__ import annotations
 
 import logging
-from collections import defaultdict, deque
+from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
@@ -28,8 +28,8 @@ import numpy as np
 import rasterio
 import rasterio.features
 import rasterio.sample
-from shapely.geometry import Point
 from shapely import ops as shapely_ops
+from shapely.geometry import Point
 
 log = logging.getLogger(__name__)
 
@@ -686,8 +686,9 @@ def _mask_raster_to_boundary(
     raster_path: Path, boundary_json: list, save_path: Path
 ) -> None:
     """Mask a raster to a geometry boundary and save in-place."""
-    from rasterio.mask import mask as rio_mask
     import shutil
+
+    from rasterio.mask import mask as rio_mask
 
     tmp = save_path.with_suffix(".tmp.tif")
     try:

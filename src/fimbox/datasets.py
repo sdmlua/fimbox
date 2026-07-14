@@ -6,7 +6,7 @@ On-the-fly access to fimbox reference datasets via :mod:`pooch`.
 
 fimbox reads several lookup tables during crosswalk and rating-curve
 calibration (IRIS-SWORD slopes, NWM recurrence / high-water flows, USGS rating
-curves, optimized Manning's n, channel bathymetry). 
+curves, optimized Manning's n, channel bathymetry).
 
 The cache lives under the OS cache dir (e.g. ``~/Library/Caches/fimbox`` on
 macOS, ``~/.cache/fimbox`` on Linux); set ``$FIMBOX_DATA_DIR`` to override it.
@@ -14,7 +14,7 @@ Each file is verified against a known SHA256 on download.
 
 Usage::
 
-    from fimbox.datasets import fetch_data 
+    from fimbox.datasets import fetch_data
 
     path = fetch_data("nwm3_high_water_threshold")            # by alias
     path = fetch_data("usgs_rating_curves.parquet")           # by filename
@@ -35,20 +35,13 @@ BASE_URL = "s3://sdmlab/FIMbox/calibration_data/"
 # Registered files mapped to their SHA256. The hash is checked on every
 # download, guarding against truncated transfers and silent upstream changes.
 REGISTRY = {
-    "FIMHF_IRIS_v1.0.csv":
-        "sha256:984fa67d3ecd1467053d9d7f61b8c8adc287d1017ffe244f33e9a55e51c2634d",
-    "acceptable_sites_for_rating_curves.parquet":
-        "sha256:7a64b0b7e159c79f47cd3713d0d13338f5a6145426f0b3adb44dc90e0e306d7a",
-    "final_bathymetry_ehydro_ohrfc.gpkg":
-        "sha256:d2dede0fdcf53e2effbae20467bb2d07a4fbac9f714e0a49c14488aba8193527",
-    "mannings_global_optz.parquet":
-        "sha256:3da50f89bcffdf94eb1c791561856ae501ce811959262fc48c717edf7a26c4db",
-    "nwm3_17C_recurrence_flows_cfs.parquet":
-        "sha256:4a861998522454a6886d401993576bd8e96707f1900c0221b62e5efc6926c0f9",
-    "nwm3_high_water_threshold_cms.parquet":
-        "sha256:7e7023e968e86d0ba2a94ff76d79c8ebe179d509a32e340727da3d71d431cf6b",
-    "usgs_rating_curves.parquet":
-        "sha256:5f0a58c0ab04a91d3db2f5db76e9e62546cb9fdca9785afc205910e04436c111",
+    "FIMHF_IRIS_v1.0.csv": "sha256:984fa67d3ecd1467053d9d7f61b8c8adc287d1017ffe244f33e9a55e51c2634d",
+    "acceptable_sites_for_rating_curves.parquet": "sha256:7a64b0b7e159c79f47cd3713d0d13338f5a6145426f0b3adb44dc90e0e306d7a",
+    "final_bathymetry_ehydro_ohrfc.gpkg": "sha256:d2dede0fdcf53e2effbae20467bb2d07a4fbac9f714e0a49c14488aba8193527",
+    "mannings_global_optz.parquet": "sha256:3da50f89bcffdf94eb1c791561856ae501ce811959262fc48c717edf7a26c4db",
+    "nwm3_17C_recurrence_flows_cfs.parquet": "sha256:4a861998522454a6886d401993576bd8e96707f1900c0221b62e5efc6926c0f9",
+    "nwm3_high_water_threshold_cms.parquet": "sha256:7e7023e968e86d0ba2a94ff76d79c8ebe179d509a32e340727da3d71d431cf6b",
+    "usgs_rating_curves.parquet": "sha256:5f0a58c0ab04a91d3db2f5db76e9e62546cb9fdca9785afc205910e04436c111",
 }
 
 # Stable, readable aliases so callers don't hard-code file names/versions.

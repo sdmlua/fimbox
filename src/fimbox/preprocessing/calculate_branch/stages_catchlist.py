@@ -90,8 +90,8 @@ def make_stages_and_catchlist(
 
     with out_catchlist.open("w") as f:
         f.write(f"{len(hydro_ids)}\n")
-        for h, s, l, a in zip(hydro_ids, slopes, length_km, area_sq_km):
-            f.write(f"{h} {s} {l} {a}\n")
+        for h, s, lkm, a in zip(hydro_ids, slopes, length_km, area_sq_km):
+            f.write(f"{h} {s} {lkm} {a}\n")
 
     log.info(
         "stages_catchlist: %d hydroIDs, %d stages --> %s",

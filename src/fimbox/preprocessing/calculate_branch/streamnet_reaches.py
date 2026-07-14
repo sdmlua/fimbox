@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import logging
 import os
-from collections import defaultdict, deque
+from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
@@ -97,9 +97,8 @@ class StreamNetReaches:
         self.out_dir.mkdir(parents=True, exist_ok=True)
 
     def run(self) -> dict[str, Path]:
-        import rasterio
         import geopandas as gpd
-        from shapely.geometry import LineString
+        import rasterio
 
         bid = self.branch_id
         stream_order_path = self.out_dir / f"streamOrder_{bid}.tif"
@@ -412,8 +411,9 @@ def _smooth_reach(coords: list[tuple[float, float]], pixel_size: float):
 
 
 def _recompress_lzw(path: Path) -> None:
-    import rasterio
     import shutil
+
+    import rasterio
 
     if not path.exists():
         return

@@ -545,7 +545,7 @@ def _nonmonotonic_one_branch(branch_dir: Path, bid: str, strm_order: int) -> str
     # Use the subdivided discharge as the source where it ran; else the standard column.
     if "subdiv_applied" in df.columns and "Discharge (m3s-1)_subdiv" in df.columns:
         df["Discharge (m3s-1)"] = np.where(
-            df["subdiv_applied"] == True,
+            df["subdiv_applied"].eq(True),
             df["Discharge (m3s-1)_subdiv"],
             df["Discharge (m3s-1)"],
         )
@@ -628,11 +628,15 @@ def _sync_htable_from_src(ht_path: Path, src: pd.DataFrame) -> None:
     # Refresh the hydroTable's per-(HydroID, stage) geometry/discharge from the
     # adjusted SRC via a merge (robust to row-order differences).
     ht = pd.read_csv(ht_path, low_memory=False)
-    ht = ht.drop_duplicates(subset=["HydroID", "stage"], keep="first").reset_index(drop=True)
-    pull = {src_col: ht_col for ht_col, src_col in _HT_SYNC_COLS.items() if src_col in src.columns}
-    keyed = src[["HydroID", "Stage", *pull]].rename(
-        columns={"Stage": "stage", **pull}
+    ht = ht.drop_duplicates(subset=["HydroID", "stage"], keep="first").reset_index(
+        drop=True
     )
+    pull = {
+        src_col: ht_col
+        for ht_col, src_col in _HT_SYNC_COLS.items()
+        if src_col in src.columns
+    }
+    keyed = src[["HydroID", "Stage", *pull]].rename(columns={"Stage": "stage", **pull})
     ht = ht.drop(columns=[c for c in pull.values() if c in ht.columns], errors="ignore")
     ht = ht.merge(keyed, on=["HydroID", "stage"], how="left")
     ht.to_csv(ht_path, index=False)

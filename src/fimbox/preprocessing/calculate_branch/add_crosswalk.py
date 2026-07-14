@@ -1,6 +1,6 @@
 """
 Author: Supath Dhital
-Date Updated: May 2026
+Date Updated: July 2026
 
 Crosswalk DEM-derived reaches to NWM feature_ids, compute the full synthetic
 rating curve from the SRC base table, and write the per-branch hydroTable.
@@ -79,12 +79,7 @@ IRIS_MIN_STREAM_ORDER = 4
 #   "hfab"                 -> NWM hydrofabric slope (Slope/So), else DEM fallback.
 VALID_SLOPE_SOURCES = ("iris_sword", "dem", "hfab")
 
-# Default IRIS-SWORD slope table (columns feature_id, slope_iris_sword, ...).
-# Fetched on demand from the public SDML bucket via pooch and cached locally, so
-# the installed package doesn't need to ship the ~8 MB table. See
-# ``fimbox.datasets``. The fetch is lazy (only when src_slope_source ==
-# "iris_sword" and the caller passes no explicit table) to avoid any network I/O
-# on import or for the "dem"/"hfab" slope sources.
+# Key for the optional IRIS-SWORD slope CSV (fetched lazily via fimbox.datasets).
 DEFAULT_IRIS_SLOPE_KEY = "iris_sword_slopes"
 
 
@@ -402,7 +397,6 @@ def _find_short_segments(
             continue
         short_id = int(row["HydroID"])
         to_node = row["To_Node"]
-        from_node = row["From_Node"]
 
         upstreams = flows[flows["NextDownID"] == short_id]
         if len(upstreams) >= 1:
@@ -434,6 +428,7 @@ def _select_slope(base: pd.DataFrame, src_slope_source: str) -> pd.Series:
     ``hfab``: hydrofabric slope where in range, else DEM. ``dem``: DEM only.
     All fall back to the DEM rise/run slope when the preferred source is
     missing, so SLOPE is never NaN."""
+
     def _in_range(col: str) -> pd.Series:
         if col not in base.columns:
             return pd.Series(np.nan, index=base.index)

@@ -8,9 +8,12 @@ remaining data downloads are run.
 """
 
 from __future__ import annotations
-from typing import Optional, Union
+
 from pathlib import Path
+from typing import Optional, Union
+
 import geopandas as gpd
+
 from .nhdplus import ArcGISDownloader
 
 

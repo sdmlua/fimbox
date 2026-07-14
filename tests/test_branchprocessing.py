@@ -12,16 +12,11 @@ Run order:
 """
 
 import logging
-import os
 from pathlib import Path
-
-import pytest
 
 # single steps IMPORTS
 from fimbox import (
     BranchDerivation,
-    BranchZero,
-    CreateHAND,
 )
 
 log = logging.getLogger(__name__)
@@ -31,13 +26,6 @@ log = logging.getLogger(__name__)
 # HeadwaterRasterizer, LevelPathBooleanRasterizer, rasterize_3d_levee_lines,
 # burn_levee_elevations) are exercised indirectly via test_step_Z1, so they
 # are not imported here.
-from fimbox import (
-    FlowAccDEM,
-    ThalwegAdjustment,
-    D8SlopeDEM,
-    StreamNetReaches,
-    split_derived_reaches,
-)
 
 # AOI parameters — point this at any user-supplied AOI working directory.
 OUT_DIR = Path(__file__).resolve().parents[2] / "out" / "test_smallB" / "watershed-data"
@@ -149,7 +137,8 @@ GW_REACHES = BRANCH_DIR / f"gw_catchments_reaches_{BRANCH_ID}.tif"
 PIXEL_PTS = BRANCH_DIR / f"flows_points_pixels_{BRANCH_ID}.gpkg"
 GW_PIXELS = BRANCH_DIR / f"gw_catchments_pixels_{BRANCH_ID}.tif"
 
-#==========================
+
+# ==========================
 # COMBINED — the whole branch pipeline in one go, matching the step-by-step
 # sequence exactly:
 #   Step Z0  BranchDerivation  — level paths, branch polygons, branch_ids.lst
@@ -176,7 +165,7 @@ def test_branchprocessing_combined():
          full 22-step CreateHAND. Non-zero branches produce hydroTable.
       3. Deny-list cleanup removes intermediates from every branch dir.
     """
-    from fimbox import AOIProcessingConfig, BranchDerivation, calculate_allbranches
+    from fimbox import AOIProcessingConfig, calculate_allbranches
     from fimbox._dask import _resolve_n_workers
 
     BranchDerivation(
@@ -186,16 +175,15 @@ def test_branchprocessing_combined():
         branch_buffer_distance_meters=7000.0,
     ).run()
 
-    bridge_diff         = BRIDGE_DIFF   if BRIDGE_DIFF.exists()    else None
-    levee_gpkg          = NLD_LEVEES    if NLD_LEVEES.exists()     else None
-    headwaters          = HEADWATERS    if HEADWATERS.exists()     else None
+    bridge_diff = BRIDGE_DIFF if BRIDGE_DIFF.exists() else None
+    levee_gpkg = NLD_LEVEES if NLD_LEVEES.exists() else None
+    headwaters = HEADWATERS if HEADWATERS.exists() else None
     levelpaths_extended = LEVELPATH_EXT if LEVELPATH_EXT.exists() else None
 
     n_workers = _resolve_n_workers()
     cfg = AOIProcessingConfig(
         aoi_dir=OUT_DIR,
         branch_list_path=OUT_DIR / "branch_ids.lst",
-
         # BranchZero inputs (whole-AOI, branch_id="0")
         dem_path=DEM,
         streams_gpkg=STREAMS,
@@ -204,19 +192,16 @@ def test_branchprocessing_combined():
         levee_gpkg_path=levee_gpkg,
         headwaters_gpkg=headwaters,
         levelpaths_extended_gpkg=levelpaths_extended,
-
         # AGREE DEM conditioning
         agree_buffer_m=15.0,
         agree_smooth_drop=10.0,
         agree_sharp_drop=1000.0,
-
         # CreateHAND geometry
         cost_distance_tolerance=50.0,
         lateral_elevation_threshold=10,
         max_split_distance_m=1500.0,
         slope_min=0.0001,
         lakes_buffer_dist_m=100.0,
-
         # SRC / crosswalk
         mannings_n=0.06,
         stage_min_m=0.0,
@@ -225,12 +210,10 @@ def test_branchprocessing_combined():
         min_catchment_area=0.25,
         min_stream_length=0.5,
         crosswalk_max_distance_m=100.0,
-
         # SRC slope source: "iris_sword" | "dem" | "hfab"
         src_slope_source="iris_sword",
         iris_slope_csv=None,
         hfab_slope_column=None,
-
         # execution
         n_workers=n_workers,
         keep_failed_branches=True,
@@ -241,16 +224,22 @@ def test_branchprocessing_combined():
         cfg,
         run_branch_zero=True,
         delete_deny_list=True,
-        deny_unit_list=Path(__file__).resolve().parent.parent / "config" / "deny_unit.lst",
+        deny_unit_list=Path(__file__).resolve().parent.parent
+        / "config"
+        / "deny_unit.lst",
         branch_ids_csv=OUT_DIR / "branch_ids.csv",
     )
 
     # Branch 0 now runs BranchZero + full CreateHAND (same as every non-zero branch).
     b0 = OUT_DIR / "branches" / "0"
-    assert (b0 / "branch_zero_complete.txt").exists(), "branch_zero_complete.txt missing"
-    assert (b0 / "dem_0.tif").exists(),                      "dem_0.tif missing from branch 0"
-    assert (b0 / "flowdir_d8_burned_filled_0.tif").exists(), "flowdir missing from branch 0"
-    assert (b0 / "hydroTable_0.csv").exists(),               "hydroTable_0.csv missing from branch 0"
+    assert (b0 / "branch_zero_complete.txt").exists(), (
+        "branch_zero_complete.txt missing"
+    )
+    assert (b0 / "dem_0.tif").exists(), "dem_0.tif missing from branch 0"
+    assert (b0 / "flowdir_d8_burned_filled_0.tif").exists(), (
+        "flowdir missing from branch 0"
+    )
+    assert (b0 / "hydroTable_0.csv").exists(), "hydroTable_0.csv missing from branch 0"
     assert result.n_branch_zero_recorded == 1, "branch zero not in branch_ids.csv"
     assert result.branch_ids_csv.exists(), "branch_ids.csv not created"
 
@@ -266,7 +255,9 @@ def test_branchprocessing_combined():
     # Spot-check one non-zero branch hydroTable.
     ok_branches = [r.branch_id for r in non_zero if r.status == "ok"]
     if ok_branches:
-        sample_ht = OUT_DIR / "branches" / ok_branches[0] / f"hydroTable_{ok_branches[0]}.csv"
+        sample_ht = (
+            OUT_DIR / "branches" / ok_branches[0] / f"hydroTable_{ok_branches[0]}.csv"
+        )
         assert sample_ht.exists(), f"hydroTable missing from branch {ok_branches[0]}"
 
 
@@ -697,7 +688,7 @@ def test_branchprocessing_combined():
 #         out_hydro_csv=HYDRO_TABLE,
 #         boundary_gpkg=WBD8_CLP if WBD8_CLP.exists() else None,
 #         mannings_n=0.06,
-#         min_catchment_area=0.25, 
+#         min_catchment_area=0.25,
 #         min_stream_length=0.5,
 #         max_distance_m=100.0,
 #         small_segments_csv=BRANCH_DIR / f"small_segments_{BRANCH_ID}.csv",

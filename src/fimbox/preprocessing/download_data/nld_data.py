@@ -6,17 +6,16 @@ Description: Downloads and processes USACE National Levee Database (NLD) data,
 which includes levee lines and protected areas, filtered by a user-provided spatial boundary.
 """
 
-import os
-import re
-import time
 import logging
-import requests
+import os
+import time
 from pathlib import Path
-from datetime import datetime
-from typing import Union, Optional
+from typing import Optional, Union
+
 import geopandas as gpd
 import pandas as pd
-from shapely.geometry import Polygon, MultiPolygon, LineString, MultiLineString
+import requests
+from shapely.geometry import LineString, MultiLineString, MultiPolygon, Polygon
 from tqdm import tqdm
 
 log = logging.getLogger(__name__)
@@ -434,6 +433,7 @@ class DownloadNLD:
 # CLI
 if __name__ == "__main__":
     import argparse
+
     from ...logging_utils import configure_cli_logging
 
     configure_cli_logging()

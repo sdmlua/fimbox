@@ -8,13 +8,13 @@ if user is interested into the HUC level hand processing and FIM generation.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from pathlib import Path
-from typing import Set, List, Optional, Union, Sequence
 import argparse
 import csv
 import logging
+from dataclasses import dataclass
 from importlib import resources as importlib_resources
+from pathlib import Path
+from typing import List, Optional, Sequence, Set, Union
 
 log = logging.getLogger(__name__)
 

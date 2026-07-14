@@ -38,13 +38,11 @@ generation). Use ``self.aoi_dir`` for the AOI root and ``self.watershed_dir``
 (== ``self.case_dir``) for the input-data folder.
 """
 
-import logging
 from pathlib import Path
 from typing import Optional, Union
 
 import geopandas as gpd
 from shapely.geometry import LineString, MultiLineString
-
 from shapely.geometry import box as shapely_box
 
 from ..logging_utils import (
@@ -53,19 +51,18 @@ from ..logging_utils import (
     default_output_dir,
     get_logger,
 )
-from .download_data.dem_process import DEMProcessor
 from .download_data.area_masks import DownloadDEMDomain, DownloadLandSea
-from .download_data.nfhl_data import DownloadFEMANFHL
+from .download_data.dem_process import DEMProcessor
 from .download_data.nhdplus import (
-    getNHDPlusData,
     _is_high_resolution,
-    normalize_flowlines,
+    getNHDPlusData,
     normalize_catchments,
+    normalize_flowlines,
 )
-from .source_naming import DEFAULT_IDENTIFIER, source_name
 from .download_data.nld_data import DownloadNLD
 from .download_data.osm_data import DownloadOSMBridges, DownloadOSMRoads
 from .download_data.utils import HUC8Finder, find_headwater_points
+from .source_naming import DEFAULT_IDENTIFIER, source_name
 
 _FILENAMES = {
     "wbd": "wbd.gpkg",
@@ -503,7 +500,7 @@ class getAllInputData:
         # wbd8_clp.gpkg is the canonical name expected by split_reaches and filter_catchments
         wbd8_clp_path = self.case_dir / "wbd8_clp.gpkg"
         self.boundary_gdf.to_file(str(wbd8_clp_path), driver="GPKG", index=False)
-        self.logger.info(f"Study boundary (clipped) --> wbd8_clp.gpkg")
+        self.logger.info("Study boundary (clipped) --> wbd8_clp.gpkg")
 
         self.buffer_gdf.to_file(self._out("wbd_buffer"), driver="GPKG", index=False)
         self.logger.info(

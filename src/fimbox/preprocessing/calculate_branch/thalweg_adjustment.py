@@ -154,7 +154,6 @@ class ThalwegAdjustment:
 
         with rasterio.open(str(self.stream_pixels)) as src:
             data = src.read(1)
-            nodata_sp = src.nodata if src.nodata is not None else -9999.0
             profile = src.profile.copy()
 
         stream_mask = data == 1

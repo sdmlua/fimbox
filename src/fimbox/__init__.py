@@ -5,6 +5,19 @@ Each group is annotated with the source file it originates from.
 
 from __future__ import annotations
 
+# fimevaluation and datasets are unguarded (installed with fimbox), imported up
+# here so they sit at module top; the annotated groups below build __all__ per
+# source file (see module docstring). Public names are still appended in the
+# grouped sections that follow.
+from .datasets import fetch_data
+from .fimevaluation import (
+    BenchmarkQuery,
+    BenchmarkQueryResult,
+    EvaluationResult,
+    FIMEvaluator,
+    evaluateFIM,
+    queryBenchmarkFIM,
+)
 from .preprocessing import (
     AllBranchesResult,
     AOIProcessingConfig,
@@ -257,18 +270,8 @@ except ImportError:
     pass
 
 # FIM evaluation: benchmark discovery/download from the FIMbench database and
-# candidate-vs-benchmark evaluation through the FIMeval framework. fimbench and
-# fimeval install with fimbox; they are still imported lazily inside the
-# functions so `import fimbox` stays light.
-from .fimevaluation import (
-    BenchmarkQuery,
-    BenchmarkQueryResult,
-    EvaluationResult,
-    FIMEvaluator,
-    evaluateFIM,
-    queryBenchmarkFIM,
-)
-
+# candidate-vs-benchmark evaluation through the FIMeval framework (imported at
+# module top).
 __all__ += [
     "BenchmarkQuery",
     "BenchmarkQueryResult",
@@ -279,7 +282,5 @@ __all__ += [
 ]
 
 # On-the-fly access to the bundled reference/calibration lookup tables, fetched
-# anonymously from the public SDML S3 bucket via pooch (see fimbox.datasets).
-from .datasets import fetch_data
-
+# anonymously from the public SDML S3 bucket via pooch (imported at module top).
 __all__ += ["fetch_data"]
