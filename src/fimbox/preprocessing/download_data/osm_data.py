@@ -31,18 +31,18 @@ import warnings
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional, Union, Tuple, Sequence, List, Any
+from typing import Any, List, Optional, Sequence, Tuple, Union
 
 import geopandas as gpd
 import osmnx as ox
 import pandas as pd
 import requests
 from networkx import Graph, connected_components
-from shapely.geometry import LineString, Polygon, MultiPolygon, box
-
-log = logging.getLogger(__name__)
+from shapely.geometry import LineString, MultiPolygon, Polygon, box
 from shapely.ops import unary_union
 from tqdm import tqdm
+
+log = logging.getLogger(__name__)
 
 
 # shared boundary with IO helpers (used by both roads + bridges)

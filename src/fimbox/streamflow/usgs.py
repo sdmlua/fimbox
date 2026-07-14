@@ -15,8 +15,8 @@ from typing import Optional, Sequence, Union
 
 import pandas as pd
 
-from . import _common as C
 from ..logging_utils import WATERSHED_DIR_NAME
+from . import _common as C
 
 log = logging.getLogger(__name__)
 

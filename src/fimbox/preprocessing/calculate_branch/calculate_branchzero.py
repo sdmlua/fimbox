@@ -25,7 +25,8 @@ import numpy as np
 import rasterio
 from rasterio.crs import CRS
 from rasterio.features import geometry_mask
-from rasterio.warp import Resampling, reproject as warp_reproject
+from rasterio.warp import Resampling
+from rasterio.warp import reproject as warp_reproject
 
 from .flowdir_dem import FlowdirDEM
 from .hydroenforce_dem import HydroenforceDEM
@@ -128,8 +129,15 @@ class BranchZero:
             # removes all raster/vector intermediates from branches/{id}/, so
             # the directory looks empty after a production run. This file is
             # the only durable proof that BranchZero ran successfully.
-            sentinel = self.out_dir / "branches" / self.branch_zero_id / "branch_zero_complete.txt"
-            sentinel.write_text(f"branch_id={self.branch_zero_id}\nfiles_written={len(result)}\n")
+            sentinel = (
+                self.out_dir
+                / "branches"
+                / self.branch_zero_id
+                / "branch_zero_complete.txt"
+            )
+            sentinel.write_text(
+                f"branch_id={self.branch_zero_id}\nfiles_written={len(result)}\n"
+            )
             return result
         except Exception:
             log.exception("BranchZero failed")
@@ -362,8 +370,9 @@ def _fill_depressions(dem: Path, out: Path, wbt_path: Optional[str] = None) -> N
     the nodata boundary are legitimately unroutable and excluded).
     """
     import shutil
-    import rasterio
+
     import numpy as np
+    import rasterio
 
     from ._wbt_safe import run_wbt_tool
 

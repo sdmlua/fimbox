@@ -14,6 +14,7 @@ from __future__ import annotations
 import logging
 import os
 import tempfile
+import threading as _threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -33,8 +34,6 @@ _BRIDGE_CLASSES = {13, 17}
 _ENTWINE_INDEX_URL = "https://raw.githubusercontent.com/hobuinc/usgs-lidar/master/boundaries/boundaries.topojson"
 
 # Per-thread session — avoids connection pool exhaustion when many dask threads run concurrently.
-import threading as _threading
-
 _thread_local = _threading.local()
 
 
@@ -163,7 +162,7 @@ def _intersecting_tiles(
         for dx in range(2):
             for dy in range(2):
                 for dz in range(2):
-                    ck = f"{d+1}-{x*2+dx}-{y*2+dy}-{z*2+dz}"
+                    ck = f"{d + 1}-{x * 2 + dx}-{y * 2 + dy}-{z * 2 + dz}"
                     if ck in hierarchy:
                         _recurse(
                             ck,
@@ -252,7 +251,7 @@ class generateBridgeRaster:
         log.info(f"  pending : {len(pending_ids)} (will be processed)")
         if pending_ids:
             preview = pending_ids[:5]
-            more = f" +{len(pending_ids)-5} more" if len(pending_ids) > 5 else ""
+            more = f" +{len(pending_ids) - 5} more" if len(pending_ids) > 5 else ""
             log.info(f"  pending IDs: {preview}{more}")
         return {
             "total": len(all_ids),

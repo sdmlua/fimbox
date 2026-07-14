@@ -75,6 +75,7 @@ def _ensure_wbt_source(wbt_path: Optional[str] = None) -> None:
         if _WBT_SRC_READY:
             return
         import webbrowser
+
         import whitebox as _wbt_mod
 
         _real_browser_open = webbrowser.open

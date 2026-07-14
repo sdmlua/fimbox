@@ -12,13 +12,13 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional, Union
+from typing import Union
 
 import numpy as np
 import pandas as pd
 
 from . import _common as C
-from .plotting import _nwm_series, _usgs_series, _plots_dir
+from .plotting import _nwm_series, _plots_dir, _usgs_series
 
 log = logging.getLogger(__name__)
 

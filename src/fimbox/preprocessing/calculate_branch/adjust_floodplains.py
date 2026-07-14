@@ -250,6 +250,7 @@ def _build_distance_mask(
 # CLI
 if __name__ == "__main__":
     import argparse
+
     from ...logging_utils import configure_cli_logging
 
     configure_cli_logging()

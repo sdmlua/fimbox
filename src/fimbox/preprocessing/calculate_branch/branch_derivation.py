@@ -10,10 +10,10 @@ branch-derivation helpers for area inputs.
 
 from __future__ import annotations
 
-from collections import defaultdict
-from dataclasses import dataclass, field
 import logging
 import warnings
+from collections import defaultdict
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterable, Optional
 

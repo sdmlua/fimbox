@@ -182,7 +182,7 @@ class CreateHAND:
 
     def _run(self) -> dict[str, Path]:
         from ..._skip_if_valid import should_skip
-        from .add_crosswalk import add_crosswalk, NoCrosswalkError
+        from .add_crosswalk import NoCrosswalkError, add_crosswalk
         from .build_src import build_src_base
         from .filter_catchments import FilterCatchments, NoFlowlinesError
         from .flowacc_dem import FlowAccDEM
@@ -767,10 +767,10 @@ def _polygonize_catchments(catchments_raster: Path, out_gpkg: Path) -> None:
     the pixel boundaries are exact and shared between adjacent catchments, so
     any simplification would break topology and create slivers/overlaps.
     """
+    import geopandas as gpd
     import numpy as np
     import rasterio
     from rasterio.features import shapes
-    import geopandas as gpd
     from shapely.geometry import shape
 
     if out_gpkg.exists():
@@ -805,10 +805,10 @@ def _rasterize_catchments(
     Burn the HydroID attribute of each catchment polygon onto the reference
     raster grid (nodata 0), producing an int32 HydroID raster.
     """
+    import geopandas as gpd
     import numpy as np
     import rasterio
     from rasterio.features import rasterize as rio_rasterize
-    import geopandas as gpd
 
     gdf = gpd.read_file(str(catchments_gpkg), engine="fiona")
 

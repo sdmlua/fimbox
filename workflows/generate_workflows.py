@@ -75,9 +75,7 @@ def open_arrowheads(svg_text: str) -> str:
 
 
 def mmdc(*args: str) -> None:
-    subprocess.run(
-        ["npx", "-y", "@mermaid-js/mermaid-cli", *args, "-q"], check=True
-    )
+    subprocess.run(["npx", "-y", "@mermaid-js/mermaid-cli", *args, "-q"], check=True)
 
 
 def main() -> None:
@@ -100,7 +98,10 @@ def main() -> None:
         sys.exit("npx not found. Install Node.js >= 18 (https://nodejs.org) first.")
 
     sources = (
-        [(HERE / s).resolve() if not Path(s).is_file() else Path(s).resolve() for s in args.sources]
+        [
+            (HERE / s).resolve() if not Path(s).is_file() else Path(s).resolve()
+            for s in args.sources
+        ]
         if args.sources
         else sorted(HERE.glob("*.mmd"))
     )
@@ -118,12 +119,18 @@ def main() -> None:
             PNG_DIR.mkdir(exist_ok=True)
             png_out = PNG_DIR / f"{src.stem}.png"
             mmdc(
-                "-i", str(src),
-                "-o", str(png_out),
-                "-b", "white",
-                "-c", str(CONFIG),
-                "-C", str(CSS),
-                "-s", str(PNG_SCALE),
+                "-i",
+                str(src),
+                "-o",
+                str(png_out),
+                "-b",
+                "white",
+                "-c",
+                str(CONFIG),
+                "-C",
+                str(CSS),
+                "-s",
+                str(PNG_SCALE),
             )
             print(f"png ({PNG_DPI} DPI): {png_out.relative_to(HERE.parent)}")
 

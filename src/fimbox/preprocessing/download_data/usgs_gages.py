@@ -127,6 +127,7 @@ def _normalize_gage_schema(gdf: gpd.GeoDataFrame, *, aoi_id: str) -> gpd.GeoData
 # CLI
 if __name__ == "__main__":
     import argparse
+
     from ...logging_utils import configure_cli_logging
 
     configure_cli_logging()

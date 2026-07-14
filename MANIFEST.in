@@ -1,0 +1,7 @@
+# Keep large data assets and docs out of the sdist/build.
+# Runtime data is fetched on demand via pooch, so it does not
+# need to ship in the package. These files remain in the git repo.
+prune data
+prune docs
+prune workflows
+exclude uv.lock

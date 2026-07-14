@@ -1,4 +1,9 @@
 # level path derivation, dissolved outputs, branch list, levee association
+# crosswalk to NWM feature_ids & final hydroTable / SRC
+from .add_crosswalk import NoCrosswalkError, add_crosswalk
+
+# FEMA NFHL floodplain adjustment for branch-level burned DEMs
+from .adjust_floodplains import adjust_floodplains
 from .branch_derivation import (
     BranchDerivation,
     BranchDerivationResult,
@@ -6,17 +11,51 @@ from .branch_derivation import (
     discover_area_inputs,
 )
 
+# synthetic rating curve base table
+from .build_src import build_src_base
+
+# Full per-AOI branch loop + AOI-level cleanup wrapper
+from .calculate_allbranches import (
+    AllBranchesResult,
+    calculate_allbranches,
+)
+
 # full branch-zero raster preprocessing pipeline
 from .calculate_branchzero import BranchZero
 
+# Int16 downcast of gw_catchments + REM rasters (storage optimisation)
+from .convert_to_int16 import (
+    CannotConvertHydroIDsToInt16,
+    convert_branch_to_int16,
+)
+
 # HAND production pipeline (Phase 3)
 from .create_hand import CreateHAND
+
+# Branch-zero crosswalk-accuracy diagnostic (intersections + network checks)
+from .evaluate_crosswalk import evaluate_crosswalk
+
+# catchment filtering + flow attribute join
+from .filter_catchments import FilterCatchments, NoFlowlinesError
 
 # D8 flow accumulation --> stream pixels
 from .flowacc_dem import FlowAccDEM
 
 # D8 flow direction pointer + D8 slope raster
 from .flowdir_dem import D8SlopeDEM, FlowdirDEM
+
+# gage watershed delineation and outlet backpool mitigation
+from .gage_catchments import GageCatchments, OutletBackpoolMitigate, stream_pixel_points
+
+# USGS / AHPS / RAS2FIM gage assignment + per-branch DEM crosswalk
+from .gage_crosswalk import (
+    GageBranchAssignment,
+    assign_gages_to_branches,
+    run_branch_crosswalk,
+)
+
+# OSM bridge healing of HAND
+from .heal_bridges_osm import heal_bridges_osm
 
 # AGREE DEM hydrological conditioning (Hellweger 1997)
 from .hydroenforce_dem import HydroenforceDEM
@@ -28,6 +67,28 @@ from .levee_rasterize import (
     rasterize_3d_levee_lines,
 )
 
+# REM / HAND computation
+from .make_rem import MakeREM
+
+# REM zero/mask + slope mask
+from .mask_to_catchments import mask_slopes_to_catchments, rem_zeroed_masked
+
+# Branch-directory deny-list cleanup
+from .outputs_cleanup import remove_deny_list_files
+
+# Multi-branch AOI orchestrator (parallel BranchZero + CreateHAND + calibration)
+# HucProcessingConfig is exported as a backwards-compatible alias for callers
+# that still pass huc_dir / huc_id — both names point at the same class.
+from .process_branches import (
+    AOIProcessingConfig,
+    BranchResult,
+    HucProcessingConfig,
+    process_branches,
+)
+
+# OSM road minimum-HAND FIMpact
+from .process_roads_fimpact import process_roads_fimpact
+
 # stream / level-path / headwater boolean grids
 from .reach_rasterize import (
     HeadwaterRasterizer,
@@ -35,73 +96,11 @@ from .reach_rasterize import (
     StreamBooleanRasterizer,
 )
 
-# REM / HAND computation
-from .make_rem import MakeREM
-
-# catchment filtering + flow attribute join
-from .filter_catchments import FilterCatchments, NoFlowlinesError
-
-# gage watershed delineation and outlet backpool mitigation
-from .gage_catchments import GageCatchments, OutletBackpoolMitigate, stream_pixel_points
-
 # split DEM-derived reaches and build network topology
 from .split_reaches import split_derived_reaches
 
-# REM zero/mask + slope mask
-from .mask_to_catchments import mask_slopes_to_catchments, rem_zeroed_masked
-
 # stage ladder + per-HydroID catchment list
 from .stages_catchlist import make_stages_and_catchlist
-
-# synthetic rating curve base table
-from .build_src import build_src_base
-
-# crosswalk to NWM feature_ids & final hydroTable / SRC
-from .add_crosswalk import NoCrosswalkError, add_crosswalk
-
-# USGS / AHPS / RAS2FIM gage assignment + per-branch DEM crosswalk
-from .gage_crosswalk import (
-    GageBranchAssignment,
-    assign_gages_to_branches,
-    run_branch_crosswalk,
-)
-
-# FEMA NFHL floodplain adjustment for branch-level burned DEMs
-from .adjust_floodplains import adjust_floodplains
-
-# Branch-zero crosswalk-accuracy diagnostic (intersections + network checks)
-from .evaluate_crosswalk import evaluate_crosswalk
-
-# Int16 downcast of gw_catchments + REM rasters (storage optimisation)
-from .convert_to_int16 import (
-    CannotConvertHydroIDsToInt16,
-    convert_branch_to_int16,
-)
-
-# Branch-directory deny-list cleanup
-from .outputs_cleanup import remove_deny_list_files
-
-# Full per-AOI branch loop + AOI-level cleanup wrapper
-from .calculate_allbranches import (
-    AllBranchesResult,
-    calculate_allbranches,
-)
-
-# Multi-branch AOI orchestrator (parallel BranchZero + CreateHAND + calibration)
-# HucProcessingConfig is exported as a backwards-compatible alias for callers
-# that still pass huc_dir / huc_id — both names point at the same class.
-from .process_branches import (
-    BranchResult,
-    AOIProcessingConfig,
-    HucProcessingConfig,
-    process_branches,
-)
-
-# OSM bridge healing of HAND
-from .heal_bridges_osm import heal_bridges_osm
-
-# OSM road minimum-HAND FIMpact
-from .process_roads_fimpact import process_roads_fimpact
 
 # stream network delineation
 from .streamnet_reaches import StreamNetReaches

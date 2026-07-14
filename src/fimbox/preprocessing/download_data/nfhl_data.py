@@ -8,18 +8,18 @@ Improved to handle large areas via automatic bbox tiling + optional paging, and 
 into one final output per layer.
 """
 
-import logging
 import argparse
+import logging
 import math
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Union, Optional, List, Tuple
+from typing import List, Optional, Tuple, Union
 
-import requests
 import geopandas as gpd
 import pandas as pd
-from shapely.geometry import Polygon, MultiPolygon
+import requests
+from shapely.geometry import MultiPolygon, Polygon
 
 
 class DownloadFEMANFHL:

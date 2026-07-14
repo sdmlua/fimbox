@@ -55,7 +55,7 @@ import csv
 import logging
 import time
 import traceback
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, Sequence, Union
 
@@ -317,8 +317,9 @@ def process_branches(cfg: AOIProcessingConfig) -> list[BranchResult]:
         for bid in branch_ids:
             results.append(_process_single_branch(cfg, bid))
     elif branch_ids:
-        from ..._dask import get_client
         from distributed import as_completed as dask_as_completed
+
+        from ..._dask import get_client
         from ._wbt_safe import _ensure_wbt_source
 
         _ensure_wbt_source(cfg.wbt_path if hasattr(cfg, "wbt_path") else None)

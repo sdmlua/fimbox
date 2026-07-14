@@ -102,19 +102,21 @@ class HydroTableReset:
         base[numeric_cols] = base[numeric_cols].apply(pd.to_numeric, errors="coerce")
 
         base = base.drop(columns=["SLOPE"]).rename(columns={"CatchId": "HydroID"})
-        recalc = base.merge(
-            full[
-                [
-                    "HydroID",
-                    "Stage",
-                    "default_SLOPE",
-                    "default_ManningN",
-                    "NextDownID",
-                    "order_",
-                ]
-            ],
-            on=["HydroID", "Stage"],
-        )
+        # A HydroID can map to multiple feature_ids, giving duplicate
+        # (HydroID, Stage) rows that differ only in feature_id. Dedup these
+        # per-reach columns so recalc stays unique; full.update() broadcasts
+        # the recomputed discharge back to every copy.
+        full_reach_cols = full[
+            [
+                "HydroID",
+                "Stage",
+                "default_SLOPE",
+                "default_ManningN",
+                "NextDownID",
+                "order_",
+            ]
+        ].drop_duplicates(subset=["HydroID", "Stage"])
+        recalc = base.merge(full_reach_cols, on=["HydroID", "Stage"])
         if recalc.empty:
             log.warning(f"HydroTableReset: merge failed for branch {bid}")
             return

@@ -1,6 +1,6 @@
 """
 Author: Supath Dhital
-Date Updated: May 2026
+Date Updated: July 2026
 
 Crosswalk DEM-derived reaches to NWM feature_ids, compute the full synthetic
 rating curve from the SRC base table, and write the per-branch hydroTable.
@@ -79,11 +79,8 @@ IRIS_MIN_STREAM_ORDER = 4
 #   "hfab"                 -> NWM hydrofabric slope (Slope/So), else DEM fallback.
 VALID_SLOPE_SOURCES = ("iris_sword", "dem", "hfab")
 
-# Default IRIS-SWORD slope table shipped with the package
-# (fimbox/data/FIMHF_IRIS_v1.0.csv: columns feature_id, slope_iris_sword, ...).
-DEFAULT_IRIS_SLOPE_CSV = (
-    Path(__file__).resolve().parents[4] / "data" / "FIMHF_IRIS_v1.0.csv"
-)
+# Key for the optional IRIS-SWORD slope CSV (fetched lazily via fimbox.datasets).
+DEFAULT_IRIS_SLOPE_KEY = "iris_sword_slopes"
 
 
 class NoCrosswalkError(RuntimeError):
@@ -146,11 +143,12 @@ def add_crosswalk(
     # IRIS-SWORD slope is only needed when that source is selected. Fall back
     # to the table shipped with the package when the caller doesn't pass one.
     if src_slope_source == "iris_sword":
-        iris_slope_csv = (
-            Path(iris_slope_csv)
-            if iris_slope_csv is not None
-            else DEFAULT_IRIS_SLOPE_CSV
-        )
+        if iris_slope_csv is not None:
+            iris_slope_csv = Path(iris_slope_csv)
+        else:
+            from fimbox.datasets import fetch_data
+
+            iris_slope_csv = fetch_data(DEFAULT_IRIS_SLOPE_KEY)
     else:
         iris_slope_csv = None
 
@@ -399,7 +397,6 @@ def _find_short_segments(
             continue
         short_id = int(row["HydroID"])
         to_node = row["To_Node"]
-        from_node = row["From_Node"]
 
         upstreams = flows[flows["NextDownID"] == short_id]
         if len(upstreams) >= 1:
@@ -431,6 +428,7 @@ def _select_slope(base: pd.DataFrame, src_slope_source: str) -> pd.Series:
     ``hfab``: hydrofabric slope where in range, else DEM. ``dem``: DEM only.
     All fall back to the DEM rise/run slope when the preferred source is
     missing, so SLOPE is never NaN."""
+
     def _in_range(col: str) -> pd.Series:
         if col not in base.columns:
             return pd.Series(np.nan, index=base.index)

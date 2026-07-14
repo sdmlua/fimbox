@@ -94,6 +94,7 @@ Each module has its own README documenting what it contains, the full parameter 
 | `fimbox.preprocessing.calibrate_ratingcurve` | [README](src/fimbox/preprocessing/calibrate_ratingcurve/README.md) | SRC calibration (bathymetry, bankfull, subdivision, USGS/spatial/manual). |
 | `fimbox.streamflow` | [README](src/fimbox/streamflow/README.md) | NWM retrospective/forecast, GEOGLOWS, and USGS retrieval, plots, statistics. |
 | `fimbox.fimgeneration` | [README](src/fimbox/fimgeneration/README.md) | Per-branch inundation and AOI mosaicking from discharge CSVs. |
+| `fimbox.fimevaluation` | [README](src/fimbox/fimevaluation/README.md) | Benchmark FIM query/download ([FIMbench](https://github.com/sdmlua/fimbench)) and candidate-vs-benchmark evaluation ([FIMeval](https://github.com/sdmlua/fimeval)). |
 | Tests | [README](tests/README.md) | What each test file demonstrates and how to run the suite. |
 | Workflow diagrams | [README](workflows/README.md) | Editable Mermaid sources + generator script for every module workflow SVG (`make workflows`). |
 

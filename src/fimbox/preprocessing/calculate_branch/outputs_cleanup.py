@@ -92,6 +92,7 @@ def _read_deny_list(path: Path, branch_id: str, identifier: str = "nwm") -> list
 # CLI
 if __name__ == "__main__":
     import argparse
+
     from ...logging_utils import configure_cli_logging
 
     configure_cli_logging()

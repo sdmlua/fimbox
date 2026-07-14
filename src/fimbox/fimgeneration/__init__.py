@@ -25,8 +25,8 @@ from .mosaic import BranchMosaic, MosaicResult
 from .pipeline import (
     FimGenerationResult,
     FimGenerator,
-    generateFIM,
     extract_feature_ids,
+    generateFIM,
 )
 
 __all__ = [

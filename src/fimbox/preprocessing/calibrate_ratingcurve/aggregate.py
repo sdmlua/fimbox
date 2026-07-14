@@ -23,11 +23,11 @@ import pandas as pd
 from ._common import (
     BRIDGE_DTYPES,
     HYDROTABLE_DTYPES,
-    PathLike,
     RAS_DTYPES,
     ROAD_DTYPES,
     SRC_CROSS_DTYPES,
     USGS_DTYPES,
+    PathLike,
     aoi_id_of,
     resolve_aoi_dir,
 )

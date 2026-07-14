@@ -435,7 +435,6 @@ class UsgsRatingCalibrator:
 # Spatial observation calibration
 def _spatial_one_branch(branch_dir: Path, bid: str, points, debug: bool) -> str:
     # Sample HAND + HydroID rasters at each obs point, then run the engine.
-    import geopandas as gpd
     import rasterio
 
     htable = branch_dir / f"hydroTable_{bid}.csv"

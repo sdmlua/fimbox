@@ -1,3 +1,3 @@
-from .hucs import HUCChecker, HUCValidationError, HUCCheckResult
+from .hucs import HUCChecker, HUCCheckResult, HUCValidationError
 
 __all__ = ["HUCChecker", "HUCValidationError", "HUCCheckResult"]

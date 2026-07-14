@@ -29,14 +29,14 @@ from __future__ import annotations
 
 import logging
 from concurrent.futures import ProcessPoolExecutor, as_completed
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, Sequence, Union
 
 import pandas as pd
 
 from ..logging_utils import WATERSHED_DIR_NAME, aoi_root
-from .inundator import InundationResult, Inundator, NoForecastMatch
+from .inundator import InundationResult, Inundator
 from .mosaic import BranchMosaic, MosaicResult
 
 PathLike = Union[str, Path]
@@ -64,8 +64,9 @@ def _resolve_watershed_dir(aoi_dir: Path) -> Path:
 # machine's CPU/RAM and reuses the same worker pool the preprocessing
 # pipeline uses. When unavailable we fall back to ProcessPoolExecutor.
 try:
-    from .._dask import get_client as _get_dask_client
     from distributed import as_completed as _dask_as_completed
+
+    from .._dask import get_client as _get_dask_client
 
     _DASK_AVAILABLE = True
 except ImportError:
@@ -389,9 +390,11 @@ def extract_feature_ids(
         )
 
     frames = [
-        pd.read_parquet(p, columns=["feature_id"])
-        if p.suffix.lower() in (".parquet", ".pq")
-        else pd.read_csv(p, usecols=["feature_id"])
+        (
+            pd.read_parquet(p, columns=["feature_id"])
+            if p.suffix.lower() in (".parquet", ".pq")
+            else pd.read_csv(p, usecols=["feature_id"])
+        )
         for p in paths
     ]
     fids = (

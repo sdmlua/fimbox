@@ -54,11 +54,10 @@ from .outputs_cleanup import remove_deny_list_files
 from .process_branches import (
     AOIProcessingConfig,
     BranchResult,
-    process_branches,
     _process_single_branch,
     _resolve_paths,
+    process_branches,
 )
-from ..source_naming import resolve_source
 
 log = logging.getLogger(__name__)
 
@@ -157,7 +156,9 @@ def calculate_allbranches(
         if not Path(dem).is_file():
             log.info(f"BranchZero skipped — dem not found at {dem}")
         else:
-            log.info(f"--- BranchZero (whole-AOI, branch_id={cfg.branch_zero_id!r}) ---")
+            log.info(
+                f"--- BranchZero (whole-AOI, branch_id={cfg.branch_zero_id!r}) ---"
+            )
             BranchZero(
                 dem_path=cfg.dem_path,
                 streams_gpkg=cfg.streams_gpkg,
@@ -246,6 +247,7 @@ def calculate_allbranches(
 # CLI
 if __name__ == "__main__":
     import argparse
+
     from ...logging_utils import configure_cli_logging
 
     configure_cli_logging()

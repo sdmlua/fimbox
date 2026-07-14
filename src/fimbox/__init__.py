@@ -5,6 +5,19 @@ Each group is annotated with the source file it originates from.
 
 from __future__ import annotations
 
+# fimevaluation and datasets are unguarded (installed with fimbox), imported up
+# here so they sit at module top; the annotated groups below build __all__ per
+# source file (see module docstring). Public names are still appended in the
+# grouped sections that follow.
+from .datasets import fetch_data
+from .fimevaluation import (
+    BenchmarkQuery,
+    BenchmarkQueryResult,
+    EvaluationResult,
+    FIMEvaluator,
+    evaluateFIM,
+    queryBenchmarkFIM,
+)
 from .preprocessing import (
     AllBranchesResult,
     AOIProcessingConfig,
@@ -255,3 +268,19 @@ try:
     __all__ += ["generateBridgeRaster", "BridgeDEMDiff"]
 except ImportError:
     pass
+
+# FIM evaluation: benchmark discovery/download from the FIMbench database and
+# candidate-vs-benchmark evaluation through the FIMeval framework (imported at
+# module top).
+__all__ += [
+    "BenchmarkQuery",
+    "BenchmarkQueryResult",
+    "queryBenchmarkFIM",
+    "FIMEvaluator",
+    "EvaluationResult",
+    "evaluateFIM",
+]
+
+# On-the-fly access to the bundled reference/calibration lookup tables, fetched
+# anonymously from the public SDML S3 bucket via pooch (imported at module top).
+__all__ += ["fetch_data"]

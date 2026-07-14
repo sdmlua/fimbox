@@ -33,6 +33,7 @@ dependencies = [
     "rasterstats>=0.19",
     "teehr==0.5.0",
     "numba>=0.60,<0.63",
+    "pooch>=1.8",
     "s3fs",
     "xarray",
     "netCDF4",
@@ -43,6 +44,8 @@ dependencies = [
     "pystac-client>=0.8",
     "planetary-computer>=1.0",
     "odc-stac>=0.3",
+    "fimbench",
+    "fimeval",
 ]
 
 [project.optional-dependencies]
@@ -55,6 +58,17 @@ dev = [
 Homepage = "https://github.com/sdmlua/fimbox"
 Repository = "https://github.com/sdmlua/fimbox"
 Issues = "https://github.com/sdmlua/fimbox/issues"
+
+[tool.uv]
+# fimbench -> arcgis -> pylerc. arcgis has no pin on pylerc, so uv otherwise
+# picks pylerc 4.1.1 for Python >= 3.11, which ships wheels ONLY for
+# manylinux_x86_64, macosx_15+_universal2, and win_amd64 -- and NO sdist. That
+# leaves macOS 14 / Apple Silicon (and any other unlisted platform) unable to
+# resolve, breaking `uv sync`/`uv run` for contributors on those machines.
+# Constraining to < 4.1 selects pylerc 4.0, which ships an sdist and therefore
+# builds on every platform. Constraint (not a direct dep): applies to the
+# transitive pin without adding pylerc to fimbox's dependency surface.
+constraint-dependencies = ["pylerc<4.1"]
 
 [build-system]
 requires = ["setuptools>=69.0", "setuptools-scm>=8.0"]
@@ -74,6 +88,10 @@ src = ["src", "tests"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I"]  # pyflakes + pycodestyle errors + import sorting
+# Don't flag line length: docstrings, long comments, URLs, and commented-out
+# example blocks routinely exceed any fixed width, and enforcing it there adds
+# noise without value. `ruff format` still keeps code lines sensibly wrapped.
+ignore = ["E501"]
 
 [tool.pytest.ini_options]
 minversion = "6.0"

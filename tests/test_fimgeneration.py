@@ -21,8 +21,10 @@ discharge CSV (produced by the streamflow pipeline, e.g. getNWMretrospective).
 from __future__ import annotations
 
 from pathlib import Path
+
 import pytest
-from fimbox import generateFIM, extract_feature_ids
+
+from fimbox import generateFIM
 
 AOI_DIR = Path(__file__).resolve().parents[2] / "out" / "test_smallB"
 N_WORKERS = 4

@@ -277,7 +277,6 @@ class Inundator:
                     stage_arr[hid] = st
 
             hand_nodata = hand_ds.nodata
-            cat_nodata = cat_ds.nodata
 
             n_wet_pixels = 0
             n_wet_hydroids: set[int] = set()

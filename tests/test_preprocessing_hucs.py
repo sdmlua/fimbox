@@ -1,5 +1,6 @@
 # importing the fimbox preprocessing module to test HUCChecker
 import logging
+
 import fimbox
 
 log = logging.getLogger(__name__)

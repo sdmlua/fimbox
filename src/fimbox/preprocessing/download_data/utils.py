@@ -5,17 +5,17 @@ Date: Jan 2026
 Description: This contains small utilities modules for the NHDPlus data preprocessing.
 """
 
+import argparse
 import json
 import logging
-import geopandas as gpd
-import pandas as pd
-import requests
 from io import BytesIO
 from pathlib import Path
-from typing import Optional, Union, List
+from typing import Optional, Union
+
+import geopandas as gpd
+import requests
 from shapely.geometry import Point, box
 from shapely.ops import unary_union
-import argparse
 
 log = logging.getLogger(__name__)
 
