@@ -177,15 +177,20 @@ class FimGenerator:
             )
             use_dask = False
 
+        # n_workers=None means "auto": let ProcessPoolExecutor size to the
+        # machine (only an explicit <=1 runs the serial loop). Guarding here
+        # keeps the comparison from raising on None.
+        serial = self.n_workers is not None and self.n_workers <= 1
+
         log.info(
             f"FimGenerator: AOI={self.aoi_dir.name} branches={len(bids)} "
-            f"backend={'dask' if use_dask else ('serial' if self.n_workers <= 1 else 'process_pool')} "
+            f"backend={'dask' if use_dask else ('serial' if serial else 'process_pool')} "
             f"mosaic={self.mosaic} intermediate_dir={tmp_dir}"
         )
 
         if use_dask:
             results = self._run_with_dask(bids, branch_root, forecast_df, tmp_dir)
-        elif self.n_workers <= 1:
+        elif serial:
             results = [
                 _run_one_branch(
                     branch_root / bid,

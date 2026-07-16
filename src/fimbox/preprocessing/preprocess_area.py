@@ -61,6 +61,7 @@ from .download_data.nhdplus import (
 )
 from .download_data.nld_data import DownloadNLD
 from .download_data.osm_data import DownloadOSMBridges, DownloadOSMRoads
+from .download_data.usgs_gages import DownloadUSGSGages
 from .download_data.utils import HUC8Finder, find_headwater_points
 from .source_naming import DEFAULT_IDENTIFIER, source_name
 
@@ -80,6 +81,7 @@ _FILENAMES = {
     "levee_protected_areas": "LeveeProtectedAreas_subset.gpkg",
     "osm_roads": "osm_roads_subset.gpkg",
     "osm_bridges": "osm_bridges_subset.gpkg",
+    "usgs_gages": "usgs_gages.gpkg",
 }
 
 
@@ -312,6 +314,7 @@ class getAllInputData:
         headwater_buffer_cells: int = 8,
         get_flowlines: bool = True,
         get_catchments: bool = True,
+        get_gages: bool = True,
         resolution: str = "medium",
         flowlines: Optional[Union[str, Path]] = None,
         catchments: Optional[Union[str, Path]] = None,
@@ -332,6 +335,7 @@ class getAllInputData:
         self.headwater_buffer_cells = headwater_buffer_cells
         self.get_flowlines = get_flowlines
         self.get_catchments = get_catchments
+        self.get_gages = get_gages
         self.resolution = resolution
         # bring-your-own flowlines/catchments + their field maps
         self.byo_flowlines = Path(flowlines) if flowlines else None
@@ -747,6 +751,26 @@ class getAllInputData:
             except Exception as exc:
                 self.logger.error(f"OSM bridges failed: {exc}", exc_info=True)
 
+    def run_gages(self):
+        # USGS gages feed the optional NWM-vs-observations evaluation. An empty
+        # result (no gages in the AOI) is normal and writes nothing.
+        if not self.get_gages or self._skip("usgs_gages"):
+            return
+        self.logger.info("--- USGS Gages ---")
+        try:
+            gdf = DownloadUSGSGages().download(
+                boundary=self.buffer_gdf,
+                aoi_id=self.case_name,
+                out_dir=str(self.case_dir),
+                out_name=_FILENAMES["usgs_gages"],
+            )
+            if gdf.empty:
+                self.logger.info("USGS gages: none in AOI — nothing staged")
+            else:
+                self.logger.info(f"USGS gages --> {_FILENAMES['usgs_gages']}")
+        except Exception as exc:
+            self.logger.error(f"USGS gages failed: {exc}", exc_info=True)
+
     # full pipeline
     def run(self):
         self.logger.info(f"=== PreprocessAll: {self.case_name} ===")
@@ -755,6 +779,7 @@ class getAllInputData:
         self.run_nhd()
         self.run_nld()
         self.run_osm()
+        self.run_gages()
         self.logger.info("=== ALL STEPS COMPLETE ===")
         self._log_summary()
 

@@ -64,7 +64,9 @@ def _run_branches(
     and recorded as ``FAIL ...`` without sinking the batch.
     """
     results: dict[str, str] = {}
-    if n_workers <= 1:
+    # n_workers=None means "auto" (let ProcessPoolExecutor size to cpu count) ->
+    # takes the parallel path below; only an explicit <=1 runs serially.
+    if n_workers is not None and n_workers <= 1:
         for bid, bp in branches:
             try:
                 results[bid] = worker(bp, bid, *worker_args)

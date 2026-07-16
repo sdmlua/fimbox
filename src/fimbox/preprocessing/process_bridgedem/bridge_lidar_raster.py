@@ -312,7 +312,21 @@ class generateBridgeRaster:
 
     def _load_entwine_index(self) -> gpd.GeoDataFrame:
         log.info("Loading USGS LiDAR tile index...")
-        idx = gpd.read_file(_ENTWINE_INDEX_URL)
+        # Download to a local temp file first, then read. Reading the raw
+        # GitHub URL directly makes GDAL/pyogrio open it through /vsicurl,
+        # which fails on some builds (the URL redirects and serves the
+        # .topojson without a Content-Length, so the range reader bails with
+        # "does not exist in the file system"). A plain requests download
+        # follows the redirect and sidesteps /vsicurl entirely.
+        resp = _session().get(_ENTWINE_INDEX_URL, timeout=60)
+        resp.raise_for_status()
+        with tempfile.NamedTemporaryFile(suffix=".topojson", delete=False) as tmp:
+            tmp.write(resp.content)
+            tmp_path = tmp.name
+        try:
+            idx = gpd.read_file(tmp_path)
+        finally:
+            os.unlink(tmp_path)
         return idx.set_crs("EPSG:4326", allow_override=True)
 
     def _assign_lidar_urls(self, footprints, index) -> gpd.GeoDataFrame:

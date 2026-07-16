@@ -310,9 +310,10 @@ def process_branches(cfg: AOIProcessingConfig) -> list[BranchResult]:
         log.warning("No non-zero branches found — only branch zero will exist.")
 
     results: list[BranchResult] = []
-    if branch_ids and cfg.n_workers <= 1:
+    if branch_ids and cfg.n_workers is not None and cfg.n_workers <= 1:
         # True serial path: one branch at a time, no Dask. Use n_workers=1 to
         # isolate concurrency effects from deterministic per-branch behaviour.
+        # n_workers=None means "auto" (all cores) -> takes the Dask path below.
         log.info("Processing %d branches serially (n_workers=1)", len(branch_ids))
         for bid in branch_ids:
             results.append(_process_single_branch(cfg, bid))
