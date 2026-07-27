@@ -21,6 +21,8 @@ import pandas as pd
 import requests
 from shapely.geometry import MultiPolygon, Polygon
 
+from .utils import select_intersecting
+
 
 class DownloadFEMANFHL:
     # FEMA ArcGIS REST API Constants
@@ -112,7 +114,7 @@ class DownloadFEMANFHL:
             )
 
     def _prepare_geometry(self, boundary):
-        if isinstance(boundary, str):
+        if isinstance(boundary, (str, Path)):
             gdf = gpd.read_file(boundary)
         elif isinstance(boundary, (Polygon, MultiPolygon)):
             gdf = gpd.GeoDataFrame(geometry=[boundary], crs="EPSG:4326")
@@ -296,11 +298,13 @@ class DownloadFEMANFHL:
 
         gdf = gdf.copy()
         gdf.loc[:, "geometry"] = gdf["geometry"].make_valid()
-        gdf = gpd.clip(gdf, self.gdf)
+        # Whole zones that touch the AOI, not cropped to it — a zone sliced at
+        # the boundary would gain a straight edge that isn't a real flood limit.
+        gdf = select_intersecting(gdf, self.gdf)
 
         gdf = gdf[gdf.geom_type.isin(["Polygon", "MultiPolygon"])]
         if gdf.empty:
-            self.logger.warning(f"No valid polygons remain for {label} after clipping.")
+            self.logger.warning(f"No valid polygons remain for {label}.")
             return
 
         dissolved = gdf.dissolve().explode(index_parts=True).reset_index(drop=True)

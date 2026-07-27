@@ -129,6 +129,7 @@ HYDROTABLE_DTYPES = {
     "obs_source": str,
     "precalb_discharge_cms": float,
     "calb_coef_usgs": float,
+    "calb_coef_ras2fim": float,
     "calb_coef_spatial": float,
     "calb_coef_final": float,
     "HUC": int,

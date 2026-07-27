@@ -198,7 +198,20 @@ class Calibrator:
                 ).run(),
             )
 
-        if cfg.src_subdiv_toggle and cfg.src_bankfull_toggle:
+        # Subdivision consumes the Stage_bankfull column SrcBankfull adds, so it
+        # needs both toggles. The observation-driven calibrators below gate on
+        # this same flag rather than src_subdiv_toggle alone: they read the
+        # per-stage channel_n / overbank_n only subdivision writes, so the
+        # toggle being set is not enough — it has to have actually run.
+        subdiv_ran = cfg.src_subdiv_toggle and cfg.src_bankfull_toggle
+        if cfg.src_subdiv_toggle and not cfg.src_bankfull_toggle:
+            log.warning(
+                "src_subdiv_toggle is set but src_bankfull_toggle is not — "
+                "subdivision needs Stage_bankfull, so it will be skipped along "
+                "with the SRC adjustment routines that depend on it"
+            )
+
+        if subdiv_ran:
             if cfg.vmann_input_file is None:
                 raise ValueError("src_subdiv_toggle requires vmann_input_file")
             self._maybe(
@@ -224,7 +237,7 @@ class Calibrator:
             ).run(),
         )
 
-        if cfg.src_adjust_usgs and cfg.src_subdiv_toggle:
+        if cfg.src_adjust_usgs and subdiv_ran:
             # Rating curve + recurrence flows required; acceptable-gage list optional.
             if cfg.usgs_rating_curve_csv is None or cfg.nwm_recur_file is None:
                 raise ValueError(
@@ -242,7 +255,7 @@ class Calibrator:
                 ).run(),
             )
 
-        if cfg.src_adjust_ras2fim and cfg.src_subdiv_toggle:
+        if cfg.src_adjust_ras2fim and subdiv_ran:
             if cfg.ras_rating_curve_csv is None or cfg.nwm_recur_file is None:
                 raise ValueError(
                     "src_adjust_ras2fim requires ras_rating_curve_csv + nwm_recur_file"
@@ -258,7 +271,7 @@ class Calibrator:
                 ).run(),
             )
 
-        if cfg.src_adjust_spatial and cfg.src_subdiv_toggle:
+        if cfg.src_adjust_spatial and subdiv_ran:
             self._maybe(
                 True,
                 "SRC adjust (spatial observations)",

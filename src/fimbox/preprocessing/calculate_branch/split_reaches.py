@@ -35,6 +35,7 @@ from typing import Optional
 
 import geopandas as gpd
 import numpy as np
+import pandas as pd
 import rasterio
 import rasterio.sample
 from shapely.geometry import LineString, Point
@@ -378,9 +379,30 @@ def _assign_hydro_ids(
                 .str.zfill(4)
             )
             split_gdf = split_gdf.loc[split_gdf["boundary_id"].notna(), :]
-            split_gdf[hydro_id] = (
-                split_gdf["boundary_id"].astype(str) + split_gdf["seqID"]
-            ).astype(np.int64, errors="ignore")
+            # A left sjoin promotes an integer id column to float when any
+            # midpoint misses, so str(3.0) would build "3.0"+"0001". Normalise
+            # numeric ids to a clean integer prefix first.
+            bid = pd.to_numeric(split_gdf["boundary_id"], errors="coerce")
+            prefix = pd.Series(
+                np.where(
+                    bid.notna(),
+                    bid.fillna(0).astype("int64").astype(str),
+                    split_gdf["boundary_id"].astype(str),
+                ),
+                index=split_gdf.index,
+            )
+            hid = pd.to_numeric(prefix + split_gdf["seqID"], errors="coerce")
+            if hid.isna().any():
+                # An id that can't form a number would poison NextDownID later;
+                # sequential HydroIDs keep the branch usable.
+                log.warning(
+                    "  %d HydroID(s) could not be built from boundary id %r — "
+                    "falling back to sequential numbering",
+                    int(hid.isna().sum()),
+                    split_gdf["boundary_id"].iloc[0],
+                )
+                hid = pd.Series(np.arange(1, len(split_gdf) + 1), index=split_gdf.index)
+            split_gdf[hydro_id] = hid.astype(np.int64)
             split_gdf = split_gdf.drop(
                 columns=["boundary_id", "seqID"], errors="ignore"
             )

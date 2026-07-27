@@ -42,6 +42,8 @@ from shapely.geometry import LineString, MultiPolygon, Polygon, box
 from shapely.ops import unary_union
 from tqdm import tqdm
 
+from .utils import select_intersecting
+
 log = logging.getLogger(__name__)
 
 
@@ -304,7 +306,7 @@ class DownloadOSMRoads(_OSMBoundaryIO):
         ],
         boundary_layer: Optional[str] = None,
         boundary_crs: Optional[Union[str, int]] = None,
-        clip_to_boundary: bool = True,
+        restrict_to_boundary: bool = True,
     ) -> gpd.GeoDataFrame:
         geom4326 = self._boundary_to_geom4326(boundary, boundary_layer, boundary_crs)
         minx, miny, maxx, maxy = geom4326.bounds
@@ -321,13 +323,13 @@ class DownloadOSMRoads(_OSMBoundaryIO):
         gdf = gdf.drop_duplicates(subset=["osmid"]).reset_index(drop=True)
         log.info(f"OSM roads: {len(gdf)} unique segments after dedup")
 
-        if clip_to_boundary:
-            gdf = gpd.clip(
-                gdf,
-                gpd.GeoDataFrame(geometry=[geom4326], crs="EPSG:4326"),
-                keep_geom_type=True,
+        if restrict_to_boundary:
+            # Whole segments that touch the AOI — a road sliced at the boundary
+            # would lose the span that carries it across.
+            gdf = select_intersecting(
+                gdf, gpd.GeoDataFrame(geometry=[geom4326], crs="EPSG:4326")
             )
-            log.info(f"OSM roads: {len(gdf)} segments after clipping")
+            log.info(f"OSM roads: {len(gdf)} segments intersecting the AOI")
 
         return gdf.to_crs(epsg=self.out_sr)
 
@@ -359,7 +361,7 @@ class DownloadOSMRoads(_OSMBoundaryIO):
             boundary=boundary,
             boundary_layer=boundary_layer,
             boundary_crs=boundary_crs,
-            clip_to_boundary=True,
+            restrict_to_boundary=True,
         )
         out_path = self._write_gpkg(gdf, out_dir, out_name, out_layer)
         log.info(f"{out_layer} --> {out_path.name}")
@@ -598,7 +600,7 @@ class DownloadOSMBridges(_OSMBoundaryIO):
         ],
         boundary_layer: Optional[str] = None,
         boundary_crs: Optional[Union[str, int]] = None,
-        clip_to_boundary: bool = True,
+        restrict_to_boundary: bool = True,
     ) -> gpd.GeoDataFrame:
         geom4326 = self._boundary_to_geom4326(boundary, boundary_layer, boundary_crs)
 
@@ -614,13 +616,16 @@ class DownloadOSMBridges(_OSMBoundaryIO):
         if gdf.empty:
             return gpd.GeoDataFrame(geometry=[], crs=f"EPSG:{self.out_sr}")
 
-        # dissolve touching (in 4326), then clip (in 4326)
+        # dissolve touching (in 4326), then select against the AOI (in 4326)
         gdf = gdf.to_crs("EPSG:4326")
         gdf = self._dissolve_touching(gdf)
 
-        if clip_to_boundary and not gdf.empty:
-            boundary_gdf = gpd.GeoDataFrame(geometry=[geom4326], crs="EPSG:4326")
-            gdf = gpd.clip(gdf, boundary_gdf, keep_geom_type=True)
+        if restrict_to_boundary and not gdf.empty:
+            # Whole bridges — a deck cut at the boundary would lose the part
+            # spanning the channel, which is the part that matters for HAND.
+            gdf = select_intersecting(
+                gdf, gpd.GeoDataFrame(geometry=[geom4326], crs="EPSG:4326")
+            )
 
         if gdf.empty:
             return gpd.GeoDataFrame(geometry=[], crs=f"EPSG:{self.out_sr}")
@@ -656,7 +661,7 @@ class DownloadOSMBridges(_OSMBoundaryIO):
             boundary=boundary,
             boundary_layer=boundary_layer,
             boundary_crs=boundary_crs,
-            clip_to_boundary=True,
+            restrict_to_boundary=True,
         )
         self._write_gpkg(gdf, out_dir, out_name, out_layer)
         return gdf

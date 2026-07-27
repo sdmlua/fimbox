@@ -8,7 +8,7 @@ flowchart LR
     subgraph S2[" "]
         direction TB
         G["<b>1 &middot; Geometry Adjustments</b><br/>thalweg notches &middot; longitudinal filter<br/>bathymetry (eHydro / AI)"]
-        H["<b>2 &middot; Hydraulics</b><br/>bankfull stage &middot; channel / overbank<br/>subdivision &middot; nonmonotonic fix"]
+        H["<b>2 &middot; Hydraulics</b><br/>bankfull stage &middot; channel / overbank<br/>subdivision (per reach, where a<br/>bankfull flow exists) &middot; nonmonotonic fix"]
         G --> H
     end
     subgraph S3[" "]

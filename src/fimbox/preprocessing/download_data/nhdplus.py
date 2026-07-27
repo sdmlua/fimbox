@@ -145,7 +145,8 @@ class ArcGISDownloader:
         """
         Parameters
         ----------
-        boundary : file path, GeoDataFrame, shapely geometry, or (xmin,ymin,xmax,ymax) tuple
+        boundary : file path, GeoDataFrame, shapely geometry, or (xmin,ymin,xmax,ymax)
+            tuple. None drops the spatial filter, in which case `where` is required.
         boundary_layer : layer name when boundary is a GeoPackage
         boundary_crs : CRS of boundary when it is a shapely geometry or bbox
         where : SQL filter (default "1=1" = all records)
@@ -153,26 +154,33 @@ class ArcGISDownloader:
         out_name : output filename
         out_layer : layer name inside the GeoPackage
         """
-        geom = self._load_geometry(boundary, boundary_layer, boundary_crs)
-        esri_geom = self._to_esri_geom(geom)
-
         base_params = {
             "f": "geojson",
             "where": where,
             "outFields": "*",
             "returnGeometry": "true",
-            "geometry": json.dumps(esri_geom),
-            "geometryType": "esriGeometryPolygon",
-            "spatialRel": "esriSpatialRelIntersects",
-            "inSR": 4326,
             "outSR": self.out_sr,
         }
+        # boundary=None queries by attribute alone — needed to resolve reach ids
+        # before any AOI geometry exists.
+        if boundary is not None:
+            geom = self._load_geometry(boundary, boundary_layer, boundary_crs)
+            base_params |= {
+                "geometry": json.dumps(self._to_esri_geom(geom)),
+                "geometryType": "esriGeometryPolygon",
+                "spatialRel": "esriSpatialRelIntersects",
+                "inSR": 4326,
+            }
+        elif where == "1=1":
+            raise ValueError(
+                "boundary=None requires a `where` filter — refusing to fetch the whole layer."
+            )
 
         # Count
         count_data = self._post({**base_params, "f": "json", "returnCountOnly": "true"})
         total = count_data.get("count", 0)
         if total == 0:
-            logger.warning("No records returned by service for this boundary.")
+            logger.warning(f"No records returned by service (where={where!r}).")
             return gpd.GeoDataFrame()
 
         n_pages = math.ceil(total / self.page_size)

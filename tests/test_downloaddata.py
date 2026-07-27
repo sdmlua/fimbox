@@ -9,6 +9,9 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 test_boundary = PKG_ROOT / "docs" / "test_boundary" / "test_smallB.shp"
 OUT_DIR = REPO_ROOT / "out"
 
+# NWM reach IDs (matched on the ID column of the NWM layers).
+test_nwm_ids = [11239455, 11239689, 11235965]
+
 # # Testing the entire NHDPlus data extraction process along with National Flood Hazard Layer data extraction
 # # This is OLDER VERSION using EPA AWS S3 Bucket which will get for whole HUC6 region--> not very effective
 # def test_getNHDdata():
@@ -80,6 +83,36 @@ OUT_DIR = REPO_ROOT / "out"
 #     )
 
 
+# Fetch by reach ID instead of by boundary. boundary=None drops the spatial
+# filter and queries the service by attribute alone, which is how reach IDs
+# resolve before any AOI exists; a `where` clause is required in that case.
+# def test_get_flowlines_by_id():
+#     fimbox.NWMFlowlinesDownloader().download(
+#         boundary=None,
+#         where="ID IN (11239455,11239689,11235965)",
+#         out_dir=OUT_DIR,
+#         out_name="nwm_reaches_by_id.gpkg",
+#         out_layer="flowlines",
+#     )
+
+# Catchments go through this helper instead: ID is indexed on the flowline layer
+# but not on the catchment layer, where an IN query is slow and fails past a few
+# IDs. It fetches them spatially from the reach geometries and filters locally.
+# def test_get_catchments_by_id():
+#     cat = fimbox.fetch_nwm_catchments_by_id(test_nwm_ids)
+
+# Reach IDs -> AOI boundary (their catchments dissolved into one polygon).
+# strict=False keeps whatever resolves; strict=True (default) raises on unknown IDs.
+# def test_reach_ids_to_boundary():
+#     gdf = fimbox.reaches_to_boundary(test_nwm_ids, strict=False)
+#     gdf.to_file(OUT_DIR / "reach_aoi.gpkg", driver="GPKG")
+
+# HUC IDs -> dissolved boundary (one or many).
+# def test_hucs_to_boundary():
+#     gdf = fimbox.hucs_to_boundary(["08060202", "08060203"])
+#     gdf.to_file(OUT_DIR / "huc_aoi.gpkg", driver="GPKG")
+
+
 # High-resolution flowlines + catchments only (NHDPlus HR via pynhd).
 # def test_get_nhd_hr():
 #     fimbox.getNHDPlusHRData(
@@ -107,9 +140,7 @@ OUT_DIR = REPO_ROOT / "out"
 
 # Download + process a 3DEP DEM. Reads only the AOI window straight from the
 # Planetary Computer COGs over HTTP (no national VRT parse), one snapped
-# reprojection, then hole-fill + clip. ~8x faster than the old py3dep path.
-# Resolutions: 10 / 30 m seamless nationwide; 1 / 3 m from project lidar where
-# it covers the AOI; 60 m is Alaska-only. A resolution with no data for the AOI
+# reprojection, then hole-fill + clip. A resolution with no data for the AOI
 # logs + raises DEMResolutionUnavailable (default stays 10 m).
 def test_get_dem():
     fimbox.DEMProcessor(

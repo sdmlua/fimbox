@@ -199,9 +199,38 @@ except ImportError:
     pass
 
 try:
-    from .preprocessing import getAllInputData, preprocess_nld_lines
+    from .preprocessing import (
+        getAllInputData,
+        getAllInputDataBatch,
+        preprocess_nld_lines,
+    )
 
-    __all__ += ["getAllInputData", "preprocess_nld_lines"]
+    __all__ += [
+        "getAllInputData",
+        "getAllInputDataBatch",
+        "preprocess_nld_lines",
+    ]
+except ImportError:
+    pass
+
+try:
+    from .preprocessing import (
+        ReachAOI,
+        fetch_nwm_catchments_by_id,
+        fetch_nwm_flowlines_by_id,
+        hucs_to_boundary,
+        reaches_to_boundary,
+        resolve_reach_group,
+    )
+
+    __all__ += [
+        "ReachAOI",
+        "fetch_nwm_catchments_by_id",
+        "fetch_nwm_flowlines_by_id",
+        "hucs_to_boundary",
+        "reaches_to_boundary",
+        "resolve_reach_group",
+    ]
 except ImportError:
     pass
 

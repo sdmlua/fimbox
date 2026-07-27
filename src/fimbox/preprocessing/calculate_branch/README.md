@@ -7,6 +7,8 @@
 
 The stream network is split into branches (level paths) that are processed independently: branch zero runs first, then every other branch is dispatched to the shared Dask scheduler, which spreads the branch pipelines across all available CPU cores (`n_workers`). The whole chain can be run at once with `calculate_allbranches`, or driven step-by-step (`BranchDerivation` &rarr; `BranchZero` &rarr; per-branch processing) with identical results. Staged files re-enter the pipeline midway: headwater points seed flow accumulation, the bridge elevation difference heals decks right after HAND, and NWM catchments drive the crosswalk.
 
+**Single-reach AOIs.** A lone reach has no network to split, so `BranchDerivation` writes an empty `branch_ids.lst` and leaves the AOI to branch zero, which already covers it. This skips level-path dissolve, headwater seeding, branch polygons, and the per-branch DEM clips — and avoids the headwater-seed-on-level-path requirement that non-zero branches carry. Set `single_levelpath_branch_zero_only=False` to force the normal level-path path instead.
+
 <!-- Diagram source: workflows/calculate_branch.mmd - edit that file and regenerate with `make workflows` (see workflows/README.md) -->
 <div align="center">
   <img src="../../../../workflows/svg/calculate_branch.svg" alt="calculate branch workflow" />
@@ -33,7 +35,7 @@ The stream network is split into branches (level paths) that are processed indep
 | `filter_catchments.py` | Drop tiny catchments/reaches and slivers; attach area/slope attributes. |
 | `reach_rasterize.py` | Boolean-grid rasterization of streams, level paths, and headwater points. |
 | `levee_rasterize.py` | 3D NLD levee rasterization from Z vertices, DEM burning, and area masking. |
-| `add_crosswalk.py` | Crosswalk DEM-derived reaches to NWM feature_ids and build the SRC with Manning hydraulics. |
+| `add_crosswalk.py` | Crosswalk DEM-derived reaches to NWM feature_ids and build the SRC with Manning hydraulics. Seeds the hydroTable's bathymetry / subdivision / calibration placeholder columns so the schema is fixed from creation. |
 | `evaluate_crosswalk.py` | Crosswalk accuracy diagnostics (overlap and network topology checks). |
 | `build_src.py` | SRC base table: per-catchment geometry accumulation over the stage ladder. |
 | `stages_catchlist.py` | Stage-ladder and per-HydroID metadata files for the SRC build. |
@@ -66,6 +68,7 @@ fimbox.BranchDerivation(
     # stream_network / catchments / lakes / boundary / headwaters / levees: Optional[Path], #file overrides
     # levee_id_attribute: str = "SYSTEM_ID",     #levee system ID column
     # levee_buffer: float = 1000.0,              #levee association buffer (m)
+    # single_levelpath_branch_zero_only: bool = True, #1 reach -> empty branch list, branch zero only
 ).run()
 
 # 2. Configure the AOI once, then run every branch

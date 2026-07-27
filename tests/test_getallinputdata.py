@@ -10,6 +10,10 @@ test_boundary = PKG_ROOT / "docs" / "test_boundary" / "test_smallB.shp"
 OUT_DIR = REPO_ROOT / "out"
 test_huc8 = "08060202"  # Yazoo River basin, MS
 
+# If Just wated to test with NWM reach IDs
+test_nwm_ids = [11239459, 11239689, 11235965]
+test_nwm_id = test_nwm_ids[0]  # single reach -> branch zero only
+
 
 # Combined preprocessing pipeline tests
 # Run full pipeline from a boundary shapefile
@@ -74,6 +78,105 @@ def test_preprocess_all_from_boundary():
 #         get_catchments=False,
 #     )
 #     pp.run()
+
+
+# Same pipeline as above, but the AOI comes from NWM reach IDs instead of a
+# boundary file. Their catchments are merged into one boundary and saved as the
+# usual wbd.gpkg, so every later stage behaves just as it does for a boundary run.
+#
+# buffer_m decides how much hydrography is staged:
+#   0 (the default here) -> only the reaches you asked for
+#   > 0                  -> the buffered AOI is re-queried, so neighbouring
+#                           reaches inside the buffer come too, giving the
+#                           upstream area HAND needs to be right
+# --> out/nwm_11239455and2more/
+def test_preprocess_all_from_nwm_ids():
+    pp = fimbox.getAllInputData(
+        nwm_ids=test_nwm_ids,  # reach IDs instead of boundary=...
+        out_dir=OUT_DIR,
+        buffer_m=0,  # 0 -> exactly these reaches; >0 --> also their neighbours
+        headwater_buffer_cells=8,  # pixels to shrink buffer for headwater clip (capped by buffer_m)
+        get_flowlines=True,  # only applies once buffer_m > 0 pulls hydrography
+        get_catchments=True,  # same
+        dem_resolution=10,  # 3DEP DEM resolution in metres (1/3/10/30/60)
+        resolution="medium",  # "high" -> NHDPlus HR flowlines/catchments via pynhd; "medium" (default) -> NWM. Lakes always NWM.
+        identifier="nwmmr",  # filename prefix for ALL source files; flows download->processing. Default "nwm".
+    )
+    pp.run()
+
+
+# One reach on its own. No network to split, so only branch zero is built later.
+# --> out/nwm_11239455/
+# def test_preprocess_single_reach():
+#     pp = fimbox.getAllInputData(
+#         nwm_ids=[test_nwm_id],
+#         out_dir=OUT_DIR,
+#         buffer_m=0,                #0 -> just this reach and its catchment
+#         headwater_buffer_cells=8,
+#         dem_resolution=10,
+#         resolution="medium",
+#         identifier="nwmmr",
+#     )
+#     pp.run()
+
+
+# Many AOIs in one call. Every getAllInputData parameter passes straight through
+# and applies to each AOI in the batch.
+# separate=True -> one AOI per reach
+# --> out/nwm_11239455/, out/nwm_11239689/, out/nwm_11235965/
+# def test_preprocess_nwm_ids_separate():
+#     fimbox.getAllInputDataBatch(
+#         nwm_ids=test_nwm_ids,
+#         separate=True,
+#         out_dir=OUT_DIR,
+#         buffer_m=2000,             #each AOI widens, so each pulls its neighbours
+#         headwater_buffer_cells=8,
+#         dem_resolution=10,
+#         get_flowlines=True,
+#         get_catchments=True,
+#         resolution="medium",       #"high" -> NHDPlus HR; "medium" -> NWM
+#         identifier="nwmmr",
+#         epsg=5070,
+#     )
+
+
+# Nest the list to group reaches yourself: one AOI per inner list.
+# --> out/nwm_11239455and1more/  (both reaches in one AOI)
+#     out/nwm_11235965/          (on its own)
+# def test_preprocess_nwm_ids_nested():
+#     fimbox.getAllInputDataBatch(
+#         nwm_ids=[[11239455, 11239689], [11235965]],
+#         out_dir=OUT_DIR,
+#         buffer_m=2000,
+#         headwater_buffer_cells=8,
+#         dem_resolution=10,
+#         get_flowlines=True,
+#         get_catchments=True,
+#         resolution="medium",
+#         identifier="nwmmr",
+#         # run=True,                #False builds the AOIs without downloading
+#         # continue_on_error=True,  #log and carry on if one AOI fails
+#     )
+
+
+# HUC IDs work the same way, except a flat list is one AOI per HUC (how FIM is
+# normally run). Nest them or pass together=True to combine.
+# --> out/HUC08060202/, out/HUC08060203/
+# def test_preprocess_hucs_batch():
+#     fimbox.getAllInputDataBatch(
+#         hucs=["08060202", "08060203"],
+#         out_dir=OUT_DIR,
+#         buffer_m=2000,             #HUC/boundary runs default to 2000 m anyway
+#         headwater_buffer_cells=8,
+#         dem_resolution=10,
+#         get_flowlines=True,
+#         get_catchments=True,
+#         resolution="medium",
+#         identifier="nwmmr",
+#         # together=True,           #one combined AOI -> out/HUC08060202and1more/
+#         # run=True,                #False builds the AOIs without downloading
+#         # continue_on_error=True,  #log and carry on if one AOI fails
+#     )
 
 
 # Run individual steps

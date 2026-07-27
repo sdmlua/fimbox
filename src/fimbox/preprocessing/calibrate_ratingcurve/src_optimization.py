@@ -37,6 +37,18 @@ _CALB_COL = {
 }
 
 
+def _subdiv_has_run(df: pd.DataFrame) -> bool:
+    """True when subdivision populated the per-stage roughness columns.
+
+    They are seeded at hydroTable creation, so presence proves nothing — an
+    all-null column means the routine never ran.
+    """
+    return all(
+        col in df.columns and df[col].notna().any()
+        for col in ("channel_n", "overbank_n")
+    )
+
+
 def update_rating_curve(
     branch_dir: Path,
     water_edge_median_df: pd.DataFrame,
@@ -66,12 +78,18 @@ def update_rating_curve(
             "obs_source": object,
         },
     )
-    # Subdivision adds channel_n / overbank_n; before it runs only ManningN
-    # exists, so fall back to it for the roughness lookup.
-    if "channel_n" not in df_ht.columns:
-        df_ht["channel_n"] = df_ht.get("ManningN", np.nan)
-    if "overbank_n" not in df_ht.columns:
-        df_ht["overbank_n"] = df_ht.get("ManningN", np.nan)
+    # Subdivision populates channel_n / overbank_n, and the pipeline only runs
+    # this routine once it has. Calling a calibrator directly can still land
+    # here without it, leaving both columns null. Fall back to the single
+    # ManningN behind the un-subdivided discharge so the roughness bounds check
+    # below still bites instead of quietly passing on NaN.
+    if not _subdiv_has_run(df_ht):
+        log.warning(
+            f"{msg}: subdivision has not run (channel_n/overbank_n unpopulated) — "
+            "using ManningN for the roughness bounds check"
+        )
+        for col in ("channel_n", "overbank_n"):
+            df_ht[col] = df_ht.get("ManningN", np.nan)
 
     # First calibration on this hydroTable — seed the calibration columns.
     if "precalb_discharge_cms" not in df_ht.columns:
@@ -82,6 +100,7 @@ def update_rating_curve(
             "obs_source",
             "precalb_discharge_cms",
             "calb_coef_usgs",
+            "calb_coef_ras2fim",
             "calb_coef_spatial",
             "calb_coef_final",
         ):

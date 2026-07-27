@@ -5,7 +5,7 @@
 
 **Workflow**
 
-The AOI can be defined two ways: pass your own boundary polygon file (GeoPackage/shapefile) **or** just an 8-digit HUC8 ID and the boundary is resolved automatically. That single boundary then drives independent downloads of every required dataset, run in one shot by `getAllInputData`. Every source is swappable: request the 3DEP DEM at 1/3/10/30/60 m or supply your own DEM raster (`dem=`), choose NWM medium-resolution or NHDPlus High-Resolution hydrography (`resolution="medium" | "high"`), or bring your own flowlines/catchments (`flowlines=` / `catchments=` with `stream_fields` / `catchment_fields` column maps). Each dataset is fetched from its native service (or taken from your files), reprojected, clipped to the buffered boundary, and written with a standardized schema into a complete `watershed-data/` folder ready for branch processing.
+The AOI can be defined three ways: pass your own boundary polygon file (GeoPackage/shapefile), an 8-digit HUC8 ID, or a list of NWM reach IDs — the boundary is resolved automatically in the latter two cases. That single boundary then drives independent downloads of every required dataset, run in one shot by `getAllInputData`. Every source is swappable: request the 3DEP DEM at 1/3/10/30/60 m or supply your own DEM raster (`dem=`), choose NWM medium-resolution or NHDPlus High-Resolution hydrography (`resolution="medium" | "high"`), or bring your own flowlines/catchments (`flowlines=` / `catchments=` with `stream_fields` / `catchment_fields` column maps). Each dataset is fetched from its native service (or taken from your files), reprojected, clipped to the buffered boundary, and written with a standardized schema into a complete `watershed-data/` folder ready for branch processing.
 
 <!-- Diagram source: workflows/download_data.mmd - edit that file and regenerate with `make workflows` (see workflows/README.md) -->
 <div align="center">
@@ -67,6 +67,18 @@ data = fimbox.getNHDPlusData(
     # n_workers: int = 8,                #parallel page-fetch threads
 )
 ```
+
+The individual downloaders also accept `boundary=None`, which drops the spatial
+filter and queries by attribute alone — how reach IDs are resolved before any AOI
+geometry exists. A `where` clause is required in that case.
+
+```python
+fimbox.NWMFlowlinesDownloader().download(boundary=None, where="ID IN (5091042,5091044)")
+```
+
+`ID` is indexed on the flowline layer but not on the catchment layer, so
+`fetch_nwm_catchments_by_id` resolves catchments spatially from the reach
+geometries and filters locally instead of issuing an `IN` query there.
 
 **FEMA NFHL, NLD levees, OSM, USGS gages**
 

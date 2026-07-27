@@ -678,8 +678,14 @@ def _fix_hydroid(grp: pd.DataFrame, strm_order: int) -> pd.DataFrame:
     )
     grp["HydraulicRadius (m)"] = grp["HydraulicRadius (m)"].fillna(0)
 
-    # Re-derive discharge via Manning's (channel_n after subdiv, else ManningN).
-    n_col = "channel_n" if "channel_n" in grp.columns else "ManningN"
+    # Re-derive discharge via Manning's, using the channel roughness once
+    # subdivision has set it. The column is seeded but null until then, so fall
+    # back to the single ManningN behind the un-subdivided discharge.
+    n_col = (
+        "channel_n"
+        if "channel_n" in grp.columns and grp["channel_n"].notna().any()
+        else "ManningN"
+    )
     grp.loc[rows, "Discharge (m3s-1)"] = (
         wet_area
         * np.power(grp.loc[rows, "HydraulicRadius (m)"], 2.0 / 3)

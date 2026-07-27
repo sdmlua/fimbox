@@ -62,7 +62,7 @@ If you prefer Conda, create and activate the environment first, then run
 `uv pip install -e .` inside it.
 
 
-## Quick start: from boundary polygon to flood map
+## Quick start: from AOI to flood map
 ---
 ### 1. Stage AOI inputs
 
@@ -78,6 +78,29 @@ getAllInputData(
     out_dir="out/my_basin",
 )
 ```
+
+An AOI can also come from a HUC8 ID or from NWM reach IDs, in which case the AOI
+is the dissolved footprint of those reaches' catchments:
+
+```python
+from fimbox import getAllInputData, getAllInputDataBatch
+
+getAllInputData(huc8="03020201", out_dir="out")
+getAllInputData(nwm_ids=[5091042, 5091044], out_dir="out")
+
+# Several AOIs at once. Grouping is explicit: a flat reach list is one AOI, a
+# nested list is one AOI per inner list, and a flat HUC list is one AOI per HUC.
+getAllInputDataBatch(nwm_ids=[[5091042], [11908106]], out_dir="out")
+getAllInputDataBatch(hucs=["03020201", "03020202"], out_dir="out")
+```
+
+Reach-ID runs default to no buffer, staging exactly the reaches requested. Pass
+`buffer_m` to widen the AOI and pull in the neighbouring reaches inside it —
+usually what you want for HAND, since flow accumulation at the edge needs the
+upstream contributing area. See the
+[preprocessing README](src/fimbox/preprocessing/README.md) for the full grouping
+and buffer rules.
+
 See the [`tests/`](tests/) folder for further detailed steps including HAND processing, SRC generation, calibration, and FIM generation. Users can change different parameters based on requirements.
 
 ## Module documentation
