@@ -46,6 +46,9 @@ dependencies = [
     "odc-stac>=0.3",
     "fimbench",
     "fimeval",
+    # ngen hydrofabric: duckdb reads the community parquet mirror, row-group
+    # pruned so only the AOI's data is fetched. See fimbox.ngen.
+    "duckdb>=1.5",
 ]
 
 [project.optional-dependencies]
@@ -53,6 +56,19 @@ dev = [
     "pytest>=8.3,<8.4",
     "ruff>=0.6",
 ]
+
+# ngiab_data_preprocess (the NGIAB data preprocessor) is deliberately NOT
+# declared here, not even as an extra. It cannot be co-resolved with fimbox:
+# `uv lock` reports "fimbox[ngen] and teehr==0.5.0 are incompatible" for every
+# published ngiab version, and it additionally pins tqdm==4.66.4 (fimbox needs
+# >=4.67.1), dask==2024.4.1, xarray==2024.2.0, zarr==2.17.1, s3fs==2024.3.1,
+# requests==2.33.0, and caps requires-python at <=3.12. teehr drives NWM
+# retrospective retrieval, so it is the one that stays.
+#
+# fimbox.ngen therefore reads the hydrofabric from the community parquet mirror
+# with duckdb and owns its own upstream traversal. When ngiab happens to be
+# installed in the same environment, fimbox.ngen._ngiab detects it and defers to
+# its network graph for exact parity; nothing requires it.
 
 [project.urls]
 Homepage = "https://github.com/sdmlua/fimbox"

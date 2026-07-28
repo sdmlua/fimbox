@@ -298,6 +298,16 @@ try:
 except ImportError:
     pass
 
+# ngen (fimbox.ngen.hydrofabric): NextGen hydrofabric flowpaths/divides read
+# from the community parquet mirror, selectable by HUC8/boundary, ngen cat-id,
+# NWM feature-id, or gage. Also reachable as source="ngen" in getAllInputData.
+try:
+    from .ngen import NgenHydrofabric, NgenSelection, getNgenData
+
+    __all__ += ["getNgenData", "NgenHydrofabric", "NgenSelection"]
+except ImportError:
+    pass
+
 # FIM evaluation: benchmark discovery/download from the FIMbench database and
 # candidate-vs-benchmark evaluation through the FIMeval framework (imported at
 # module top).

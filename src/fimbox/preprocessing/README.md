@@ -5,7 +5,7 @@
 
 **Workflow**
 
-The pipeline moves an AOI from a raw boundary to a fully calibrated, FIM-ready dataset in five stages. Each stage writes its outputs into the AOI folder and feeds the next, so the chain can be run end-to-end or stage-by-stage. The entry point is flexible: pass your own boundary polygon, an 8-digit HUC8 ID, or NWM reach IDs, and every major dataset can be swapped: 3DEP DEM at any resolution or your own DEM, NWM medium-resolution or NHDPlus High-Resolution hydrography, or your own flowlines/catchments. Bridge DEM processing is optional and only needed when bridge decks should be healed in the HAND raster.
+The pipeline moves an AOI from a raw boundary to a fully calibrated, FIM-ready dataset in five stages. Each stage writes its outputs into the AOI folder and feeds the next, so the chain can be run end-to-end or stage-by-stage. The entry point is flexible: pass your own boundary polygon, an 8-digit HUC8 ID, NWM reach IDs, or ngen catchment IDs, and every major dataset can be swapped: 3DEP DEM at any resolution or your own DEM, NWM medium-resolution, NHDPlus High-Resolution or NextGen (ngen) hydrofabric hydrography, or your own flowlines/catchments. Bridge DEM processing is optional and only needed when bridge decks should be healed in the HAND raster.
 
 **Choosing the AOI**
 
@@ -84,7 +84,10 @@ pp = fimbox.getAllInputData(
     # headwater_buffer_cells: int = 8,      #DEM cells for the inner headwater clip (capped by buffer_m)
     # get_flowlines: bool = True,           #download flowlines (False = bring your own)
     # get_catchments: bool = True,          #download catchments (False = bring your own)
-    # resolution: str = "medium",           #"medium" = NWM, "high" = NHDPlus HR
+    # source: str = "nwmmedium",            #"nwmmedium" = NWM, "nwmhigh" = NHDPlus HR, "ngen" = NextGen hydrofabric
+    # cat_ids: Optional[Sequence] = None,   #ngen catchment IDs (implies source="ngen")
+    # feature_ids: Optional[Sequence] = None, #NWM comids resolved against the ngen hydrofabric
+    # subset_type: str = "nexus",           #"nexus" = up to the outlet nexus, "catchment" = stop at the seed
     # flowlines: Optional[Path] = None,     #bring-your-own flowlines file
     # catchments: Optional[Path] = None,    #bring-your-own catchments file
     # stream_fields: Optional[dict] = None, #canonical->user column map for custom streams

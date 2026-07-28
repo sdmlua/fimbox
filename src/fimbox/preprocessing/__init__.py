@@ -174,6 +174,11 @@ except ImportError:
 
 try:
     from .download_data import (
+        NGEN,
+        NWM_HIGH,
+        NWM_MEDIUM,
+        SOURCE_LABELS,
+        SOURCES,
         DEMProcessor,
         DEMResolutionUnavailable,
         DownloadDEMDomain,
@@ -193,6 +198,7 @@ try:
         getNHDPlusHRData,
         normalize_catchments,
         normalize_flowlines,
+        normalize_source,
     )
 
     __all__ += [
@@ -205,6 +211,12 @@ try:
         "getNHDPlusHRData",
         "normalize_flowlines",
         "normalize_catchments",
+        "normalize_source",
+        "SOURCES",
+        "SOURCE_LABELS",
+        "NWM_MEDIUM",
+        "NWM_HIGH",
+        "NGEN",
         "NWMFlowlinesDownloader",
         "NWMCatchmentsDownloader",
         "NWMLakesDownloader",

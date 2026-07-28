@@ -78,7 +78,7 @@ test_nwm_ids = [11239455, 11239689, 11235965]
 #         download_flowlines=True,
 #         download_catchments=True,
 #         download_lakes=True,
-#         resolution="medium",  # "high" -> NHDPlus HR flowlines/catchments via pynhd; "medium" (default) -> NWM. Lakes always NWM.
+#         source="nwmmedium",  # "nwmhigh" -> NHDPlus HR via pynhd; "ngen" -> NextGen hydrofabric. Lakes always NWM.
 #         identifier="nwmmr",  # filename prefix; default "nwm" -> nwm_subset_streams.gpkg etc.
 #     )
 
@@ -122,6 +122,30 @@ test_nwm_ids = [11239455, 11239689, 11235965]
 #         download_catchments=True,
 #         identifier="nwm",  # prefix for saved files
 #     )
+
+
+# NextGen (ngen) hydrofabric flowpaths + divides, read from the community parquet
+# mirror. Only the AOI's rows are fetched, so there is no 4.9 GB CONUS download.
+# Selectors: boundary=, cat_ids=, feature_ids= (NWM comids), or gages=.
+# Streams come back in the canonical schema, with feature_id from the NWM comid.
+# def test_get_ngen_by_boundary():
+#     fimbox.getNgenData(
+#         boundary=test_boundary,
+#         out_dir=OUT_DIR,
+#         identifier="ngen",  # --> ngen_subset_streams.gpkg, ngen_catchments_proj_subset.gpkg
+#     )
+
+# By ngen catchment ID, walking the network upstream from each seed.
+# def test_get_ngen_by_cat_ids():
+#     fimbox.getNgenData(
+#         cat_ids=["cat-1096367"],
+#         out_dir=OUT_DIR,
+#         include_outlet=True,  # False -> stop at the seed instead of its outlet nexus
+#     )
+
+# By NWM feature ID (comid), resolved to ngen reaches via network.hf_id.
+# def test_get_ngen_by_feature_ids():
+#     fimbox.getNgenData(feature_ids=test_nwm_ids, out_dir=OUT_DIR)
 
 
 # Bring-your-own flowlines/catchments: map your column names to the canonical

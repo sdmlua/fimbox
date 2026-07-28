@@ -30,8 +30,8 @@ from fimbox._dask import _resolve_n_workers
 from fimbox.datasets import fetch_data
 
 # Live AOI + input files. Edit these to point at your data; tests skip when the AOI is absent.
-AOI_DIR = Path(__file__).resolve().parents[2] / "out" / "test_smallB"
-# AOI_DIR = Path(__file__).resolve().parents[2] / "out" / "nwm_11239459and2more"
+# AOI_DIR = Path(__file__).resolve().parents[2] / "out" / "test_smallB"
+AOI_DIR = Path(__file__).resolve().parents[2] / "out" / "nwm_11239459and2more"
 
 # Calibration lookup tables, fetched on demand from the public SDML S3 bucket
 # (anonymous, cached locally) via the pooch registry in ``fimbox.datasets``.

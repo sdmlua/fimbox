@@ -11,6 +11,11 @@ from .nfhl_data import DownloadFEMANFHL
 
 # Get NHDPlus Dataset
 from .nhdplus import (
+    NGEN,
+    NWM_HIGH,
+    NWM_MEDIUM,
+    SOURCE_LABELS,
+    SOURCES,
     NWMCatchmentsDownloader,
     NWMFlowlinesDownloader,
     NWMLakesDownloader,
@@ -18,6 +23,7 @@ from .nhdplus import (
     getNHDPlusHRData,
     normalize_catchments,
     normalize_flowlines,
+    normalize_source,
 )
 
 # Get the NLD Dataset
@@ -43,6 +49,12 @@ __all__ = [
     "getNHDPlusHRData",
     "normalize_flowlines",
     "normalize_catchments",
+    "normalize_source",
+    "SOURCES",
+    "SOURCE_LABELS",
+    "NWM_MEDIUM",
+    "NWM_HIGH",
+    "NGEN",
     "DownloadNLD",
     "NWMFlowlinesDownloader",
     "NWMCatchmentsDownloader",

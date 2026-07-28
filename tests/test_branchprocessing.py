@@ -28,8 +28,8 @@ log = logging.getLogger(__name__)
 # are not imported here.
 
 # AOI parameters — point this at any user-supplied AOI working directory.
-OUT_DIR = Path(__file__).resolve().parents[2] / "out" / "test_smallB" / "watershed-data"
-# OUT_DIR = Path(__file__).resolve().parents[2] / "out" / "nwm_11239459and2more" / "watershed-data"
+# OUT_DIR = Path(__file__).resolve().parents[2] / "out" / "test_smallB" / "watershed-data"
+OUT_DIR = Path(__file__).resolve().parents[2] / "out" / "nwm_11239459and2more" / "watershed-data"
 
 # Source-data filename prefix.
 IDENTIFIER = "nwmmr"
