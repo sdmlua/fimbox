@@ -87,12 +87,17 @@ The main locations in this repository are:
 - Format and lint with [`ruff`](https://docs.astral.sh/ruff/) before
   committing:
   ```bash
-  uv run ruff format .
-  uv run ruff check --fix .
+  uv run ruff format .        # rewrite files to the standard formatting
+  uv run ruff check --fix .   # lint, fixing what can be fixed automatically
   ```
-  `ruff` is installed via `uv pip install -e ".[dev]"`. CI/reviewers may
-  reject pull requests that fail `ruff check` or are not
-  `ruff format`-clean.
+  `ruff` is installed via `uv pip install -e ".[dev]"`. Both commands must
+  come back clean before you open a pull request; check without rewriting
+  anything using `uv run ruff format --check .` and `uv run ruff check .`
+
+  Anything `check --fix` leaves behind has to be fixed by hand. The one
+  that comes up most often is `E402` in `docs/*.ipynb`: `ruff` lints each
+  notebook cell as its own module, so every `import` in a cell belongs at
+  the top of that cell, above the executable code.
 - Add or update tests when changing behaviour. `tests/test_fimgeneration.py`
   is a good template for a real-AOI test: parameters live at the top of
   the file, the test is skipped automatically when the fixture isn't
@@ -175,6 +180,18 @@ Please include the following in the pull request description:
 If your pull request changes raster outputs, hydroTable columns, FIM
 generation behavior, or directory structure, sample output paths or
 screenshots are very helpful.
+
+## Dependency Updates
+
+Dependabot (`.github/dependabot.yml`) checks monthly and opens a single
+grouped pull request when dependencies move, updating both
+`pyproject.toml` and `uv.lock`. `teehr` and `pylerc` are excluded because
+their versions are pinned deliberately — see the comments in
+`pyproject.toml`.
+
+Before merging one of these, run `uv sync`, then `ruff check .` and the
+test suite, since the lockfile change affects every contributor's
+environment.
 
 ## Reporting Bugs and Requesting Features
 

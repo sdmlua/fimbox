@@ -18,7 +18,8 @@ OUT_DIR = (
     / "nwm_11239459and2more"
     / "watershed-data"
 )
-bridge_gpkg = OUT_DIR / "osm_bridges_subset.gpkg"
+
+bridge_gpkg = OUT_DIR / "osm_bridges_subset.gpkg"  # TODO: change to full bridges gpkg
 dem_path = OUT_DIR / "dem.tif"
 out_dir = OUT_DIR
 

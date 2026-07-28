@@ -97,7 +97,7 @@ def test_preprocess_all_from_nwm_ids():
     pp = fimbox.getAllInputData(
         nwm_ids=test_nwm_ids,  # reach IDs instead of boundary=...
         out_dir=OUT_DIR,
-        buffer_m=0,  # 0 -> exactly these reaches; >0 --> also their neighbours
+        buffer_m=5000,  # 0 -> exactly these reaches; >0 --> also their neighbours
         headwater_buffer_cells=0,  # pixels to shrink buffer for headwater clip (capped by buffer_m)
         get_flowlines=True,  # only applies once buffer_m > 0 pulls hydrography
         get_catchments=True,  # same

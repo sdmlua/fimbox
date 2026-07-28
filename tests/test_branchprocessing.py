@@ -29,7 +29,12 @@ log = logging.getLogger(__name__)
 
 # AOI parameters — point this at any user-supplied AOI working directory.
 # OUT_DIR = Path(__file__).resolve().parents[2] / "out" / "test_smallB" / "watershed-data"
-OUT_DIR = Path(__file__).resolve().parents[2] / "out" / "nwm_11239459and2more" / "watershed-data"
+OUT_DIR = (
+    Path(__file__).resolve().parents[2]
+    / "out"
+    / "nwm_11239459and2more"
+    / "watershed-data"
+)
 
 # Source-data filename prefix.
 IDENTIFIER = "nwmmr"
@@ -203,7 +208,7 @@ def test_branchprocessing_combined():
         out_dir=OUT_DIR,
         branch_id_attribute="levpa_id",
         reach_id_attribute="ID",
-        branch_buffer_distance_meters=7000.0,
+        branch_buffer_distance_meters=7000.0,  # Change this if the area is small
         # single_levelpath_branch_zero_only=True,  #1 reach -> empty branch list, branch zero only
     ).run()
 

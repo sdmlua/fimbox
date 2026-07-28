@@ -1,0 +1,27 @@
+version: 2
+updates:
+  # uv, not pip: the lockfile is what contributors install from, and most deps
+  # here are unpinned lower bounds — pip would leave uv.lock to drift.
+  - package-ecosystem: "uv"
+    directory: "/"
+    schedule:
+      interval: "monthly"
+    groups:
+      all-deps: # one PR for everything
+        patterns: ["*"]
+    open-pull-requests-limit: 5
+    ignore:
+      # Both pinned on purpose, see pyproject.toml: teehr==0.5.0 drives the
+      # ngiab incompatibility, pylerc<4.1 keeps an sdist for Apple Silicon.
+      - dependency-name: "teehr"
+      - dependency-name: "pylerc"
+
+  # No-op until .github/workflows/ exists.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "monthly"
+    groups:
+      actions:
+        patterns: ["*"]
+    open-pull-requests-limit: 5
