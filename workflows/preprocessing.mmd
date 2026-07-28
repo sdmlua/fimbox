@@ -1,9 +1,11 @@
 flowchart LR
     subgraph S1["Define the AOI"]
         direction TB
-        A["<b>AOI Input</b><br/>your own boundary polygon (gpkg / shp)<br/><b>or</b> an 8-digit HUC8 ID"]
+        A["<b>AOI Input</b><br/>your own boundary polygon (gpkg / shp)<br/><b>or</b> HUC8 ID(s)<br/><b>or</b> NWM reach ID(s)"]
         B["<b>1 &middot; HUC Validation</b><br/>codes checked against the<br/>packaged HUC lists"]
+        H["<b>AOI from IDs</b><br/>reach IDs &rarr; catchment footprint<br/>HUC list &rarr; one AOI each<br/>buffer off by default"]
         A --> B
+        A --> H
     end
     subgraph S2["Stage the data"]
         direction TB
@@ -13,12 +15,13 @@ flowchart LR
     end
     subgraph S3["Process + calibrate"]
         direction TB
-        D["<b>3 &middot; Branch Processing</b><br/>DEM conditioning &middot; HAND rasters per branch<br/>reaches &middot; SRCs &middot; hydroTables"]
+        D["<b>3 &middot; Branch Processing</b><br/>DEM conditioning &middot; HAND rasters per branch<br/>reaches &middot; SRCs &middot; hydroTables<br/>single reach &rarr; branch zero only"]
         E["<b>4 &middot; Rating Curve Calibration</b><br/>bathymetry &middot; bankfull &middot; subdivision<br/>USGS / spatial / manual coefficients"]
         D --> E
     end
     F["<b>FIM-Ready AOI</b><br/>calibrated hydroTables<br/>+ HAND rasters"]
     B --> C
+    H --> C
     C --> D
     G -.-> D
     E --> F

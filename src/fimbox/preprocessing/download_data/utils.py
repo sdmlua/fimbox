@@ -78,6 +78,40 @@ class NHDBoundaryFinder:
                 self.rpus.append({"DrainageAreaID": d_id, "UnitID": u_id})
 
 
+def select_intersecting(
+    gdf: gpd.GeoDataFrame, boundary, predicate: str = "intersects"
+) -> gpd.GeoDataFrame:
+    """Whole features from ``gdf`` that touch ``boundary`` — nothing is cut.
+
+    Use this instead of ``gpd.clip`` whenever a feature crossing the AOI edge
+    has to survive intact: a levee line keeps the rest of its run and its Z
+    profile, a road or bridge keeps its full span, a flood zone keeps its true
+    shape. Clipping would slice each of those at the boundary.
+
+    ``boundary`` may be a GeoDataFrame, GeoSeries, or shapely geometry; it is
+    reprojected to ``gdf``'s CRS when both are known.
+    """
+    if gdf.empty:
+        return gdf
+
+    if isinstance(boundary, (gpd.GeoDataFrame, gpd.GeoSeries)):
+        if boundary.crs is not None and gdf.crs is not None and boundary.crs != gdf.crs:
+            boundary = boundary.to_crs(gdf.crs)
+        geom = (
+            boundary.geometry.union_all()
+            if hasattr(boundary, "geometry")
+            else boundary.union_all()
+        )
+    else:
+        geom = boundary
+
+    if geom is None or geom.is_empty:
+        return gdf.iloc[0:0].copy()
+
+    hits = gdf.sindex.query(geom, predicate=predicate)
+    return gdf.iloc[sorted(hits)].copy()
+
+
 # Derive the headwater from the flowline data
 """
 Description: Extracts headwater source points from NHDPlus flowlines.

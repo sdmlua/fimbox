@@ -26,7 +26,8 @@ import pytest
 
 from fimbox import generateFIM
 
-AOI_DIR = Path(__file__).resolve().parents[2] / "out" / "test_smallB"
+# AOI_DIR = Path(__file__).resolve().parents[2] / "out" / "test_smallB"
+AOI_DIR = Path(__file__).resolve().parents[2] / "out" / "nwm_11239459and2more"
 N_WORKERS = 4
 
 # Optional selection filters (edit to match the CSVs you have).

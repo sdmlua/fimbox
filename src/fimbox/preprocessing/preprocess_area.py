@@ -39,11 +39,12 @@ generation). Use ``self.aoi_dir`` for the AOI root and ``self.watershed_dir``
 """
 
 from pathlib import Path
-from typing import Optional, Union
+from typing import Optional, Sequence, Union
 
 import geopandas as gpd
 from shapely.geometry import LineString, MultiLineString
 from shapely.geometry import box as shapely_box
+from shapely.ops import unary_union
 
 from ..logging_utils import (
     WATERSHED_DIR_NAME,
@@ -51,19 +52,49 @@ from ..logging_utils import (
     default_output_dir,
     get_logger,
 )
+from .aoi_from_ids import (
+    group_label,
+    huc_label,
+    hucs_to_boundary,
+    normalize_groups,
+    normalize_huc_groups,
+    resolve_reach_group,
+)
 from .download_data.area_masks import DownloadDEMDomain, DownloadLandSea
 from .download_data.dem_process import DEMProcessor
 from .download_data.nhdplus import (
-    _is_high_resolution,
+    NGEN,
+    NWM_MEDIUM,
+    SOURCE_LABELS,
+    SOURCES,
     getNHDPlusData,
     normalize_catchments,
     normalize_flowlines,
+    normalize_source,
 )
 from .download_data.nld_data import DownloadNLD
 from .download_data.osm_data import DownloadOSMBridges, DownloadOSMRoads
 from .download_data.usgs_gages import DownloadUSGSGages
 from .download_data.utils import HUC8Finder, find_headwater_points
 from .source_naming import DEFAULT_IDENTIFIER, source_name
+
+log = get_logger(__name__)
+
+# Buffer applied to boundary/huc8 AOIs when the caller doesn't set one.
+_DEFAULT_BUFFER_M = 2000.0
+
+# Hard floor on the buffer, enforced even when the caller passes 0.
+#
+# The DEM extent decides the HAND solution, not just how much data is staged:
+# flow accumulation, the derived stream network, the reach catchments and the
+# REM datum are all re-derived inside whatever DEM it is handed. An AOI clipped
+# tight to its catchments truncates the derived catchments at the edge and
+# leaves inundation nowhere to spread, so the synthetic rating curves describe
+# a narrower channel than the real one and the same discharge maps to a much
+# higher stage over a much smaller extent. inundation-mapping avoids this with
+# wbd_buffer=5000 on every HUC8; 1 km is the minimum that keeps a reach-id run
+# in the same regime. Raise it for wide floodplains.
+_MIN_BUFFER_M = 1000.0
 
 _FILENAMES = {
     "wbd": "wbd.gpkg",
@@ -254,6 +285,12 @@ class getAllInputData:
         Path to a boundary shapefile / GeoPackage / GeoJSON.
     boundary_layer : str, optional
         Layer name when boundary is a GeoPackage with multiple layers.
+    nwm_ids : sequence of int or str, optional
+        NWM reach ids (matched on the ``ID`` column). The AOI becomes the
+        dissolved footprint of their catchments. With ``buffer_m=0`` (the default
+        for this mode) those reaches are the whole stream network; with a buffer
+        the widened AOI is re-queried so neighbouring reaches inside it come too.
+        Use ``getAllInputDataBatch`` to run several groups at once.
     out_dir : str or Path, optional
         Root output directory. Defaults to ``./fimbox_preprocess``. An AOI
         folder (``<out_dir>/<AOI_name>``) is created underneath, and all input
@@ -263,8 +300,9 @@ class getAllInputData:
     dem_resolution : int, optional
         3DEP DEM resolution in metres. Default 10.
     buffer_m : float, optional
-        Buffer distance in metres applied to the boundary before downloading
-        all datasets. Default 2000.
+        Buffer distance in metres applied to the boundary before downloading all
+        datasets. Defaults to 2000 for ``huc8``/``boundary`` runs and 0 for
+        ``nwm_ids`` runs. Pass 0 to disable, or a value to override either.
     headwater_buffer_cells : int, optional
         Number of DEM cells used for the inner clip when deriving headwaters
     get_flowlines : bool, optional
@@ -272,11 +310,23 @@ class getAllInputData:
         Default True. Set False to skip.
     get_catchments : bool, optional
         Download NWM/NHDPlus catchments. Default True. Set False to skip.
-    resolution : str, optional
-        Flowline/catchment source. ``"medium"`` (default) uses the NWM ArcGIS
-        FeatureServer; ``"high"`` (aliases ``high-resolution``, ``hr``) fetches
-        NHDPlus High Resolution flowlines/catchments via ``pynhd`` for the AOI.
-        Lakes always come from NWM.
+    source : str, optional
+        Flowline/catchment source: ``"nwmmedium"`` (default) the NWM ArcGIS
+        FeatureServer, ``"nwmhigh"`` NHDPlus High Resolution via ``pynhd``, or
+        ``"ngen"`` the NextGen community hydrofabric. Lakes always come from NWM.
+        The pre-rename ``"medium"`` / ``"high"`` spellings still resolve.
+    cat_ids : sequence of int or str, optional
+        ngen catchment ids (``cat-123``, ``wb-123``, or bare ``123``). Implies
+        ``source="ngen"``. The AOI becomes the dissolved footprint of the
+        upstream catchments, then hydrography is selected over the buffered AOI.
+    feature_ids : sequence of int or str, optional
+        NWM / NHD feature ids (comids) resolved against the ngen hydrofabric via
+        ``network.hf_id``, so an ngen run can start from the same reach ids as an
+        NWM one. With ``source="ngen"``, ``nwm_ids`` is treated as this.
+    subset_type : str, optional
+        How far an id selection reaches, mirroring ngiab's ``--subset_type``.
+        ``"nexus"`` (default) takes everything draining into the seed's
+        downstream nexus; ``"catchment"`` stops at the seed itself.
     flowlines, catchments : str or Path, optional
         Bring-your-own flowlines / catchments (path to a vector file). When
         given, the file is normalised and saved instead of downloading that
@@ -307,15 +357,19 @@ class getAllInputData:
         huc8: Optional[str] = None,
         boundary: Optional[Union[str, Path]] = None,
         boundary_layer: Optional[str] = None,
+        nwm_ids: Optional[Sequence[Union[int, str]]] = None,
         out_dir: Optional[Union[str, Path]] = None,
         epsg: int = 5070,
         dem_resolution: int = 10,
-        buffer_m: float = 2000.0,
+        buffer_m: Optional[float] = None,
         headwater_buffer_cells: int = 8,
         get_flowlines: bool = True,
         get_catchments: bool = True,
         get_gages: bool = True,
-        resolution: str = "medium",
+        source: str = NWM_MEDIUM,
+        cat_ids: Optional[Sequence[Union[int, str]]] = None,
+        feature_ids: Optional[Sequence[Union[int, str]]] = None,
+        subset_type: str = "nexus",
         flowlines: Optional[Union[str, Path]] = None,
         catchments: Optional[Union[str, Path]] = None,
         stream_fields: Optional[dict] = None,
@@ -323,20 +377,62 @@ class getAllInputData:
         identifier: str = DEFAULT_IDENTIFIER,
         dem: Optional[Union[str, Path]] = None,
     ):
-        if huc8 is None and boundary is None:
-            raise ValueError("Provide either huc8 or boundary.")
+        if (
+            huc8 is None
+            and boundary is None
+            and not nwm_ids
+            and not cat_ids
+            and not feature_ids
+        ):
+            raise ValueError(
+                "Provide one of huc8, boundary, nwm_ids, cat_ids, or feature_ids."
+            )
+
+        # cat_ids only exist in the ngen hydrofabric, so they select it outright.
+        self.source = normalize_source(NGEN if cat_ids else source)
+        self.subset_type = subset_type
 
         self.huc8 = huc8
         self.boundary_path = Path(boundary) if boundary else None
         self.boundary_layer = boundary_layer
+        self.cat_ids = [str(i).strip() for i in cat_ids] if cat_ids else None
+        self.feature_ids = (
+            [str(i).strip() for i in feature_ids] if feature_ids else None
+        )
+        # Reach ids mean the same thing to both sources, so an ngen run accepts
+        # them under either name and resolves them through network.hf_id.
+        if self.source == NGEN and nwm_ids and not self.feature_ids:
+            self.feature_ids = [str(i).strip() for i in nwm_ids]
+            nwm_ids = None
+        self.nwm_ids = [str(i).strip() for i in nwm_ids] if nwm_ids else None
+        self.ngen_ids = self.cat_ids or self.feature_ids
         self.epsg = epsg
         self.dem_resolution = dem_resolution
-        self.buffer_m = buffer_m
+        # Reach-id runs target an exact set of catchments, so they ask for no
+        # buffer; boundary/huc8 runs keep the historical 2 km margin. Either way
+        # _MIN_BUFFER_M is the floor — see its definition for why a zero-buffer
+        # DEM silently corrupts the HAND solution.
+        requested_buffer = (
+            buffer_m
+            if buffer_m is not None
+            else (0.0 if (self.nwm_ids or self.ngen_ids) else _DEFAULT_BUFFER_M)
+        )
+        self.buffer_m = max(float(requested_buffer), _MIN_BUFFER_M)
+        if self.buffer_m > requested_buffer:
+            log.warning(
+                "buffer_m=%s raised to the %s m floor — a tighter DEM truncates "
+                "the derived catchments and the REM datum, which shrinks the FIM "
+                "extent. Pass a larger buffer_m for wide floodplains.",
+                requested_buffer,
+                _MIN_BUFFER_M,
+            )
+        # Populated by _load_boundary in reach-id mode; reused instead of a
+        # spatial re-download so the AOI holds only the requested reaches.
+        self._reach_aoi = None
         self.headwater_buffer_cells = headwater_buffer_cells
         self.get_flowlines = get_flowlines
         self.get_catchments = get_catchments
         self.get_gages = get_gages
-        self.resolution = resolution
         # bring-your-own flowlines/catchments + their field maps
         self.byo_flowlines = Path(flowlines) if flowlines else None
         self.byo_catchments = Path(catchments) if catchments else None
@@ -354,7 +450,14 @@ class getAllInputData:
         self._filenames["nwm_lakes"] = source_name("lakes", identifier)
         self._filenames["nwm_headwaters"] = source_name("headwaters_points", identifier)
 
-        self.case_name = f"HUC{huc8}" if huc8 else self.boundary_path.stem
+        if huc8:
+            self.case_name = f"HUC{huc8}"
+        elif self.nwm_ids:
+            self.case_name = group_label(self.nwm_ids)
+        elif self.ngen_ids:
+            self.case_name = group_label(self.ngen_ids, prefix=NGEN)
+        else:
+            self.case_name = self.boundary_path.stem
 
         # AOI root holds the log, feature_id.csv, discharge-inputs/ and
         # fim-outputs/. All input data + branch processing live one level
@@ -407,6 +510,24 @@ class getAllInputData:
         return gdf.drop(columns=reserved) if reserved else gdf
 
     def _load_boundary(self) -> gpd.GeoDataFrame:
+        if self.ngen_ids:
+            return self._drop_fid(self._ngen_boundary())
+
+        if self.nwm_ids:
+            self.logger.info(f"Resolving {len(self.nwm_ids)} NWM reach id(s)...")
+            self._reach_aoi = resolve_reach_group(
+                self.nwm_ids, epsg=self.epsg, strict=False
+            )
+            if self._reach_aoi.missing:
+                self.logger.warning(
+                    f"Unresolved reach id(s): {self._reach_aoi.missing}"
+                )
+            self.logger.info(
+                f"AOI from {self._reach_aoi.reach_count} reach(es) / "
+                f"{len(self._reach_aoi.catchments)} catchment(s)"
+            )
+            return self._drop_fid(self._reach_aoi.boundary)
+
         if self.huc8:
             self.logger.info(
                 f"Fetching HUC8 boundary for {self.huc8} from hosted service..."
@@ -424,6 +545,52 @@ class getAllInputData:
         if gdf.crs is None:
             raise ValueError("Boundary file has no CRS.")
         return self._drop_fid(gdf.to_crs("EPSG:4326"))
+
+    def _ngen_boundary(self) -> gpd.GeoDataFrame:
+        """AOI footprint for an ngen id run: the dissolved upstream catchments.
+
+        Only the boundary is taken here. Hydrography is selected later over the
+        *buffered* AOI, so the neighbours the buffer reaches come too — the same
+        thing a buffered ``nwm_ids`` run does, and what HAND needs to be right.
+        """
+        from ..ngen import NgenHydrofabric
+
+        kind = "catchment" if self.cat_ids else "feature"
+        self.logger.info(f"Resolving {len(self.ngen_ids)} ngen {kind} id(s)...")
+
+        with NgenHydrofabric(epsg=self.epsg) as hf:
+            if self.cat_ids:
+                selection = hf.select_by_cat_ids(
+                    self.cat_ids, include_outlet=self.subset_type == "nexus"
+                )
+            else:
+                selection = hf.select_by_feature_ids(
+                    self.feature_ids, include_outlet=self.subset_type == "nexus"
+                )
+            if selection.is_empty:
+                raise ValueError(
+                    f"No ngen catchments found for {kind} ids {self.ngen_ids}."
+                )
+            if selection.missing:
+                self.logger.warning(
+                    f"Unresolved ngen {kind} id(s): {selection.missing}"
+                )
+
+            catchments = hf.fetch_catchments(selection)
+
+        if catchments.empty:
+            raise ValueError(
+                f"ngen catchments resolved but returned no geometry: {kind} ids."
+            )
+
+        self.logger.info(
+            f"AOI from {len(selection.wb_ids)} reach(es) / {len(catchments)} catchment(s)"
+        )
+        return gpd.GeoDataFrame(
+            {"catchment_count": [len(catchments)]},
+            geometry=[unary_union(catchments.geometry)],
+            crs=catchments.crs,
+        ).to_crs("EPSG:4326")
 
     def _make_buffer(self) -> gpd.GeoDataFrame:
         projected = self.boundary_gdf.to_crs(epsg=self.epsg)
@@ -554,20 +721,44 @@ class getAllInputData:
             self.logger.info("SKIP (exists): nwm_subset_streams/catchments/lakes")
             return
 
+        # Reach-id runs come in two flavours. With no buffer the AOI is exactly
+        # the reaches asked for, so the layers held from id resolution are written
+        # straight out. With a buffer the point is to reach past those catchments,
+        # so the normal spatial download runs over the buffered boundary and picks
+        # up the neighbours inside it — the upstream area HAND needs to be right.
+        reach_exact = self._reach_aoi is not None and self.buffer_m <= 0
+        if reach_exact:
+            self._ingest_resolved_reaches()
+        elif self._reach_aoi is not None:
+            self.logger.info(
+                f"Reach-id run with buffer_m={self.buffer_m:g} --> downloading "
+                "hydrography over the buffered AOI, not just the requested reaches"
+            )
+
         # 1) Bring-your-own flowlines / catchments: normalise + save (no download).
         self._ingest_byo()
 
         # 2) Download whatever was not supplied directly.
-        dl_flowlines = self.get_flowlines and self.byo_flowlines is None
-        dl_catchments = self.get_catchments and self.byo_catchments is None
+        dl_flowlines = (
+            self.get_flowlines and self.byo_flowlines is None and not reach_exact
+        )
+        dl_catchments = (
+            self.get_catchments and self.byo_catchments is None and not reach_exact
+        )
 
-        if not self.get_flowlines and self.byo_flowlines is None:
-            self.logger.info("get_flowlines=False --> skipping flowlines/headwaters")
-        if not self.get_catchments and self.byo_catchments is None:
-            self.logger.info("get_catchments=False --> skipping catchments")
+        # With reach_exact both layers came from id resolution, so there is
+        # nothing for these toggles to skip.
+        if not reach_exact:
+            if not self.get_flowlines and self.byo_flowlines is None:
+                self.logger.info(
+                    "get_flowlines=False --> skipping flowlines/headwaters"
+                )
+            if not self.get_catchments and self.byo_catchments is None:
+                self.logger.info("get_catchments=False --> skipping catchments")
 
-        src = "NHDPlus HR" if _is_high_resolution(self.resolution) else "NWM"
-        self.logger.info(f"--- {src} Flowlines / Catchments + NWM Lakes ---")
+        self.logger.info(
+            f"--- {SOURCE_LABELS[self.source]} Flowlines / Catchments + NWM Lakes ---"
+        )
         try:
             results = getNHDPlusData(
                 boundary=self.buffer_gdf,
@@ -576,8 +767,9 @@ class getAllInputData:
                 download_flowlines=dl_flowlines,
                 download_catchments=dl_catchments,
                 download_lakes=True,
-                resolution=self.resolution,
+                source=self.source,
                 identifier=self.identifier,
+                ngen_kwargs={"include_outlet": self.subset_type == "nexus"},
             )
             if results.get("flowlines") is not None and not results["flowlines"].empty:
                 self.logger.info(f"streams --> {self._filenames['nwm_streams']}")
@@ -591,6 +783,28 @@ class getAllInputData:
                 self.logger.info(f"lakes --> {self._filenames['nwm_lakes']}")
         except Exception as exc:
             self.logger.error(f"NHD failed: {exc}", exc_info=True)
+
+    def _ingest_resolved_reaches(self):
+        """Save the reach-id mode streams/catchments under the standard names."""
+        if self._reach_aoi is None:
+            return
+
+        # Written with exactly the schema the spatial download produces, so every
+        # later stage sees the same columns whichever way the AOI was defined.
+        # levpa_id and feature_id are deliberately not added here — branch
+        # derivation synthesises the level paths and the crosswalk assigns
+        # feature_id, same as for a boundary or HUC run.
+        fl = self._drop_fid(self._reach_aoi.reaches.to_crs(self.epsg))
+        fl.to_file(self._out("nwm_streams"), driver="GPKG", index=False)
+        self.logger.info(f"streams ({len(fl)}) --> {self._filenames['nwm_streams']}")
+
+        cat = self._drop_fid(self._reach_aoi.catchments.to_crs(self.epsg))
+        cat.to_file(self._out("nwm_catchments"), driver="GPKG", index=False)
+        self.logger.info(
+            f"catchments ({len(cat)}) --> {self._filenames['nwm_catchments']}"
+        )
+
+        self._run_headwaters(fl)
 
     def _ingest_byo(self):
         """Normalise bring-your-own flowlines / catchments to the canonical
@@ -627,15 +841,20 @@ class getAllInputData:
     def _run_headwaters(self, flowlines_gdf: gpd.GeoDataFrame):
         """Derive headwater points from flowlines, clipped to inner buffer."""
         try:
-            # clip flowlines to buffer_gdf shrunk by headwater_buffer_cells pixels
-            shrink = -(self.headwater_buffer_cells * self.dem_resolution)
+            # Inset the buffer by headwater_buffer_cells pixels to keep headwaters
+            # off the DEM edge, but never cut inside the AOI itself — with no
+            # buffer there is no margin to give up, so skip the inset entirely.
+            inset = min(
+                self.headwater_buffer_cells * self.dem_resolution, self.buffer_m
+            )
             projected = self.buffer_gdf.to_crs(epsg=self.epsg)
             inner_gdf = projected.copy()
-            inner_gdf["geometry"] = projected.geometry.buffer(shrink)
+            if inset > 0:
+                inner_gdf["geometry"] = projected.geometry.buffer(-inset)
             inner_gdf = inner_gdf[~inner_gdf.is_empty]
 
             fl = flowlines_gdf.to_crs(epsg=self.epsg)
-            if not inner_gdf.empty:
+            if not inner_gdf.empty and inset > 0:
                 fl = gpd.clip(fl, inner_gdf)
 
             hw = find_headwater_points(fl)
@@ -797,6 +1016,84 @@ class getAllInputData:
             self.logger.info(f"  {f.name:<45}  {size_kb:>6} KB")
 
 
+def getAllInputDataBatch(
+    hucs: Optional[Sequence] = None,
+    nwm_ids: Optional[Sequence] = None,
+    separate: bool = False,
+    together: bool = False,
+    run: bool = True,
+    continue_on_error: bool = True,
+    **kwargs,
+) -> list[getAllInputData]:
+    """Prepare one or many AOIs from HUC ids or NWM reach ids.
+
+    Grouping is explicit — geography is never used to guess::
+
+        nwm_ids=[101, 102]              one AOI holding both
+        nwm_ids=[[101], [201]]          one AOI each
+        nwm_ids=[101, 102], separate=True   one AOI per reach
+
+        hucs=["0806", "0807"]           one AOI each (FIM convention)
+        hucs=[["0806", "0807"]]         one combined AOI
+        hucs=[...], together=True       one combined AOI
+
+    Parameters
+    ----------
+    separate : split every group into single-id AOIs
+    together : merge all groups into one AOI
+    run : call ``.run()`` on each AOI; False builds them without downloading
+    continue_on_error : log and carry on when one AOI fails, instead of raising
+
+    Returns the ``getAllInputData`` instance for each AOI, in group order.
+    """
+    if not hucs and not nwm_ids:
+        raise ValueError("Provide hucs or nwm_ids.")
+    if separate and together:
+        raise ValueError("separate and together are mutually exclusive.")
+
+    jobs: list[dict] = []
+    for grp in normalize_huc_groups(hucs, together=together) if hucs else []:
+        if len(grp) > 1:
+            # Several HUCs in one AOI: dissolve them into a boundary file first,
+            # since getAllInputData's huc8= takes a single id.
+            jobs.append({"_hucs": grp})
+        else:
+            jobs.append({"huc8": grp[0]})
+
+    reach_groups = normalize_groups(nwm_ids, separate=separate) if nwm_ids else []
+    if together and len(reach_groups) > 1:
+        reach_groups = [[i for grp in reach_groups for i in grp]]
+    jobs.extend({"nwm_ids": grp} for grp in reach_groups)
+
+    log.info(f"Batch: {len(jobs)} AOI(s)")
+    built: list[getAllInputData] = []
+    for i, job in enumerate(jobs, 1):
+        label = job.get("huc8") or job.get("nwm_ids") or job.get("_hucs")
+        try:
+            if "_hucs" in job:
+                job = {"boundary": _stage_huc_group(job.pop("_hucs"), kwargs)}
+            aoi = getAllInputData(**job, **kwargs)
+            log.info(f"[{i}/{len(jobs)}] {aoi.case_name}")
+            if run:
+                aoi.run()
+            built.append(aoi)
+        except Exception as exc:
+            if not continue_on_error:
+                raise
+            log.error(f"[{i}/{len(jobs)}] AOI {label} failed: {exc}", exc_info=True)
+    return built
+
+
+def _stage_huc_group(hucs: Sequence[str], kwargs: dict) -> Path:
+    """Write a dissolved multi-HUC boundary and return its path."""
+    out_root = Path(kwargs.get("out_dir") or default_output_dir())
+    out_root.mkdir(parents=True, exist_ok=True)
+    path = out_root / f"{huc_label(hucs)}_boundary.gpkg"
+    hucs_to_boundary(hucs).to_file(path, driver="GPKG", index=False)
+    log.info(f"Combined {len(hucs)} HUCs --> {path.name}")
+    return path
+
+
 # CLI
 if __name__ == "__main__":
     import argparse
@@ -804,9 +1101,15 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description="Download and preprocess all FIM input data for a HUC8 or boundary."
     )
-    src = parser.add_mutually_exclusive_group(required=True)
-    src.add_argument("--huc8", help="HUC8 ID (e.g. 08060202)")
-    src.add_argument("--boundary", help="Path to boundary file (gpkg/shp/etc.)")
+    aoi = parser.add_mutually_exclusive_group(required=True)
+    aoi.add_argument("--huc8", help="HUC8 ID (e.g. 08060202)")
+    aoi.add_argument("--boundary", help="Path to boundary file (gpkg/shp/etc.)")
+    aoi.add_argument(
+        "--cat-ids", help="comma-separated ngen catchment ids; implies --source ngen"
+    )
+    aoi.add_argument(
+        "--feature-ids", help="comma-separated NWM feature ids (ngen source)"
+    )
     parser.add_argument("--boundary-layer", default=None)
     parser.add_argument("--out-dir", default="fimbox_preprocess")
     parser.add_argument("--epsg", type=int, default=5070)
@@ -824,10 +1127,18 @@ if __name__ == "__main__":
         help="Skip NWM catchment download (bring your own).",
     )
     parser.add_argument(
-        "--resolution",
-        default="medium",
-        help="Flowline/catchment source: 'medium' (NWM, default) or 'high' "
-        "(NHDPlus HR via pynhd).",
+        "--source",
+        default=NWM_MEDIUM,
+        choices=SOURCES,
+        help="Flowline/catchment source: 'nwmmedium' (NWM, default), 'nwmhigh' "
+        "(NHDPlus HR via pynhd), or 'ngen' (NextGen hydrofabric).",
+    )
+    parser.add_argument(
+        "--subset-type",
+        choices=["nexus", "catchment"],
+        default="nexus",
+        help="How far an ngen id selection reaches: 'nexus' (default) everything "
+        "draining into the seed's outlet, or 'catchment' stopping at the seed.",
     )
     parser.add_argument(
         "--identifier",
@@ -842,10 +1153,15 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
 
+    def _split(value):
+        return [v.strip() for v in value.split(",") if v.strip()] if value else None
+
     pp = getAllInputData(
         huc8=args.huc8,
         boundary=args.boundary,
         boundary_layer=args.boundary_layer,
+        cat_ids=_split(args.cat_ids),
+        feature_ids=_split(args.feature_ids),
         out_dir=args.out_dir,
         epsg=args.epsg,
         dem_resolution=args.dem_resolution,
@@ -853,7 +1169,8 @@ if __name__ == "__main__":
         headwater_buffer_cells=args.headwater_buffer_cells,
         get_flowlines=not args.no_flowlines,
         get_catchments=not args.no_catchments,
-        resolution=args.resolution,
+        source=args.source,
+        subset_type=args.subset_type,
         identifier=args.identifier,
         dem=args.dem,
     )

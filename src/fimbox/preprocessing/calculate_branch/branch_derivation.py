@@ -155,7 +155,9 @@ class BranchDerivation:
         leveed_areas: Optional[str | Path] = None,
         levee_id_attribute: str = "SYSTEM_ID",
         levee_buffer: float = 1000.0,
+        single_levelpath_branch_zero_only: bool = True,
     ) -> None:
+        self.single_levelpath_branch_zero_only = single_levelpath_branch_zero_only
         self.out_dir = Path(out_dir).expanduser().resolve()
         self.area_id = area_id
         self.branch_id_attribute = branch_id_attribute
@@ -350,6 +352,14 @@ class BranchDerivation:
         )
         self._announce("Levelpaths derived")
 
+        # Branches exist to split a network into level paths. When there is only
+        # one, the branch would re-derive what branch zero already covers for the
+        # whole AOI — the same reaches, twice — and it would still need a headwater
+        # seed landing exactly on the line. Hand the AOI to branch zero instead.
+        n_levelpaths = streams[self.branch_id_attribute].nunique()
+        if self.single_levelpath_branch_zero_only and n_levelpaths <= 1:
+            return self._branch_zero_only_result(streams, n_levelpaths)
+
         # load supporting layers and align CRS
         catchments_gdf = _read_vector(catchment_path, self.catchments_layer)
         lakes_gdf = (
@@ -511,6 +521,51 @@ class BranchDerivation:
         self.logger.info("=== BRANCH DERIVATION COMPLETE ===")
         self._announce("Branch derivation complete")
 
+        return result
+
+    def _branch_zero_only_result(
+        self, streams: gpd.GeoDataFrame, n_levelpaths: int
+    ) -> BranchDerivationResult:
+        """Outputs for an AOI that needs no branches: streams, empty branch list.
+
+        Only the levelpath layer is written, since branch zero reads the staged
+        streams/catchments directly and treats levelpaths and headwaters as
+        optional. The empty branch list is what makes the branch loop a no-op.
+        """
+        self.logger.info(
+            "%d reach(es) on %d level path — branch zero covers the AOI, "
+            "no levelpath branches",
+            len(streams),
+            n_levelpaths,
+        )
+
+        identifier = detect_identifier(self.out_dir)
+        if self.branch_id_attribute not in streams.columns:
+            streams[self.branch_id_attribute] = str(
+                streams[self.reach_id_attribute].iloc[0]
+            )
+
+        result = BranchDerivationResult(
+            output_dir=self.out_dir,
+            levelpaths=self.out_dir / source_name("lp_streams", identifier),
+            dissolved_levelpaths=self.out_dir
+            / source_name("lp_streams_dissolved", identifier),
+            extended_levelpaths=self.out_dir
+            / source_name("lp_streams_extended", identifier),
+            catchments_levelpaths=self.out_dir
+            / source_name("lp_catchments", identifier),
+            headwaters=self.out_dir / source_name("headwaters", identifier),
+            dissolved_headwaters=self.out_dir
+            / source_name("lp_streams_dissolved_headwaters", identifier),
+            branch_polygons=self.out_dir / "branch_polygons.gpkg",
+            branch_list=self.out_dir / "branch_ids.lst",
+            branch_dataframe=pd.DataFrame({self.branch_id_attribute: []}),
+        )
+
+        _write_gpkg(streams, result.levelpaths)
+        self.logger.info("Levelpaths --> %s", result.levelpaths.name)
+        result.branch_list.write_text("")
+        self.logger.info("Branch list --> %s (empty)", result.branch_list.name)
         return result
 
     def _setup_logger(self) -> logging.Logger:

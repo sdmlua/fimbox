@@ -28,7 +28,13 @@ log = logging.getLogger(__name__)
 # are not imported here.
 
 # AOI parameters — point this at any user-supplied AOI working directory.
-OUT_DIR = Path(__file__).resolve().parents[2] / "out" / "test_smallB" / "watershed-data"
+# OUT_DIR = Path(__file__).resolve().parents[2] / "out" / "test_smallB" / "watershed-data"
+OUT_DIR = (
+    Path(__file__).resolve().parents[2]
+    / "out"
+    / "nwm_11239459and2more"
+    / "watershed-data"
+)
 
 # Source-data filename prefix.
 IDENTIFIER = "nwmmr"
@@ -138,6 +144,36 @@ PIXEL_PTS = BRANCH_DIR / f"flows_points_pixels_{BRANCH_ID}.gpkg"
 GW_PIXELS = BRANCH_DIR / f"gw_catchments_pixels_{BRANCH_ID}.tif"
 
 
+# Single-reach AOI: a lone reach has no network to split, so BranchDerivation
+# writes an empty branch_ids.lst and leaves the AOI to branch zero. Offline —
+# stages a minimal one-reach input folder in tmp_path.
+def test_single_reach_writes_empty_branch_list(tmp_path):
+    import geopandas as gpd
+    from shapely.geometry import LineString, Polygon
+
+    from fimbox.preprocessing.source_naming import source_name
+
+    reach = LineString([(0, 0), (0, 1000)])
+    poly = Polygon([(-500, -500), (500, -500), (500, 1500), (-500, 1500)])
+
+    gpd.GeoDataFrame(
+        {"ID": [12345], "order_": [4], "to_": [0]}, geometry=[reach], crs=5070
+    ).to_file(tmp_path / source_name("streams"), driver="GPKG")
+    gpd.GeoDataFrame({"ID": [12345]}, geometry=[poly], crs=5070).to_file(
+        tmp_path / source_name("catchments"), driver="GPKG"
+    )
+    gpd.GeoDataFrame({"id": [1]}, geometry=[poly], crs=5070).to_file(
+        tmp_path / "wbd.gpkg", driver="GPKG"
+    )
+
+    result = BranchDerivation(out_dir=tmp_path, excluded_stream_orders=()).run()
+
+    assert result.branch_list.is_file()
+    assert result.branch_list.read_text().strip() == ""  # branch zero only
+    assert result.branch_dataframe.empty
+    assert result.levelpaths.is_file()  # the reach itself is still written
+
+
 # ==========================
 # COMBINED — the whole branch pipeline in one go, matching the step-by-step
 # sequence exactly:
@@ -172,7 +208,8 @@ def test_branchprocessing_combined():
         out_dir=OUT_DIR,
         branch_id_attribute="levpa_id",
         reach_id_attribute="ID",
-        branch_buffer_distance_meters=7000.0,
+        branch_buffer_distance_meters=7000.0,  # Change this if the area is small
+        # single_levelpath_branch_zero_only=True,  #1 reach -> empty branch list, branch zero only
     ).run()
 
     bridge_diff = BRIDGE_DIFF if BRIDGE_DIFF.exists() else None

@@ -6,6 +6,10 @@ Date updated: May 2026
 Description: Downloads NWM Flowlines, Catchments, and Lakes from ArcGIS FeatureServer
 endpoints. Uses intersect (not clip) so polygon boundaries are never cut. Pages are
 fetched in parallel with dask.delayed for I/O-bound speed.
+
+``getNHDPlusData`` is the unified entry point and dispatches on ``source``:
+``nwmmedium`` (here), ``nwmhigh`` (NHDPlus HR via pynhd), or ``ngen``
+(:mod:`fimbox.ngen`). Lakes always come from NWM.
 """
 
 import json
@@ -145,7 +149,8 @@ class ArcGISDownloader:
         """
         Parameters
         ----------
-        boundary : file path, GeoDataFrame, shapely geometry, or (xmin,ymin,xmax,ymax) tuple
+        boundary : file path, GeoDataFrame, shapely geometry, or (xmin,ymin,xmax,ymax)
+            tuple. None drops the spatial filter, in which case `where` is required.
         boundary_layer : layer name when boundary is a GeoPackage
         boundary_crs : CRS of boundary when it is a shapely geometry or bbox
         where : SQL filter (default "1=1" = all records)
@@ -153,26 +158,33 @@ class ArcGISDownloader:
         out_name : output filename
         out_layer : layer name inside the GeoPackage
         """
-        geom = self._load_geometry(boundary, boundary_layer, boundary_crs)
-        esri_geom = self._to_esri_geom(geom)
-
         base_params = {
             "f": "geojson",
             "where": where,
             "outFields": "*",
             "returnGeometry": "true",
-            "geometry": json.dumps(esri_geom),
-            "geometryType": "esriGeometryPolygon",
-            "spatialRel": "esriSpatialRelIntersects",
-            "inSR": 4326,
             "outSR": self.out_sr,
         }
+        # boundary=None queries by attribute alone — needed to resolve reach ids
+        # before any AOI geometry exists.
+        if boundary is not None:
+            geom = self._load_geometry(boundary, boundary_layer, boundary_crs)
+            base_params |= {
+                "geometry": json.dumps(self._to_esri_geom(geom)),
+                "geometryType": "esriGeometryPolygon",
+                "spatialRel": "esriSpatialRelIntersects",
+                "inSR": 4326,
+            }
+        elif where == "1=1":
+            raise ValueError(
+                "boundary=None requires a `where` filter — refusing to fetch the whole layer."
+            )
 
         # Count
         count_data = self._post({**base_params, "f": "json", "returnCountOnly": "true"})
         total = count_data.get("count", 0)
         if total == 0:
-            logger.warning("No records returned by service for this boundary.")
+            logger.warning(f"No records returned by service (where={where!r}).")
             return gpd.GeoDataFrame()
 
         n_pages = math.ceil(total / self.page_size)
@@ -324,13 +336,50 @@ class NWMLakesDownloader(ArcGISDownloader):
         )
 
 
-# NHDPlus High Resolution (pynhd) — flowlines + catchments
-_HIGH_RES_ALIASES = {"high", "high-resolution", "hr", "highres", "nhdhr", "nhdplushr"}
+# Hydrography sources
+NWM_MEDIUM = "nwmmedium"  # NWM ArcGIS FeatureServer (default)
+NWM_HIGH = "nwmhigh"  # NHDPlus High Resolution via pynhd
+NGEN = "ngen"  # NextGen community hydrofabric
+
+SOURCES = (NWM_MEDIUM, NWM_HIGH, NGEN)
+
+SOURCE_LABELS = {
+    NWM_MEDIUM: "NWM",
+    NWM_HIGH: "NHDPlus HR",
+    NGEN: "ngen hydrofabric",
+}
+
+# Accepted spellings, including the pre-`source` resolution values.
+_SOURCE_ALIASES = {
+    "nwmmedium": NWM_MEDIUM,
+    "nwm-medium": NWM_MEDIUM,
+    "nwmmr": NWM_MEDIUM,
+    "nwm": NWM_MEDIUM,
+    "medium": NWM_MEDIUM,
+    "nwmhigh": NWM_HIGH,
+    "nwm-high": NWM_HIGH,
+    "nwmwhr": NWM_HIGH,
+    "high": NWM_HIGH,
+    "high-resolution": NWM_HIGH,
+    "highres": NWM_HIGH,
+    "hr": NWM_HIGH,
+    "nhdhr": NWM_HIGH,
+    "nhdplushr": NWM_HIGH,
+    "ngen": NGEN,
+    "nextgen": NGEN,
+    "hydrofabric": NGEN,
+}
 
 
-def _is_high_resolution(resolution: Optional[str]) -> bool:
-    """True when ``resolution`` requests NHDPlus High Resolution."""
-    return str(resolution).strip().lower().replace("_", "-") in _HIGH_RES_ALIASES
+def normalize_source(source: Optional[str]) -> str:
+    """Resolve a hydrography source spelling to one of :data:`SOURCES`."""
+    key = str(source or NWM_MEDIUM).strip().lower().replace("_", "-")
+    try:
+        return _SOURCE_ALIASES[key]
+    except KeyError:
+        raise ValueError(
+            f"unknown hydrography source {source!r}; expected one of {SOURCES}."
+        ) from None
 
 
 def _boundary_to_geom(boundary, boundary_layer=None, boundary_crs=None):
@@ -442,9 +491,10 @@ def getNHDPlusData(
     download_flowlines: bool = True,
     download_catchments: bool = True,
     download_lakes: bool = True,
-    resolution: str = "medium",
+    source: str = NWM_MEDIUM,
     identifier: str = DEFAULT_IDENTIFIER,
     n_workers: int = 8,
+    ngen_kwargs: Optional[dict] = None,
 ) -> dict:
     """
     Download flowlines, catchments, and lakes for a given boundary.
@@ -461,19 +511,24 @@ def getNHDPlusData(
     download_flowlines : include flowlines (default True)
     download_catchments : include catchments (default True)
     download_lakes : include lakes (default True; always from NWM)
-    resolution : ``"medium"`` (default) downloads NWM flowlines/catchments from
-        the ArcGIS FeatureServer; ``"high"`` (aliases: ``high-resolution``,
-        ``hr``) downloads NHDPlus High Resolution flowlines/catchments via
-        ``pynhd`` for the AOI. Lakes always come from NWM either way.
+    source : hydrography source for flowlines/catchments —
+        ``"nwmmedium"`` (default) the NWM ArcGIS FeatureServer,
+        ``"nwmhigh"`` NHDPlus High Resolution via ``pynhd``, or
+        ``"ngen"`` the NextGen community hydrofabric.
+        Lakes always come from NWM whichever is chosen.
     identifier : filename prefix for the saved files (default ``"nwm"``). Pass a
         custom value to stage data under a non-NWM label, e.g. ``"3dhp"`` ->
         ``3dhp_subset_streams.gpkg``.
     n_workers : max parallel page-fetch threads per dataset (NWM path)
+    ngen_kwargs : extra selectors forwarded to :func:`fimbox.ngen.getNgenData`
+        (``cat_ids``, ``feature_ids``, ``gages``, ``include_outlet``), used only
+        when ``source="ngen"``.
 
     Returns
     -------
     dict with keys "flowlines", "catchments", "lakes" (GeoDataFrames or None)
     """
+    source = normalize_source(source)
     results = {"flowlines": None, "catchments": None, "lakes": None}
 
     common = dict(
@@ -482,9 +537,25 @@ def getNHDPlusData(
         out_dir=out_dir,
     )
 
-    if _is_high_resolution(resolution):
+    if source == NGEN:
+        logger.info("Source = ngen --> NextGen community hydrofabric (parquet)")
+        from ...ngen import getNgenData
+
+        ngen = getNgenData(
+            boundary=boundary,
+            boundary_layer=boundary_layer,
+            out_dir=out_dir,
+            epsg=epsg,
+            download_flowlines=download_flowlines,
+            download_catchments=download_catchments,
+            identifier=identifier,
+            **(ngen_kwargs or {}),
+        )
+        results["flowlines"] = ngen.get("flowlines")
+        results["catchments"] = ngen.get("catchments")
+    elif source == NWM_HIGH:
         logger.info(
-            "Resolution = high --> NHDPlus High Resolution flowlines/catchments (pynhd)"
+            "Source = nwmhigh --> NHDPlus High Resolution flowlines/catchments (pynhd)"
         )
         hr = getNHDPlusHRData(
             boundary=boundary,
@@ -516,7 +587,7 @@ def getNHDPlusData(
             except Exception as exc:
                 logger.error(f"Catchments download failed: {exc}", exc_info=True)
 
-    # Lakes always come from NWM, regardless of resolution.
+    # Lakes always come from NWM, whichever source was chosen.
     if download_lakes:
         logger.info("--- NWM Lakes ---")
         try:
@@ -637,9 +708,11 @@ if __name__ == "__main__":
     parser.add_argument("--no-catchments", action="store_true")
     parser.add_argument("--no-lakes", action="store_true")
     parser.add_argument(
-        "--resolution",
-        default="medium",
-        help="'medium' (NWM, default) or 'high' (NHDPlus HR flowlines/catchments via pynhd)",
+        "--source",
+        default=NWM_MEDIUM,
+        choices=SOURCES,
+        help="flowline/catchment source: 'nwmmedium' (default), 'nwmhigh' "
+        "(NHDPlus HR via pynhd), or 'ngen' (NextGen hydrofabric)",
     )
     parser.add_argument("--workers", type=int, default=8)
     args = parser.parse_args()
@@ -651,7 +724,7 @@ if __name__ == "__main__":
         download_flowlines=not args.no_flowlines,
         download_catchments=not args.no_catchments,
         download_lakes=not args.no_lakes,
-        resolution=args.resolution,
+        source=args.source,
         n_workers=args.workers,
     )
 

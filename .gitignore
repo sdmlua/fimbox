@@ -30,6 +30,7 @@ ENV/
 htmlcov/
 coverage.xml
 *.cover
+cache/
 
 # ---- Jupyter / IPython ----
 .ipynb_checkpoints/

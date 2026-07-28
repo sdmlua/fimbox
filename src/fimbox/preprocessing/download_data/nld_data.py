@@ -6,6 +6,7 @@ Description: Downloads and processes USACE National Levee Database (NLD) data,
 which includes levee lines and protected areas, filtered by a user-provided spatial boundary.
 """
 
+import json
 import logging
 import os
 import time
@@ -17,6 +18,8 @@ import pandas as pd
 import requests
 from shapely.geometry import LineString, MultiLineString, MultiPolygon, Polygon
 from tqdm import tqdm
+
+from .utils import select_intersecting
 
 log = logging.getLogger(__name__)
 
@@ -368,20 +371,34 @@ class DownloadNLD:
     def _query_nld(self, url: str, is_poly: bool = False) -> gpd.GeoDataFrame:
         layer_type = "Polygons (Layer 16)" if is_poly else "Lines (Layer 15)"
 
-        # Spatial bbox filter is non-functional on this service — download all, clip locally.
-        # Lines use _execute_query_with_z (f=json + returnZ=true) to preserve Z elevation.
-        # Polygons use the standard GeoJSON path (no Z needed).
+        # Filter server-side on the AOI envelope so only nearby levees come back
+        # instead of the whole national layer (~6200 features per layer). The
+        # envelope is a box, so the precise clip to the boundary still happens
+        # locally below.
+        # Lines use _execute_query_with_z (f=json + returnZ=true) to preserve Z
+        # elevation; polygons use the standard path (no Z needed).
+        xmin, ymin, xmax, ymax = self.boundary_gdf.to_crs("EPSG:4269").total_bounds
         base_params = {
             "where": "1=1",
             "outFields": "*",
             "returnGeometry": "true",
             "outSR": "4269",
+            "geometry": json.dumps(
+                {
+                    "xmin": float(xmin),
+                    "ymin": float(ymin),
+                    "xmax": float(xmax),
+                    "ymax": float(ymax),
+                    "spatialReference": {"wkid": 4269},
+                }
+            ),
+            "geometryType": "esriGeometryEnvelope",
+            "spatialRel": "esriSpatialRelIntersects",
+            "inSR": "4269",
         }
 
         try:
-            log.info(
-                f"Downloading NLD {layer_type} (spatial filter unsupported, clipping locally)"
-            )
+            log.info(f"Downloading NLD {layer_type} within the AOI envelope")
             rest = ESRI_REST(url)
             if is_poly:
                 gdf_raw = rest._execute_query(base_params)
@@ -397,16 +414,21 @@ class DownloadNLD:
             if gdf_raw.crs is None:
                 gdf_raw = gdf_raw.set_crs("EPSG:4269")
 
-            boundary_4269 = self.boundary_gdf.to_crs("EPSG:4269")
-            clipped = gpd.clip(gdf_raw, boundary_4269)
+            # Whole features, not clipped: a levee cut at the boundary would lose
+            # the rest of its line and the Z profile along it, and a cropped
+            # leveed area would misstate what it protects. The envelope query
+            # above is bbox-only, so this also drops features sitting in a bbox
+            # corner outside the boundary.
+            selected = select_intersecting(
+                gdf_raw, self.boundary_gdf.to_crs("EPSG:4269")
+            )
 
-            if clipped.empty:
+            if selected.empty:
                 log.info(f"NLD {layer_type}: none intersecting this area.")
-                return clipped
+                return selected
 
-            # Lines: reproject XY but preserve Z — use set_crs + manual reproject
-            # to_crs() preserves Z in modern geopandas when the geometry already has it
-            return clipped.to_crs(epsg=self.epsg)
+            # to_crs() preserves Z when the geometry already carries it.
+            return selected.to_crs(epsg=self.epsg)
 
         except Exception as e:
             log.error(f"NLD {layer_type} failed: {e}", exc_info=True)

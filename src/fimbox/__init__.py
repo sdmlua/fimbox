@@ -199,9 +199,38 @@ except ImportError:
     pass
 
 try:
-    from .preprocessing import getAllInputData, preprocess_nld_lines
+    from .preprocessing import (
+        getAllInputData,
+        getAllInputDataBatch,
+        preprocess_nld_lines,
+    )
 
-    __all__ += ["getAllInputData", "preprocess_nld_lines"]
+    __all__ += [
+        "getAllInputData",
+        "getAllInputDataBatch",
+        "preprocess_nld_lines",
+    ]
+except ImportError:
+    pass
+
+try:
+    from .preprocessing import (
+        ReachAOI,
+        fetch_nwm_catchments_by_id,
+        fetch_nwm_flowlines_by_id,
+        hucs_to_boundary,
+        reaches_to_boundary,
+        resolve_reach_group,
+    )
+
+    __all__ += [
+        "ReachAOI",
+        "fetch_nwm_catchments_by_id",
+        "fetch_nwm_flowlines_by_id",
+        "hucs_to_boundary",
+        "reaches_to_boundary",
+        "resolve_reach_group",
+    ]
 except ImportError:
     pass
 
@@ -266,6 +295,16 @@ try:
     from .preprocessing import BridgeDEMDiff, generateBridgeRaster
 
     __all__ += ["generateBridgeRaster", "BridgeDEMDiff"]
+except ImportError:
+    pass
+
+# ngen (fimbox.ngen.hydrofabric): NextGen hydrofabric flowpaths/divides read
+# from the community parquet mirror, selectable by HUC8/boundary, ngen cat-id,
+# NWM feature-id, or gage. Also reachable as source="ngen" in getAllInputData.
+try:
+    from .ngen import NgenHydrofabric, NgenSelection, getNgenData
+
+    __all__ += ["getNgenData", "NgenHydrofabric", "NgenSelection"]
 except ImportError:
     pass
 

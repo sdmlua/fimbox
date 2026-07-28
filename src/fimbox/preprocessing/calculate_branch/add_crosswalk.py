@@ -569,9 +569,46 @@ def _build_hydro_table(
         .values
     )
 
+    # Seed the columns calibration fills in later, so the schema is the same
+    # whether or not a given step runs. An all-null column then means "the step
+    # did not run", which is what the calibration routines test for.
+    for col, unset in _HYDRO_TABLE_PLACEHOLDERS.items():
+        if col not in ht.columns:
+            ht[col] = unset
+
+    # Pre-calibration values, kept so a rerun can reset back to baseline.
+    ht["default_discharge_cms"] = ht["discharge_cms"]
+    for col in ("Volume (m3)", "WetArea (m2)", "HydraulicRadius (m)", "ManningN"):
+        if col in ht.columns:
+            ht[f"default_{col}"] = ht[col]
+
     ht["HydroID"] = ht["HydroID"].astype(str)
     ht["feature_id"] = ht["feature_id"].astype(int).astype(str)
     return ht
+
+
+# Columns the hydroTable carries from creation, paired with their "not yet
+# populated" value.
+_HYDRO_TABLE_PLACEHOLDERS: dict[str, object] = {
+    # Bathymetric adjustment. Left out of HYDROTABLE_DTYPES on purpose: readers
+    # take it as object once bathymetry writes strings, float64 while empty.
+    "Bathymetry_source": pd.NA,
+    # Channel / overbank subdivision
+    "subdiv_applied": False,
+    "channel_n": pd.NA,
+    "overbank_n": pd.NA,
+    "subdiv_discharge_cms": pd.NA,
+    # Observation-driven SRC calibration
+    "calb_applied": False,
+    "last_updated": pd.NA,
+    "submitter": pd.NA,
+    "obs_source": pd.NA,
+    "precalb_discharge_cms": pd.NA,
+    "calb_coef_usgs": pd.NA,
+    "calb_coef_ras2fim": pd.NA,
+    "calb_coef_spatial": pd.NA,
+    "calb_coef_final": pd.NA,
+}
 
 
 def _build_src_json(src: pd.DataFrame) -> dict[str, dict[str, list]]:

@@ -131,14 +131,54 @@ __all__ = [
 # preprocess_area
 # area input staging, NLD line elevation preprocessing
 try:
-    from .preprocess_area import getAllInputData, preprocess_nld_lines
+    from .preprocess_area import (
+        getAllInputData,
+        getAllInputDataBatch,
+        preprocess_nld_lines,
+    )
 
-    __all__ += ["getAllInputData", "preprocess_nld_lines"]
+    __all__ += [
+        "getAllInputData",
+        "getAllInputDataBatch",
+        "preprocess_nld_lines",
+    ]
+except ImportError:
+    pass
+
+# aoi_from_ids
+# build AOIs from HUC ids or NWM reach ids
+try:
+    from .aoi_from_ids import (
+        ReachAOI,
+        fetch_nwm_catchments_by_id,
+        fetch_nwm_flowlines_by_id,
+        hucs_to_boundary,
+        normalize_groups,
+        normalize_huc_groups,
+        reaches_to_boundary,
+        resolve_reach_group,
+    )
+
+    __all__ += [
+        "ReachAOI",
+        "fetch_nwm_catchments_by_id",
+        "fetch_nwm_flowlines_by_id",
+        "hucs_to_boundary",
+        "normalize_groups",
+        "normalize_huc_groups",
+        "reaches_to_boundary",
+        "resolve_reach_group",
+    ]
 except ImportError:
     pass
 
 try:
     from .download_data import (
+        NGEN,
+        NWM_HIGH,
+        NWM_MEDIUM,
+        SOURCE_LABELS,
+        SOURCES,
         DEMProcessor,
         DEMResolutionUnavailable,
         DownloadDEMDomain,
@@ -158,6 +198,7 @@ try:
         getNHDPlusHRData,
         normalize_catchments,
         normalize_flowlines,
+        normalize_source,
     )
 
     __all__ += [
@@ -170,6 +211,12 @@ try:
         "getNHDPlusHRData",
         "normalize_flowlines",
         "normalize_catchments",
+        "normalize_source",
+        "SOURCES",
+        "SOURCE_LABELS",
+        "NWM_MEDIUM",
+        "NWM_HIGH",
+        "NGEN",
         "NWMFlowlinesDownloader",
         "NWMCatchmentsDownloader",
         "NWMLakesDownloader",
