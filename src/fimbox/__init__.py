@@ -284,3 +284,29 @@ __all__ += [
 # On-the-fly access to the bundled reference/calibration lookup tables, fetched
 # anonymously from the public SDML S3 bucket via pooch (imported at module top).
 __all__ += ["fetch_data"]
+
+# NextGen-in-a-Box bridge: resolve an AOI to the NextGen v2.2 hydrofabric
+# catchments and pull ngen/t-route discharge from the public CIROH community
+# datastream bucket. Heavy/optional deps (s3fs, xarray, geopandas) are imported
+# lazily inside the functions, so guard the import to keep a partial install
+# from breaking `import fimbox`.
+try:
+    from .nextgen import (
+        AOIHydrofabric,
+        NextGenAOI,
+        NextGenDatastream,
+        NextGenHydrofabric,
+        NextGenResult,
+        getNextGenAOI,
+    )
+
+    __all__ += [
+        "getNextGenAOI",
+        "NextGenAOI",
+        "NextGenResult",
+        "NextGenHydrofabric",
+        "AOIHydrofabric",
+        "NextGenDatastream",
+    ]
+except Exception:
+    pass
