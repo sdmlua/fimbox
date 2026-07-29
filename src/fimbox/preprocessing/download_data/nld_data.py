@@ -24,6 +24,15 @@ from .utils import select_intersecting
 log = logging.getLogger(__name__)
 
 
+class NLDQueryError(RuntimeError):
+    """A NLD layer could not be downloaded.
+
+    Kept distinct from an empty result on purpose: most AOIs genuinely have no
+    levees, and a failed request must never be reported as one of them — a
+    missing levee burn quietly changes the HAND surface.
+    """
+
+
 class ESRI_REST:
     """
     A robust utility for querying ESRI Feature Services.
@@ -78,6 +87,7 @@ class ESRI_REST:
                 requests.exceptions.ChunkedEncodingError,
                 requests.exceptions.ConnectionError,
                 requests.exceptions.Timeout,
+                requests.exceptions.HTTPError,
             ) as exc:
                 last_exc = exc
                 if attempt < self.MAX_PAGE_RETRIES - 1:
@@ -92,8 +102,12 @@ class ESRI_REST:
                     time.sleep(wait)
         raise last_exc
 
-    def _execute_query(self, params: dict) -> gpd.GeoDataFrame:
+    def _execute_query(self, params: dict, with_z: bool = False) -> gpd.GeoDataFrame:
         """Paginated ESRI Feature Service query with retry-on-truncation.
+
+        ``with_z=True`` asks the server for Z coordinates, which levee lines need
+        for the DEM burn. Geometry is parsed straight out of ESRI JSON, so a
+        third ordinate simply flows through into the shapely coords.
 
         Uses ESRI native JSON (``f=json``) and parses ``features[].geometry``
         directly into shapely instead of round-tripping through GeoJSON. This
@@ -115,9 +129,14 @@ class ESRI_REST:
             return gpd.GeoDataFrame()
 
         if self.verbose:
-            log.info(f"ESRI query: {total_features} features to download")
+            log.info(
+                f"ESRI query{' (with Z)' if with_z else ''}: "
+                f"{total_features} features to download"
+            )
 
         base_params = {**params, "f": "json"}
+        if with_z:
+            base_params["returnZ"] = "true"
         results: list[gpd.GeoDataFrame] = []
         offset = 0
         page_size = self.INITIAL_PAGE_SIZE
@@ -154,8 +173,20 @@ class ESRI_REST:
                 page_size = used_size  # remember the working size
 
         if not results:
-            return gpd.GeoDataFrame()
-        return pd.concat(results, ignore_index=True)
+            # The server counted features and then handed back none of them.
+            # That is a failed download, not an empty area.
+            raise NLDQueryError(
+                f"service reported {total_features} features but returned none"
+            )
+
+        gdf = gpd.GeoDataFrame(pd.concat(results, ignore_index=True))
+        if len(gdf) < total_features:
+            log.warning(
+                "ESRI query returned %d of %d features — paging stopped early",
+                len(gdf),
+                total_features,
+            )
+        return gdf
 
     def _fetch_page(
         self, base_params: dict, offset: int, page_size: int
@@ -250,67 +281,14 @@ class ESRI_REST:
         return None
 
     def _execute_query_with_z(self, params: dict) -> gpd.GeoDataFrame:
+        """Levee lines, Z coordinates included.
+
+        GeoJSON silently strips Z, so this asks for ESRI JSON with returnZ. It
+        now shares the paged, shrink-on-failure fetch used for polygons — the
+        levee layer is the one that most needs it, since a truncated response on
+        a levee-dense AOI used to surface as "no levees here".
         """
-        Like _execute_query but uses f=json + returnZ=true so Z coordinates are
-        preserved. Parses ESRI JSON 'paths' directly into shapely LineStrings.
-        GeoJSON silently strips Z, so this path is required for levee lines.
-        """
-        total_features = self._get_metadata(params)
-        if total_features == 0:
-            return gpd.GeoDataFrame()
-
-        base_params = {**params, "f": "json", "returnZ": "true"}
-        if self.verbose:
-            log.info(f"ESRI query (with Z): {total_features} features to download")
-
-        results = []
-        offset = 0
-        limit_reached = True
-
-        with tqdm(
-            total=total_features, disable=not self.verbose, desc="Downloading"
-        ) as pbar:
-            while limit_reached:
-                current_params = {**base_params, "resultOffset": offset}
-                resp = self._get_with_retry(current_params, timeout=120)
-                data = resp.json()
-                if "error" in data:
-                    raise Exception(
-                        f"ESRI Error {data['error']['code']}: {data['error']['message']}"
-                    )
-
-                features = data.get("features", [])
-                if not features:
-                    break
-
-                rows = []
-                for feat in features:
-                    attrs = feat.get("attributes", {})
-                    paths = feat.get("geometry", {}).get("paths", [])
-                    if not paths:
-                        continue
-                    lines = [LineString(path) for path in paths if len(path) >= 2]
-                    if not lines:
-                        continue
-                    geom = lines[0] if len(lines) == 1 else MultiLineString(lines)
-                    attrs["geometry"] = geom
-                    rows.append(attrs)
-
-                if rows:
-                    batch = gpd.GeoDataFrame(rows, geometry="geometry")
-                    results.append(batch)
-
-                offset += len(features)
-                pbar.update(len(features))
-                limit_reached = data.get("exceededTransferLimit", False)
-                if not limit_reached and offset < total_features:
-                    limit_reached = True
-                elif offset >= total_features:
-                    limit_reached = False
-
-        if not results:
-            return gpd.GeoDataFrame()
-        return pd.concat(results, ignore_index=True)
+        return self._execute_query(params, with_z=True)
 
 
 class DownloadNLD:
@@ -319,10 +297,56 @@ class DownloadNLD:
     using the new geospatial.sec.usace.army.mil endpoint.
     """
 
-    # UPDATED URLs and LAYER IDs
     BASE_SERVICE_URL = "https://geospatial.sec.usace.army.mil/dls/rest/services/NLD/Public/FeatureServer"
+
+    # Levee centrelines live in "System Routes", leveed/protected areas in
+    # "Leveed Areas". The ids below are today's numbering and are used as a
+    # fallback; the real ids are looked up by name at runtime so a USACE
+    # renumbering shows up as a warning instead of a silently empty download.
+    LAYER_NAMES = {"lines": "System Routes", "polys": "Leveed Areas"}
+    FALLBACK_LAYER_IDS = {"lines": 15, "polys": 16}
+
+    _layer_ids_cache: Optional[dict] = None
+
     LINE_URL = f"{BASE_SERVICE_URL}/15/query"
     POLY_URL = f"{BASE_SERVICE_URL}/16/query"
+
+    @classmethod
+    def resolve_layer_ids(cls) -> dict:
+        """Map our two layers to live service ids, by name. Cached per process."""
+        if cls._layer_ids_cache is not None:
+            return cls._layer_ids_cache
+
+        ids = dict(cls.FALLBACK_LAYER_IDS)
+        try:
+            resp = requests.get(cls.BASE_SERVICE_URL, params={"f": "json"}, timeout=60)
+            resp.raise_for_status()
+            by_name = {
+                str(layer.get("name", "")).strip().lower(): layer.get("id")
+                for layer in resp.json().get("layers", [])
+            }
+            for key, name in cls.LAYER_NAMES.items():
+                found = by_name.get(name.lower())
+                if found is None:
+                    log.warning(
+                        "NLD service has no '%s' layer — falling back to id %s",
+                        name,
+                        ids[key],
+                    )
+                elif found != ids[key]:
+                    log.info(
+                        "NLD '%s' moved to layer %s (was %s)", name, found, ids[key]
+                    )
+                    ids[key] = found
+        except Exception as exc:
+            log.warning(
+                "Could not read NLD service metadata (%s) — using layer ids %s",
+                exc,
+                ids,
+            )
+
+        cls._layer_ids_cache = ids
+        return ids
 
     def __init__(
         self,
@@ -338,6 +362,15 @@ class DownloadNLD:
         self.polys_name = polys_name or "NLD_Polygons.gpkg"
 
         self.logger = log
+
+        layer_ids = self.resolve_layer_ids()
+        self.layer_ids = layer_ids
+        self.LINE_URL = f"{self.BASE_SERVICE_URL}/{layer_ids['lines']}/query"
+        self.POLY_URL = f"{self.BASE_SERVICE_URL}/{layer_ids['polys']}/query"
+
+        # Layers that errored out, as opposed to came back empty. Callers read
+        # this to tell "no levees here" apart from "we never found out".
+        self.failed_layers: list[str] = []
 
         from ...logging_utils import default_output_dir
 
@@ -369,7 +402,8 @@ class DownloadNLD:
         return gdf.to_crs(epsg=self.epsg)
 
     def _query_nld(self, url: str, is_poly: bool = False) -> gpd.GeoDataFrame:
-        layer_type = "Polygons (Layer 16)" if is_poly else "Lines (Layer 15)"
+        key = "polys" if is_poly else "lines"
+        layer_type = f"{self.LAYER_NAMES[key]} (Layer {self.layer_ids[key]})"
 
         # Filter server-side on the AOI envelope so only nearby levees come back
         # instead of the whole national layer (~6200 features per layer). The
@@ -397,14 +431,20 @@ class DownloadNLD:
             "inSR": "4269",
         }
 
+        log.info(f"Downloading NLD {layer_type} within the AOI envelope")
+        rest = ESRI_REST(url)
         try:
-            log.info(f"Downloading NLD {layer_type} within the AOI envelope")
-            rest = ESRI_REST(url)
             if is_poly:
                 gdf_raw = rest._execute_query(base_params)
             else:
                 gdf_raw = rest._execute_query_with_z(base_params)
+        except Exception as exc:
+            # Deliberately not swallowed into an empty frame: the caller records
+            # this layer as failed so nothing downstream reads the gap as
+            # "this AOI has no levees".
+            raise NLDQueryError(f"NLD {layer_type} download failed: {exc}") from exc
 
+        try:
             if gdf_raw.empty:
                 # No data is a normal outcome (many AOIs have no levees), not a
                 # failure — report it plainly at INFO.
@@ -430,26 +470,37 @@ class DownloadNLD:
             # to_crs() preserves Z when the geometry already carries it.
             return selected.to_crs(epsg=self.epsg)
 
-        except Exception as e:
-            log.error(f"NLD {layer_type} failed: {e}", exc_info=True)
-            return gpd.GeoDataFrame()
+        except Exception as exc:
+            raise NLDQueryError(f"NLD {layer_type} processing failed: {exc}") from exc
 
     def run(self):
         log.info("--- NLD download ---")
 
-        lines = self._query_nld(self.LINE_URL, is_poly=False)
-        if not lines.empty:
-            lines.to_file(self.output_dir / self.lines_name, driver="GPKG")
-            log.info(f"NLD levee lines ({len(lines)} features) --> {self.lines_name}")
+        for key, url, out_name, label in (
+            ("lines", self.LINE_URL, self.lines_name, "levee lines"),
+            ("polys", self.POLY_URL, self.polys_name, "leveed-area polygons"),
+        ):
+            # Each layer stands on its own: a failure on one is recorded and the
+            # other is still attempted.
+            try:
+                gdf = self._query_nld(url, is_poly=(key == "polys"))
+            except NLDQueryError as exc:
+                self.failed_layers.append(key)
+                log.error("%s", exc, exc_info=True)
+                continue
 
-        polys = self._query_nld(self.POLY_URL, is_poly=True)
-        if not polys.empty:
-            polys.to_file(self.output_dir / self.polys_name, driver="GPKG")
-            log.info(
-                f"NLD leveed-area polygons ({len(polys)} features) --> {self.polys_name}"
+            if not gdf.empty:
+                gdf.to_file(self.output_dir / out_name, driver="GPKG")
+                log.info(f"NLD {label} ({len(gdf)} features) --> {out_name}")
+
+        if self.failed_layers:
+            log.error(
+                "NLD download incomplete — %s could not be retrieved. "
+                "Absence of these files does NOT mean the area has no levees.",
+                ", ".join(self.LAYER_NAMES[k] for k in self.failed_layers),
             )
-
-        log.info("NLD download complete.")
+        else:
+            log.info("NLD download complete.")
 
 
 # CLI

@@ -23,8 +23,9 @@ Usage
         src_bankfull_toggle=True, bankfull_flows_file="bankfull.csv",
         src_subdiv_toggle=True,   vmann_input_file="mannings.csv",
         nonmonotonic_src_adjustment=True,
-        job_branch_limit=4,
     ))
+    # job_branch_limit is left unset above: the branch-parallel steps size
+    # themselves to the machine. Set it only to cap the pool (or 1 to go serial).
 
 Each ``Calibrator`` step can also be run on its own (see the individual
 classes in this subpackage), which is what the step-by-step tests exercise.
@@ -118,8 +119,10 @@ class CalibrationConfig:
     scan_logs: bool = False
 
     # --- execution ---
-    # Worker count for the branch-parallel routines.
-    job_branch_limit: int = 1
+    # Worker count for the branch-parallel routines. Leave it alone (or pass
+    # None / 0) to use everything the machine can feed; a number larger than
+    # that is clamped rather than obeyed. Pass 1 for a serial, debuggable run.
+    job_branch_limit: Optional[int] = None
 
     # When True, toggled-on routines that aren't ported yet warn and skip instead of raising CalibrationNotImplemented.
     skip_unimplemented: bool = False

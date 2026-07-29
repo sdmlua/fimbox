@@ -54,7 +54,6 @@ from .outputs_cleanup import remove_deny_list_files
 from .process_branches import (
     AOIProcessingConfig,
     BranchResult,
-    _process_single_branch,
     _resolve_paths,
     process_branches,
 )
@@ -104,10 +103,14 @@ def calculate_allbranches(
     Steps:
         1. Write branch_ids.csv with the full branch inventory (branch 0 first,
            then every id from branch_ids.lst).
-        2. Run BranchZero for the whole AOI (branch_id="0") in the main process,
-           exactly as the step-by-step test does. Skip when ``run_branch_zero=False``
+        2. Publish the shared AOI-root rasters (the clipped DEM and bridge
+           elevation diff every other branch clips from) in the main process, so
+           they land before the fan-out. Skip when ``run_branch_zero=False``
            (outputs already exist from a previous run).
-        3. Dispatch every non-zero branch to Dask in parallel via process_branches.
+        3. Dispatch every branch to Dask in parallel via process_branches, branch
+           zero included: its raster prep and CreateHAND are the longest work in
+           the run and no sibling reads their outputs, so they overlap with the
+           siblings instead of holding the pool idle.
         4. Apply the AOI-level deny-list cleanup to remove intermediates.
 
     Returns an :class:`AllBranchesResult` summarising what got recorded and
@@ -147,17 +150,24 @@ def calculate_allbranches(
         f"(0 + {len(all_ids) - 1} from {Path(branch_list_path).name})"
     )
 
-    # Step 2: BranchZero (whole-AOI, serial) then CreateHAND on branch 0.
-    # _process_single_branch skips BranchZero re-run via sentinel file.
+    # Step 2: publish the shared AOI-root rasters, and nothing more. This is the
+    # only part of branch zero the siblings genuinely wait on — <aoi_dir>/dem.tif
+    # and bridge_elev_diff.tif, which every non-zero branch clips from (and both
+    # are already in place whenever dem_path is the AOI-root dem, so this usually
+    # costs nothing). Branch zero's raster conditioning — levee burn, AGREE, pit
+    # fill, D8 — used to run here too, holding the whole pool idle for a minute
+    # and a half on a HUC8, even though nothing outside branches/0/ reads any of
+    # it. It now runs inside branch zero's own pool task in step 3.
     cfg = _resolve_paths(cfg)
-    b0_result: Optional[BranchResult] = None
+    branch_zero_prepared = False
     if run_branch_zero:
         dem = cfg.dem_path or (aoi_dir / "dem.tif")
         if not Path(dem).is_file():
             log.info(f"BranchZero skipped — dem not found at {dem}")
         else:
             log.info(
-                f"--- BranchZero (whole-AOI, branch_id={cfg.branch_zero_id!r}) ---"
+                f"--- Shared AOI rasters (for branch_id={cfg.branch_zero_id!r} "
+                f"and every sibling) ---"
             )
             BranchZero(
                 dem_path=cfg.dem_path,
@@ -178,25 +188,24 @@ def calculate_allbranches(
                 agree_smooth_drop=cfg.agree_smooth_drop,
                 agree_sharp_drop=cfg.agree_sharp_drop,
                 branch_zero_id=cfg.branch_zero_id,
-            ).run()
-            log.info(f"--- CreateHAND branch_id={cfg.branch_zero_id!r} ---")
-            b0_result = _process_single_branch(cfg, cfg.branch_zero_id)
-            log.info(
-                f"--- Branch {cfg.branch_zero_id} complete "
-                f"(status={b0_result.status}) ---"
-            )
+            ).publish_shared_inputs()
+            branch_zero_prepared = True
     else:
         log.info(
             f"run_branch_zero=False — skipping BranchZero + branch-zero CreateHAND "
             f"(branch_id={cfg.branch_zero_id!r}); assuming outputs already exist."
         )
 
-    # Step 3: parallel non-zero branch loop via Dask.
-    results = process_branches(cfg)
-    n_non_zero_recorded = sum(1 for r in results if r.status == "ok")
+    # Step 3: every branch — zero included — through the parallel loop.
+    all_results = process_branches(cfg, include_branch_zero=branch_zero_prepared)
 
-    # Prepend branch-zero result so branch_results covers all branches.
-    all_results = ([b0_result] if b0_result is not None else []) + results
+    b0_result: Optional[BranchResult] = next(
+        (r for r in all_results if r.branch_id == cfg.branch_zero_id), None
+    )
+    if b0_result is not None:
+        log.info(f"--- Branch {cfg.branch_zero_id} status={b0_result.status} ---")
+    results = [r for r in all_results if r.branch_id != cfg.branch_zero_id]
+    n_non_zero_recorded = sum(1 for r in results if r.status == "ok")
 
     # AOI-level deny-list cleanup. Default behaviour deletes the AOI
     # intermediates listed in ``deny_unit.lst``; pass ``delete_deny_list=False``
@@ -262,7 +271,12 @@ if __name__ == "__main__":
     parser.add_argument("--aoi-dir", required=True)
     parser.add_argument("--aoi-id", required=True)
     parser.add_argument("--branch-list", default=None)
-    parser.add_argument("--workers", type=int, default=1)
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=None,
+        help="Parallel branch workers. Omit to size to the machine; 1 for serial.",
+    )
     parser.add_argument(
         "--deny-unit-list",
         default=None,

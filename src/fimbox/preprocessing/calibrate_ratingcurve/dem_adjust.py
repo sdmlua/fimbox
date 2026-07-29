@@ -15,7 +15,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import NamedTuple, Optional
 
 import numpy as np
 import pandas as pd
@@ -56,7 +56,7 @@ class ThalwegNotchesAdjustment:
     # Non-zero branches only; rewrites the SRC.
 
     aoi_dir: PathLike
-    n_workers: int = 1  # branch-parallel workers
+    n_workers: Optional[int] = None  # branch-parallel workers
     stage_interval_m: float = 0.3048
     n_stages: int = 84  # ladder length
     extrap_rows: int = 3  # trailing rows fit for extrapolation
@@ -65,10 +65,7 @@ class ThalwegNotchesAdjustment:
         aoi_dir = resolve_aoi_dir(self.aoi_dir)
         aoi_id = aoi_id_of(aoi_dir)
         branches = list(iter_branches(aoi_dir, exclude_zero=True))
-        log.info(
-            f"ThalwegNotchesAdjustment: {aoi_id} "
-            f"({len(branches)} branches, {self.n_workers} workers)"
-        )
+        log.info(f"ThalwegNotchesAdjustment: {aoi_id} " f"({len(branches)} branches)")
         return _run_branches(
             branches,
             _thalweg_one_branch,
@@ -193,17 +190,36 @@ _LONGITUDINAL_KEYS = [
 _LONGITUDINAL_SMOOTH_N = 2
 
 
-def _low_pct_ignore_zeros(arr):
-    nz = np.asarray(arr)[np.asarray(arr) > 0]
-    return np.percentile(nz, 10) if nz.size else 0.0
+def _min_pct_filter(values: np.ndarray) -> np.ndarray:
+    """10th percentile of the positive values in a 4-wide sliding window.
+
+    At most four samples go into each window, so at the 10th percentile only the
+    two smallest positives can matter — which turns the whole pass into a sort of
+    four shifted copies instead of a Python callback per cell. Window offsets
+    (-2..+1) and reflected edges match scipy's ``generic_filter(size=4)``.
+    """
+    padded = np.pad(np.asarray(values, dtype=float), (2, 1), mode="symmetric")
+    n = values.size
+    win = np.stack([padded[k : k + n] for k in range(4)], axis=1)
+
+    positive = win > 0  # NaN compares False, so lake reaches drop out
+    counts = positive.sum(axis=1)
+    ranked = np.sort(np.where(positive, win, np.inf), axis=1)
+
+    # Collapse the empty/single-value windows onto the same expression so no
+    # arithmetic ever touches the +inf padding.
+    lo = np.where(counts >= 1, ranked[:, 0], 0.0)
+    second = np.where(counts >= 2, ranked[:, 1], lo)
+    # np.percentile interpolates 0.1*(n-1) of the way from the smallest positive
+    # toward the next one.
+    return lo + (second - lo) * (0.1 * (counts - 1))
 
 
 def _filter_voi(voi_array):
     # Min (10th-pct) then gaussian, along the chain.
-    from scipy.ndimage import gaussian_filter1d, generic_filter
+    from scipy.ndimage import gaussian_filter1d
 
-    minfilter = generic_filter(voi_array, _low_pct_ignore_zeros, size=4)
-    return gaussian_filter1d(minfilter, sigma=2, radius=2)
+    return gaussian_filter1d(_min_pct_filter(voi_array), sigma=2, radius=2)
 
 
 @dataclass
@@ -212,17 +228,14 @@ class LongitudinalFlowFilter:
     # Lakes keep original Q. Non-zero branches only.
 
     aoi_dir: PathLike
-    n_workers: int = 1  # branch-parallel workers
+    n_workers: Optional[int] = None  # branch-parallel workers
     n_stages: int = 84
 
     def run(self) -> dict[str, str]:
         aoi_dir = resolve_aoi_dir(self.aoi_dir)
         aoi_id = aoi_id_of(aoi_dir)
         branches = list(iter_branches(aoi_dir, exclude_zero=True))
-        log.info(
-            f"LongitudinalFlowFilter: {aoi_id} "
-            f"({len(branches)} branches, {self.n_workers} workers)"
-        )
+        log.info(f"LongitudinalFlowFilter: {aoi_id} " f"({len(branches)} branches)")
         return _run_branches(
             branches,
             _longitudinal_one_branch,
@@ -270,9 +283,11 @@ def _longitudinal_one_branch(branch_dir: Path, bid: str, n_stages: int) -> str:
         return "SKIP no multi-reach chains"
 
     # Smooth geometry, write back for non-lake reaches.
+    smooth_keys = _LONGITUDINAL_KEYS[:_LONGITUDINAL_SMOOTH_N]
+    ladders = _reach_ladders(src, smooth_keys)
     filtered = {}
-    for key in _LONGITUDINAL_KEYS[:_LONGITUDINAL_SMOOTH_N]:
-        filtered[key] = _filter_key(src, chains, stages, key)
+    for key in smooth_keys:
+        filtered[key] = _filter_key(src, chains, stages, key, ladders)
     for key in _LONGITUDINAL_KEYS[:_LONGITUDINAL_SMOOTH_N]:
         adj_col = f"{key}_longitudinalAdjusted"
         src = src.merge(filtered[key], on=["HydroID", "Stage"], how="left")
@@ -345,19 +360,48 @@ def _build_chains(catch) -> list[list[int]]:
     next_ids = catch["NextDownID"].astype(int)
     headwaters_rows = catch.loc[~catch["HydroID"].isin(next_ids)]
     headwaters = list(headwaters_rows[headwaters_rows["LakeID"] < 0]["HydroID"])
+    # HydroID -> NextDownID up front: the walk used to re-scan the whole table
+    # twice per step, which is what made big AOIs crawl.
+    next_of = dict(
+        zip(catch["HydroID"].astype(int).tolist(), next_ids.tolist())
+    )
     chains: list[list[int]] = []
     for hw in headwaters:
         chain = [hw]
         nxt = hw
-        while catch["HydroID"].isin([nxt]).any():
-            nxt = int(catch.loc[catch["HydroID"] == nxt, "NextDownID"].item())
+        while nxt in next_of:
+            nxt = next_of[nxt]
             chain.append(nxt)
         if len(chain[:-1]) > 2:
             chains.append(chain)
     return chains
 
 
-def _filter_key(src, chains, stages, key) -> pd.DataFrame:
+class _ReachLadder(NamedTuple):
+    """One reach's rating curve: its stage ladder and the columns being smoothed."""
+
+    stages: np.ndarray
+    lake_id: float
+    columns: dict
+
+
+def _reach_ladders(src, keys) -> dict[int, _ReachLadder]:
+    """Split the SRC into one ladder per HydroID, for O(1) lookup by reach.
+
+    Chain smoothing asks for one (reach, stage, key) value at a time; without this
+    it re-filters the whole SRC table for every single one.
+    """
+    return {
+        int(hid): _ReachLadder(
+            stages=sub["Stage"].to_numpy(),
+            lake_id=float(sub["LakeID"].iloc[0]),
+            columns={k: sub[k].to_numpy() for k in keys},
+        )
+        for hid, sub in src.groupby("HydroID", sort=False)
+    }
+
+
+def _filter_key(src, chains, stages, key, ladders) -> pd.DataFrame:
     # Per chain: build a HydroID x stage matrix, smooth each stage column,
     # return long (HydroID, Stage, adj).
     stage_cols = [str(s) for s in stages]
@@ -365,7 +409,7 @@ def _filter_key(src, chains, stages, key) -> pd.DataFrame:
     for chain in chains:
         rows = {}
         for pos, hid in enumerate(chain[:-1]):
-            rows[hid] = [_interp(src, hid, key, s) for s in stages] + [pos]
+            rows[hid] = _interp_ladder(ladders.get(int(hid)), key, stages) + [pos]
         mat = pd.DataFrame.from_dict(
             rows, orient="index", columns=stage_cols + ["long_position"]
         )
@@ -393,11 +437,12 @@ def _filter_key(src, chains, stages, key) -> pd.DataFrame:
     )
 
 
-def _interp(src, hydroid, key, stage):
-    sub = src.loc[src["HydroID"] == hydroid]
-    if sub.empty or sub["LakeID"].iloc[0] > 0:
-        return np.nan
-    return round(float(np.interp(stage, sub["Stage"], sub[key])), 3)
+def _interp_ladder(ladder: Optional[_ReachLadder], key, stages) -> list:
+    """One reach's key interpolated onto `stages`; NaN for lakes and unknown ids."""
+    if ladder is None or ladder.lake_id > 0:
+        return [np.nan] * len(stages)
+    values = np.interp(stages, ladder.stages, ladder.columns[key])
+    return [round(float(v), 3) for v in values]
 
 
 @dataclass
@@ -411,7 +456,7 @@ class BathymetricAdjustment:
     bathy_file_aibased: Optional[PathLike] = None
     ai_toggle: int = 0
     ai_strm_order: int = 4
-    n_workers: int = 1
+    n_workers: Optional[int] = None
 
     def run(self) -> dict[str, str]:
         aoi_dir = resolve_aoi_dir(self.aoi_dir)
@@ -436,9 +481,7 @@ class BathymetricAdjustment:
     def _apply(self, aoi_dir: Path, bathy: pd.DataFrame) -> str:
         # Inject the missing-geometry table into every branch SRC, in parallel.
         branches = list(iter_branches(aoi_dir, exclude_zero=False))
-        log.info(
-            f"BathymetricAdjustment: {len(branches)} branches, {self.n_workers} workers"
-        )
+        log.info(f"BathymetricAdjustment: {len(branches)} branches")
         out = _run_branches(
             branches,
             _bathy_one_branch,

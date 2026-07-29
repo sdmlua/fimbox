@@ -24,6 +24,8 @@ UsgsRatingCalibrator, Ras2fimCalibrator, SpatialObsCalibrator
 
 from __future__ import annotations
 
+from typing import Optional
+
 from ._common import CalibrationNotImplemented
 from .aggregate import BranchAggregator, aggregate_branches
 from .dem_adjust import (
@@ -47,13 +49,15 @@ from .src_calibrate import (
 # Function-style aliases so callers that prefer ``identify_src_bankfull(...)``
 # over ``SrcBankfull(...).run()`` get a one-line entry point. Each just
 # instantiates the class and calls .run().
-def identify_src_bankfull(aoi_dir, bankfull_flows_file, *, n_workers: int = 1):
+def identify_src_bankfull(
+    aoi_dir, bankfull_flows_file, *, n_workers: Optional[int] = None
+):
     return SrcBankfull(
         aoi_dir=aoi_dir, bankfull_flows_file=bankfull_flows_file, n_workers=n_workers
     ).run()
 
 
-def subdiv_chan_obank_src(aoi_dir, vmann_table, *, n_workers: int = 1):
+def subdiv_chan_obank_src(aoi_dir, vmann_table, *, n_workers: Optional[int] = None):
     return SrcSubdiv(
         aoi_dir=aoi_dir, vmann_table=vmann_table, n_workers=n_workers
     ).run()
@@ -63,11 +67,11 @@ def nonmonotonic_src_adjustment(aoi_dir):
     return SrcNonmonotonic(aoi_dir=aoi_dir).run()
 
 
-def thalweg_notches_adjustment(aoi_dir, *, n_workers: int = 1):
+def thalweg_notches_adjustment(aoi_dir, *, n_workers: Optional[int] = None):
     return ThalwegNotchesAdjustment(aoi_dir=aoi_dir, n_workers=n_workers).run()
 
 
-def longitudinal_flow_adjustment(aoi_dir, *, n_workers: int = 1):
+def longitudinal_flow_adjustment(aoi_dir, *, n_workers: Optional[int] = None):
     return LongitudinalFlowFilter(aoi_dir=aoi_dir, n_workers=n_workers).run()
 
 
@@ -94,7 +98,7 @@ def src_adjust_usgs_rating_trace(
     nwm_recur_file,
     usgs_acceptable_gages=None,
     *,
-    n_workers: int = 1,
+    n_workers: Optional[int] = None,
 ):
     return UsgsRatingCalibrator(
         aoi_dir=aoi_dir,
@@ -106,7 +110,7 @@ def src_adjust_usgs_rating_trace(
 
 
 def src_adjust_ras2fim_rating(
-    aoi_dir, ras_rating_curve_csv, nwm_recur_file, *, n_workers: int = 1
+    aoi_dir, ras_rating_curve_csv, nwm_recur_file, *, n_workers: Optional[int] = None
 ):
     return Ras2fimCalibrator(
         aoi_dir=aoi_dir,
@@ -116,7 +120,9 @@ def src_adjust_ras2fim_rating(
     ).run()
 
 
-def src_adjust_spatial_obs(aoi_dir, calib_points_file=None, *, n_workers: int = 1):
+def src_adjust_spatial_obs(
+    aoi_dir, calib_points_file=None, *, n_workers: Optional[int] = None
+):
     return SpatialObsCalibrator(
         aoi_dir=aoi_dir, calib_points_file=calib_points_file, n_workers=n_workers
     ).run()

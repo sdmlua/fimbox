@@ -382,7 +382,7 @@ class UsgsRatingCalibrator:
     usgs_rating_curve_csv: PathLike
     nwm_recur_file: PathLike
     usgs_acceptable_gages: Optional[PathLike] = None  # optional quality filter
-    n_workers: int = 1
+    n_workers: Optional[int] = None
     debug_outputs: bool = False
 
     def run(self) -> dict[str, str]:
@@ -420,9 +420,7 @@ class UsgsRatingCalibrator:
         usgs_df["levpa_id"] = usgs_df["levpa_id"].astype("int64").astype(str)
 
         branches = list(iter_branches(aoi_dir, exclude_zero=False))
-        log.info(
-            f"UsgsRatingCalibrator: {aoi_id} ({len(branches)} branches, {self.n_workers} workers)"
-        )
+        log.info(f"UsgsRatingCalibrator: {aoi_id} ({len(branches)} branches)")
         return _run_branches(
             branches,
             _usgs_one_branch,
@@ -515,7 +513,7 @@ class SpatialObsCalibrator:
 
     aoi_dir: PathLike
     calib_points_file: Optional[PathLike] = None
-    n_workers: int = 1
+    n_workers: Optional[int] = None
     down_dist_thresh: float = DOWNSTREAM_THRESHOLD
     debug_outputs: bool = False
 
@@ -539,9 +537,7 @@ class SpatialObsCalibrator:
             return {}
 
         branches = list(iter_branches(aoi_dir, exclude_zero=False))
-        log.info(
-            f"SpatialObsCalibrator: {aoi_id} ({len(branches)} branches, {self.n_workers} workers)"
-        )
+        log.info(f"SpatialObsCalibrator: {aoi_id} ({len(branches)} branches)")
         return _run_branches(
             branches,
             _spatial_one_branch,
@@ -557,7 +553,7 @@ class Ras2fimCalibrator:
     aoi_dir: PathLike
     ras_rating_curve_csv: PathLike
     nwm_recur_file: PathLike
-    n_workers: int = 1
+    n_workers: Optional[int] = None
 
     def run(self) -> None:
         not_yet_ported("Ras2fimCalibrator")

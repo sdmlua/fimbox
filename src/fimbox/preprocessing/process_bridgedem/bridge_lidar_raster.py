@@ -11,10 +11,12 @@ Tile index   : https://github.com/hobuinc/usgs-lidar  (boundaries.topojson)
 
 from __future__ import annotations
 
+import io
 import logging
 import os
 import tempfile
 import threading as _threading
+from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -33,17 +35,56 @@ log = logging.getLogger(__name__)
 _BRIDGE_CLASSES = {13, 17}
 _ENTWINE_INDEX_URL = "https://raw.githubusercontent.com/hobuinc/usgs-lidar/master/boundaries/boundaries.topojson"
 
-# Per-thread session — avoids connection pool exhaustion when many dask threads run concurrently.
 _thread_local = _threading.local()
+
+_SESSION: Optional[requests.Session] = None
+_SESSION_LOCK = Lock()
 
 
 def _session() -> requests.Session:
-    if not hasattr(_thread_local, "session"):
-        s = requests.Session()
-        adapter = requests.adapters.HTTPAdapter(pool_connections=4, pool_maxsize=16)
-        s.mount("https://", adapter)
-        _thread_local.session = s
-    return _thread_local.session
+    """One pooled, retrying session shared by every download in the process.
+
+    A session per thread means a fresh DNS lookup and TLS handshake for each of
+    the thousands of short-lived tile threads — more wall-clock than the tile
+    download itself, and enough resolver traffic that S3 starts handing back
+    intermittent NXDOMAIN. Retries cover those transients so a hiccup costs a
+    backoff instead of the whole bridge.
+    """
+    global _SESSION
+    with _SESSION_LOCK:
+        if _SESSION is None:
+            from urllib3.util.retry import Retry
+
+            s = requests.Session()
+            adapter = requests.adapters.HTTPAdapter(
+                pool_connections=16,
+                pool_maxsize=64,
+                max_retries=Retry(
+                    total=4,
+                    connect=4,
+                    read=2,
+                    backoff_factor=0.4,
+                    status_forcelist=(429, 500, 502, 503, 504),
+                    allowed_methods=frozenset(["GET"]),
+                ),
+            )
+            s.mount("https://", adapter)
+            s.mount("http://", adapter)
+            _SESSION = s
+        return _SESSION
+
+
+def _transformer(src: str, dst: str):
+    """Thread-local pyproj Transformer — building one costs more than it should
+    to repeat 3k times, and PROJ objects can't be shared across threads."""
+    cache = getattr(_thread_local, "transformers", None)
+    if cache is None:
+        cache = _thread_local.transformers = {}
+    if (src, dst) not in cache:
+        from pyproj import Transformer
+
+        cache[(src, dst)] = Transformer.from_crs(src, dst, always_xy=True)
+    return cache[(src, dst)]
 
 
 # EPT manifest + hierarchy cache: fetch once per unique EPT URL, reuse for all bridges
@@ -64,80 +105,155 @@ def _ept_meta(base: str) -> tuple[dict, dict]:
         return _EPT_CACHE[base]
 
 
-def _fetch_one_tile(args) -> Optional[np.ndarray]:
-    """Download + decode one EPT .laz tile. Returns (N,4) [x,y,z,cls] in EPSG:3857 or None."""
+# Decoded-tile cache. Bridges are neighbours far more often than not, so the
+# same octree tiles keep coming back: on a HUC8 with ~2.9k bridges, 7.8k tile
+# requests resolve to under 2k distinct tiles, and the coarse depth-6 ones are
+# asked for over a hundred times each. Tiles are small (~0.5 MB decoded), so
+# holding a working set in memory turns most of those requests into a dict hit.
+_TILE_MISS = object()
+_TILE_CACHE: "OrderedDict[tuple, Optional[np.ndarray]]" = OrderedDict()
+_TILE_CACHE_LOCK = Lock()
+_TILE_CACHE_BYTES = 0
+_TILE_CACHE_MAX_BYTES = 1024 * 1024 * 1024
+_TILE_FETCH_LOCKS: dict = {}
+_TILE_REQUESTS = 0
+_TILE_DOWNLOADS = 0
+
+
+def _tile_cache_get(key: tuple):
+    with _TILE_CACHE_LOCK:
+        if key in _TILE_CACHE:
+            _TILE_CACHE.move_to_end(key)
+            return _TILE_CACHE[key]
+    return _TILE_MISS
+
+
+def _tile_cache_put(key: tuple, pts: Optional[np.ndarray]) -> None:
+    global _TILE_CACHE_BYTES
+    with _TILE_CACHE_LOCK:
+        old = _TILE_CACHE.pop(key, None)
+        if old is not None:
+            _TILE_CACHE_BYTES -= old.nbytes
+        _TILE_CACHE[key] = pts
+        _TILE_CACHE_BYTES += 0 if pts is None else pts.nbytes
+        while _TILE_CACHE_BYTES > _TILE_CACHE_MAX_BYTES and len(_TILE_CACHE) > 1:
+            _, evicted = _TILE_CACHE.popitem(last=False)
+            if evicted is not None:
+                _TILE_CACHE_BYTES -= evicted.nbytes
+
+
+def _tile_fetch_lock(key: tuple) -> Lock:
+    with _TILE_CACHE_LOCK:
+        lk = _TILE_FETCH_LOCKS.get(key)
+        if lk is None:
+            lk = _TILE_FETCH_LOCKS[key] = Lock()
+        return lk
+
+
+def _download_tile(base: str, tile_key: str) -> Optional[np.ndarray]:
+    """Download + decode one EPT .laz tile.
+
+    Returns every last-return point in the tile as (N,4) [x,y,z,cls] in
+    EPSG:3857 — unclipped, so the result is reusable by any bridge that lands
+    in this tile — or None if the tile is absent or has no last returns.
+    """
     import laspy
 
-    tile_key, base, qxmin, qymin, qxmax, qymax = args
-    url = f"{base}/ept-data/{tile_key}.laz"
-    resp = _session().get(url, timeout=60)
+    global _TILE_DOWNLOADS
+    resp = _session().get(f"{base}/ept-data/{tile_key}.laz", timeout=60)
     if resp.status_code == 404:
         return None
     resp.raise_for_status()
+    with _TILE_CACHE_LOCK:
+        _TILE_DOWNLOADS += 1
 
-    with tempfile.NamedTemporaryFile(suffix=".laz", delete=False) as f:
-        f.write(resp.content)
-        tmp = f.name
-    try:
-        las = laspy.read(tmp)
-        x = np.array(las.x)
-        y = np.array(las.y)
-        z = np.array(las.z)
-        cls = np.array(las.classification)
-        ret = np.array(las.return_number)
-        nr = np.array(las.number_of_returns)
-        last = ret == nr
-        inbox = (x >= qxmin) & (x <= qxmax) & (y >= qymin) & (y <= qymax)
-        mask = last & inbox
-        if not mask.any():
-            return None
-        return np.column_stack([x[mask], y[mask], z[mask], cls[mask].astype(float)])
-    finally:
-        os.unlink(tmp)
+    # Decoding from memory: the tile is already fully buffered, so a temp file
+    # only adds a write and a read.
+    las = laspy.read(io.BytesIO(resp.content))
+    last = np.asarray(las.return_number) == np.asarray(las.number_of_returns)
+    if not last.any():
+        return None
+    return np.column_stack(
+        [
+            np.asarray(las.x)[last],
+            np.asarray(las.y)[last],
+            np.asarray(las.z)[last],
+            np.asarray(las.classification)[last].astype(float),
+        ]
+    )
 
 
-def _fetch_ept_points(
-    ept_url: str,
-    bounds: tuple,
-    out_crs: str,
-    tile_workers: int = 8,
-    min_depth: int = 6,
-) -> Optional[np.ndarray]:
-    """
-    Fetch last-return LiDAR points from EPT within `bounds` (EPSG:4326).
-    Returns (N,4) [x,y,z,cls] reprojected to out_crs, or None.
+def _tile_points(base: str, tile_key: str) -> Optional[np.ndarray]:
+    """Cached last-return points for one EPT tile, downloading it at most once."""
+    global _TILE_REQUESTS
+    key = (base, tile_key)
+    with _TILE_CACHE_LOCK:
+        _TILE_REQUESTS += 1
+
+    pts = _tile_cache_get(key)
+    if pts is not _TILE_MISS:
+        return pts
+
+    # Per-tile lock so concurrent bridges wanting the same tile fetch it once.
+    with _tile_fetch_lock(key):
+        pts = _tile_cache_get(key)
+        if pts is not _TILE_MISS:
+            return pts
+        pts = _download_tile(base, tile_key)
+        _tile_cache_put(key, pts)
+    return pts
+
+
+def _bridge_tiles(ept_url: str, bounds: tuple, min_depth: int = 6) -> tuple:
+    """Resolve a bridge's 4326 `bounds` to (base, tile keys, query bbox in 3857).
 
     `min_depth` skips coarse octree tiles (depth < min_depth) that contain
     almost no points inside a tiny bridge bbox, saving several tile downloads.
     """
-    from pyproj import Transformer
-
     base = ept_url.rstrip("/").replace("/ept.json", "").rstrip("/")
     manifest, hierarchy = _ept_meta(base)
     ept_bounds = manifest["bounds"]  # [xmin,ymin,zmin,xmax,ymax,zmax] in EPSG:3857
 
-    tr = Transformer.from_crs("EPSG:4326", "EPSG:3857", always_xy=True)
+    tr = _transformer("EPSG:4326", "EPSG:3857")
     qxmin, qymin = tr.transform(bounds[0], bounds[1])
     qxmax, qymax = tr.transform(bounds[2], bounds[3])
+    query = (qxmin, qymin, qxmax, qymax)
+    return base, tuple(_intersecting_tiles(hierarchy, ept_bounds, query, min_depth)), query
 
-    tiles = _intersecting_tiles(
-        hierarchy, ept_bounds, (qxmin, qymin, qxmax, qymax), min_depth
-    )
+
+def _fetch_ept_points(
+    base: str,
+    tiles: tuple,
+    query: tuple,
+    out_crs: str,
+    pool: ThreadPoolExecutor,
+) -> Optional[np.ndarray]:
+    """
+    Fetch last-return LiDAR points from EPT within `query` (EPSG:3857 bbox).
+    Returns (N,4) [x,y,z,cls] reprojected to out_crs, or None.
+    """
     if not tiles:
         return None
 
-    args = [(t, base, qxmin, qymin, qxmax, qymax) for t in tiles]
+    qxmin, qymin, qxmax, qymax = query
     all_pts = []
-    with ThreadPoolExecutor(max_workers=min(tile_workers, len(tiles))) as pool:
-        for arr in pool.map(_fetch_one_tile, args):
-            if arr is not None:
-                all_pts.append(arr)
+    for arr in pool.map(lambda t: _tile_points(base, t), tiles):
+        if arr is None:
+            continue
+        inbox = (
+            (arr[:, 0] >= qxmin)
+            & (arr[:, 0] <= qxmax)
+            & (arr[:, 1] >= qymin)
+            & (arr[:, 1] <= qymax)
+        )
+        if inbox.any():
+            all_pts.append(arr[inbox])
 
     if not all_pts:
         return None
 
     pts_3857 = np.vstack(all_pts)
-    tr_out = Transformer.from_crs("EPSG:3857", out_crs, always_xy=True)
+    tr_out = _transformer("EPSG:3857", out_crs)
     ox, oy = tr_out.transform(pts_3857[:, 0], pts_3857[:, 1])
     return np.column_stack([ox, oy, pts_3857[:, 2], pts_3857[:, 3]])
 
@@ -197,7 +313,9 @@ class generateBridgeRaster:
                    user-supplied value; uses row index if not found.
     skip_ids     : ID values to skip
     n_workers    : parallel worker threads for bridge-level processing (default: all CPUs)
-    tile_workers : threads for per-bridge EPT tile downloads (default 8)
+    tile_workers : threads per bridge for EPT tile downloads (default 8). Backed by one
+                   shared pool of n_workers * tile_workers threads, so connections and
+                   downloaded tiles are reused across bridges.
     min_tile_depth: skip EPT octree tiles shallower than this depth (default 6).
                    Coarse tiles cover huge areas; almost zero bridge points fall in them.
     bridge_cls_threshold: fraction of points that must be class 13/17 to use only those;
@@ -205,6 +323,8 @@ class generateBridgeRaster:
                    that don't classify bridge decks).
     skip_existing: if True (default), skip bridges whose output .tif already exists so
                    re-runs only process new bridges instead of re-downloading everything.
+    tile_cache_mb: memory budget for the decoded-tile cache (default 1024 MB). Neighbouring
+                   bridges share octree tiles; cached tiles are ~4x fewer downloads.
     """
 
     bridge_gpkg: Union[str, Path]
@@ -216,6 +336,7 @@ class generateBridgeRaster:
     min_tile_depth: int = 6
     bridge_cls_threshold: float = 0.05
     skip_existing: bool = True
+    tile_cache_mb: float = 1024.0
     id_col: Optional[str] = None
     skip_ids: list = field(default_factory=lambda: ["229091666"])
 
@@ -340,45 +461,111 @@ class generateBridgeRaster:
         )
         return joined
 
+    def _plan(self, footprints: gpd.GeoDataFrame) -> list:
+        """Resolve every bridge to its EPT tiles, then order them for tile reuse.
+
+        Doing the octree lookup up front costs nothing extra (the hierarchy is
+        already cached per survey) and lets bridges be visited in tile order, so
+        a shared tile stays hot in cache while the bridges that need it go by
+        instead of being re-downloaded after it has been evicted.
+        """
+        jobs = []
+        for _, row in footprints.iterrows():
+            base, tiles, query = _bridge_tiles(
+                row["url"], row.geometry.bounds, self.min_tile_depth
+            )
+            jobs.append(
+                {
+                    "bridge_id": row["_bridge_id"],
+                    "base": base,
+                    "tiles": tiles,
+                    "query": query,
+                }
+            )
+        jobs.sort(key=lambda j: (j["base"], j["tiles"]))
+        requests_n = sum(len(j["tiles"]) for j in jobs)
+        unique_n = len({(j["base"], t) for j in jobs for t in j["tiles"]})
+        log.info(
+            f"Tile plan: {requests_n} tile lookups over {unique_n} unique tiles "
+            f"({requests_n / max(1, unique_n):.1f}x reuse), cache {self.tile_cache_mb:.0f} MB"
+        )
+        return jobs
+
     def _process_parallel(self, footprints: gpd.GeoDataFrame):
+        global _TILE_CACHE_MAX_BYTES, _TILE_REQUESTS, _TILE_DOWNLOADS
+        _TILE_CACHE_MAX_BYTES = int(self.tile_cache_mb * 1024 * 1024)
+        # Counters are per-run; the cache itself is kept, so a second AOI in the
+        # same process still gets to reuse any tiles it shares with the first.
+        with _TILE_CACHE_LOCK:
+            _TILE_REQUESTS = _TILE_DOWNLOADS = 0
+
         tif_dir = str(self._tif_dir)
-        n = len(footprints)
-        ok = failed = skipped = 0
+        skipped = 0
+        if self.skip_existing:
+            # Filter here as well as in the worker: a re-run shouldn't pay for the
+            # tile lookup, or make the progress bar count work it never does.
+            done = {f.stem for f in self._tif_dir.glob("*.tif")}
+            n_before = len(footprints)
+            footprints = footprints[~footprints["_bridge_id"].isin(done)]
+            skipped = n_before - len(footprints)
+            if skipped:
+                log.info(f"{skipped} bridges already have rasters — skipping")
 
-        with ThreadPoolExecutor(max_workers=self.n_workers) as executor:
-            fmap = {
-                executor.submit(
-                    _process_one_bridge,
-                    bridge_id=row["_bridge_id"],
-                    bounds=row.geometry.bounds,
-                    lidar_url=row["url"],
-                    tif_dir=tif_dir,
-                    resolution=self.resolution,
-                    tile_workers=self.tile_workers,
-                    min_tile_depth=self.min_tile_depth,
-                    bridge_cls_threshold=self.bridge_cls_threshold,
-                    skip_existing=self.skip_existing,
-                ): row["_bridge_id"]
-                for _, row in footprints.iterrows()
-            }
-            with tqdm(
-                total=n, desc="Bridges", unit="bridge", dynamic_ncols=True
-            ) as pbar:
-                for future in as_completed(fmap):
-                    bid = fmap[future]
-                    try:
-                        result = future.result()
-                        if result == "skipped":
-                            skipped += 1
-                        else:
-                            ok += 1
-                    except Exception as exc:
-                        log.warning(f"bridge {bid} failed: {exc}")
-                        failed += 1
-                    pbar.update(1)
-                    pbar.set_postfix(ok=ok, skip=skipped, fail=failed, refresh=False)
+        jobs = self._plan(footprints)
+        n = len(jobs)
+        ok = failed = empty = 0
 
-        log.info(f"Completed — {ok} processed, {skipped} skipped, {failed} failed")
+        # One download pool for the whole run, not one per bridge: creating ~3k
+        # short-lived pools meant ~3k cold TLS connections to S3.
+        pool = ThreadPoolExecutor(
+            max_workers=max(1, min(32, self.n_workers * self.tile_workers)),
+            thread_name_prefix="ept-tile",
+        )
+        try:
+            with ThreadPoolExecutor(max_workers=self.n_workers) as executor:
+                fmap = {
+                    executor.submit(
+                        _process_one_bridge,
+                        bridge_id=job["bridge_id"],
+                        base=job["base"],
+                        tiles=job["tiles"],
+                        query=job["query"],
+                        tif_dir=tif_dir,
+                        resolution=self.resolution,
+                        pool=pool,
+                        bridge_cls_threshold=self.bridge_cls_threshold,
+                        skip_existing=self.skip_existing,
+                    ): job["bridge_id"]
+                    for job in jobs
+                }
+                with tqdm(
+                    total=n, desc="Bridges", unit="bridge", dynamic_ncols=True
+                ) as pbar:
+                    for future in as_completed(fmap):
+                        bid = fmap[future]
+                        try:
+                            result = future.result()
+                            if result == "skipped":
+                                skipped += 1
+                            elif result == "empty":
+                                empty += 1
+                            else:
+                                ok += 1
+                        except Exception as exc:
+                            log.warning(f"bridge {bid} failed: {exc}")
+                            failed += 1
+                        pbar.update(1)
+                        pbar.set_postfix(
+                            ok=ok, skip=skipped, none=empty, fail=failed, refresh=False
+                        )
+        finally:
+            pool.shutdown(wait=True)
+
+        log.info(
+            f"Completed — {ok} processed, {skipped} skipped, {empty} without LiDAR, "
+            f"{failed} failed; {_TILE_DOWNLOADS} tiles downloaded of "
+            f"{_TILE_REQUESTS} requested"
+        )
 
 
 def _idw_rasterize(
@@ -445,12 +632,12 @@ def _idw_rasterize(
 
 def _process_one_bridge(
     bridge_id: str,
-    bounds: tuple,
-    lidar_url: str,
+    base: str,
+    tiles: tuple,
+    query: tuple,
     tif_dir: str,
     resolution: float,
-    tile_workers: int = 8,
-    min_tile_depth: int = 6,
+    pool: ThreadPoolExecutor,
     bridge_cls_threshold: float = 0.05,
     skip_existing: bool = True,
 ):
@@ -463,65 +650,53 @@ def _process_one_bridge(
     if skip_existing and os.path.exists(tif_path):
         return "skipped"
 
-    try:
-        pts = _fetch_ept_points(
-            lidar_url,
-            bounds,
-            out_crs,
-            tile_workers=tile_workers,
-            min_depth=min_tile_depth,
-        )
-        if pts is None or len(pts) == 0:
-            return
+    pts = _fetch_ept_points(base, tiles, query, out_crs, pool)
+    if pts is None or len(pts) == 0:
+        return "empty"
 
-        xy = pts[:, :2]
-        z = pts[:, 2].copy()
-        cls = pts[:, 3].astype(int)
+    xy = pts[:, :2]
+    z = pts[:, 2].copy()
+    cls = pts[:, 3].astype(int)
 
-        bridge_mask = np.isin(cls, list(_BRIDGE_CLASSES))
-        if bridge_mask.sum() / len(cls) >= bridge_cls_threshold:
-            # survey has bridge-deck classifications — replace non-bridge z with nearest bridge z
-            if (~bridge_mask).any():
-                n_bridge = bridge_mask.sum()
-                k = min(2, n_bridge)
-                tree = KDTree(xy[bridge_mask])
-                _, idx = tree.query(xy[~bridge_mask], k=k)
-                if k == 1:
-                    idx = idx.reshape(-1, 1)
-                z[~bridge_mask] = z[bridge_mask][idx].mean(axis=1)
+    bridge_mask = np.isin(cls, list(_BRIDGE_CLASSES))
+    if bridge_mask.sum() / len(cls) >= bridge_cls_threshold:
+        # survey has bridge-deck classifications — replace non-bridge z with nearest bridge z
+        if (~bridge_mask).any():
+            n_bridge = bridge_mask.sum()
+            k = min(2, n_bridge)
+            tree = KDTree(xy[bridge_mask])
+            _, idx = tree.query(xy[~bridge_mask], k=k)
+            if k == 1:
+                idx = idx.reshape(-1, 1)
+            z[~bridge_mask] = z[bridge_mask][idx].mean(axis=1)
 
-        # else: survey doesn't classify bridge decks — use all last-return points as-is
+    # else: survey doesn't classify bridge decks — use all last-return points as-is
 
-        # Compute grid bounds from point cloud extent (not EPT query bbox)
-        xmin, ymin = xy[:, 0].min(), xy[:, 1].min()
-        xmax, ymax = xy[:, 0].max(), xy[:, 1].max()
-        # Ensure at least one pixel
-        if xmax <= xmin:
-            xmax = xmin + resolution
-        if ymax <= ymin:
-            ymax = ymin + resolution
+    # Compute grid bounds from point cloud extent (not EPT query bbox)
+    xmin, ymin = xy[:, 0].min(), xy[:, 1].min()
+    xmax, ymax = xy[:, 0].max(), xy[:, 1].max()
+    # Ensure at least one pixel
+    if xmax <= xmin:
+        xmax = xmin + resolution
+    if ymax <= ymin:
+        ymax = ymin + resolution
 
-        grid, transform, nodata = _idw_rasterize(
-            xy, z, (xmin, ymin, xmax, ymax), resolution
-        )
+    grid, transform, nodata = _idw_rasterize(xy, z, (xmin, ymin, xmax, ymax), resolution)
 
-        with rasterio.open(
-            tif_path,
-            "w",
-            driver="GTiff",
-            height=grid.shape[0],
-            width=grid.shape[1],
-            count=1,
-            dtype="float32",
-            crs=_CRS.from_string(out_crs),
-            transform=transform,
-            nodata=nodata,
-            compress="lzw",
-        ) as dst:
-            dst.write(grid, 1)
-
-    except Exception as exc:
-        log.warning(f"bridge {bridge_id} failed: {exc}")
+    with rasterio.open(
+        tif_path,
+        "w",
+        driver="GTiff",
+        height=grid.shape[0],
+        width=grid.shape[1],
+        count=1,
+        dtype="float32",
+        crs=_CRS.from_string(out_crs),
+        transform=transform,
+        nodata=nodata,
+        compress="lzw",
+    ) as dst:
+        dst.write(grid, 1)
 
 
 # CLI
@@ -552,6 +727,7 @@ if __name__ == "__main__":
     p.add_argument("--tile_workers", type=int, default=8)
     p.add_argument("--min_tile_depth", type=int, default=6)
     p.add_argument("--bridge_cls_threshold", type=float, default=0.05)
+    p.add_argument("--tile_cache_mb", type=float, default=1024.0)
     p.add_argument("--id_col", default=None)
     p.add_argument("--skip_ids", nargs="*", default=["229091666"])
     args = p.parse_args()
@@ -564,6 +740,7 @@ if __name__ == "__main__":
         tile_workers=args.tile_workers,
         min_tile_depth=args.min_tile_depth,
         bridge_cls_threshold=args.bridge_cls_threshold,
+        tile_cache_mb=args.tile_cache_mb,
         id_col=args.id_col,
         skip_ids=args.skip_ids,
     )

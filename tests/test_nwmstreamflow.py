@@ -18,7 +18,7 @@ from fimbox import (
 )
 
 # AOI_DIR = Path(__file__).resolve().parents[2] / "out" / "test_smallB"
-AOI_DIR = Path(__file__).resolve().parents[2] / "out" / "nwm_11239459and2more"
+AOI_DIR = Path(__file__).resolve().parents[2] / "out" / "HUC10300101"
 
 START = "2016-10-05"
 END = "2016-10-20"

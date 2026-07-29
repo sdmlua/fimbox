@@ -35,6 +35,7 @@ from typing import Optional, Sequence, Union
 
 import pandas as pd
 
+from .._workers import RAM_PER_WORKER_FIM_GB, resolve_workers
 from ..logging_utils import WATERSHED_DIR_NAME, aoi_root
 from .inundator import InundationResult, Inundator
 from .mosaic import BranchMosaic, MosaicResult
@@ -107,10 +108,10 @@ class FimGenerator:
     # Whether to mosaic per-branch outputs into AOI-level rasters at the end. Default True.
     mosaic: bool = True
 
-    # Parallel workers for the per-branch loop. 1 = serial. When use_dask
-    # is enabled n_workers is ignored — the shared Dask LocalCluster sizes
-    # itself from the machine.
-    n_workers: int = 1
+    # Parallel workers for the per-branch loop. None/0 = size to the machine,
+    # 1 = serial, anything above what CPU + RAM support is clamped down. When
+    # use_dask is enabled this is a ceiling on the shared LocalCluster instead.
+    n_workers: Optional[int] = None
 
     # When True, dispatch the branch loop through the process-wide Dask
     # LocalCluster (auto-sized to the machine). When None, Dask is used
@@ -177,10 +178,13 @@ class FimGenerator:
             )
             use_dask = False
 
-        # n_workers=None means "auto": let ProcessPoolExecutor size to the
-        # machine (only an explicit <=1 runs the serial loop). Guarding here
-        # keeps the comparison from raising on None.
-        serial = self.n_workers is not None and self.n_workers <= 1
+        n_workers = resolve_workers(
+            self.n_workers,
+            n_tasks=len(bids),
+            ram_per_worker_gb=RAM_PER_WORKER_FIM_GB,
+            label="FimGenerator",
+        )
+        serial = n_workers <= 1
 
         log.info(
             f"FimGenerator: AOI={self.aoi_dir.name} branches={len(bids)} "
@@ -189,7 +193,9 @@ class FimGenerator:
         )
 
         if use_dask:
-            results = self._run_with_dask(bids, branch_root, forecast_df, tmp_dir)
+            results = self._run_with_dask(
+                bids, branch_root, forecast_df, tmp_dir, n_workers
+            )
         elif serial:
             results = [
                 _run_one_branch(
@@ -205,7 +211,7 @@ class FimGenerator:
             ]
         else:
             results = []
-            with ProcessPoolExecutor(max_workers=self.n_workers) as pool:
+            with ProcessPoolExecutor(max_workers=n_workers) as pool:
                 fut_to_bid = {
                     pool.submit(
                         _run_one_branch,
@@ -282,12 +288,15 @@ class FimGenerator:
         branch_root: Path,
         forecast_df: pd.DataFrame,
         tmp_dir: Path,
+        n_workers: int,
     ) -> list[InundationResult]:
         # Submit every branch to the shared LocalCluster. retries=0
         # mirrors the process_branches setup: an OOMed branch should
         # surface immediately as 'failed' so siblings finish instead
         # of cascading into a KilledWorker storm.
-        client = _get_dask_client()
+        # n_workers only bites if this call is what creates the cluster —
+        # a pool the preprocessing run already warmed up is reused as-is.
+        client = _get_dask_client(n_workers)
         log.info(
             "FimGenerator (dask): %d branches -> %d workers (dashboard %s)",
             len(bids),
@@ -471,7 +480,7 @@ class generateFIM:
 
     aoi_dir: PathLike
     feature_id_csv: Optional[PathLike] = None
-    n_workers: int = 4
+    n_workers: Optional[int] = None  # None -> size to the machine
     int16_mode: bool = True
     depth: bool = False
 
@@ -616,7 +625,12 @@ if __name__ == "__main__":
         help="Step 2: a single discharge CSV. When omitted, every CSV under "
         "<aoi_dir>/discharge-inputs/ is processed.",
     )
-    parser.add_argument("--workers", type=int, default=4)
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=None,
+        help="Parallel branch workers. Omit to size to the machine; 1 for serial.",
+    )
     parser.add_argument(
         "--int16",
         action="store_true",
