@@ -32,7 +32,7 @@ log = logging.getLogger(__name__)
 OUT_DIR = (
     Path(__file__).resolve().parents[2]
     / "out"
-    / "HUC10300101"
+    / "nwm_11239459and2more"
     / "watershed-data"
 )
 

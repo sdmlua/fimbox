@@ -27,8 +27,8 @@ import pytest
 from fimbox import generateFIM
 
 # AOI_DIR = Path(__file__).resolve().parents[2] / "out" / "test_smallB"
-AOI_DIR = Path(__file__).resolve().parents[2] / "out" / "HUC10300101"
-N_WORKERS = 4
+AOI_DIR = Path(__file__).resolve().parents[2] / "out" / "nwm_11239459and2more"
+N_WORKERS = None
 
 # Optional selection filters (edit to match the CSVs you have).
 EVENT_DATE = "2020-05-20 12:00:00"

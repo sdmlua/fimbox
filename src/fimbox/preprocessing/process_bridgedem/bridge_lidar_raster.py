@@ -29,6 +29,8 @@ import requests
 from scipy.spatial import KDTree
 from tqdm import tqdm
 
+from .bridge_source import resolve_bridge_gpkg
+
 log = logging.getLogger(__name__)
 
 # LAS classification 13=bridge deck, 17=bridge deck
@@ -401,6 +403,7 @@ class generateBridgeRaster:
         return self._tif_dir
 
     def _load_bridges(self) -> gpd.GeoDataFrame:
+        self.bridge_gpkg = resolve_bridge_gpkg(self.bridge_gpkg)
         gdf = gpd.read_file(self.bridge_gpkg)
         if "osmid" in gdf.columns:
             col = "osmid"

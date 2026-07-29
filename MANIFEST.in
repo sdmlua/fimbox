@@ -5,3 +5,9 @@ prune data
 prune docs
 prune workflows
 exclude uv.lock
+
+# dist/ is committed to git, so setuptools-scm's file finder would otherwise
+# pack every previously released wheel and tarball into the new sdist -- each
+# build roughly doubling the one before it.
+prune dist
+global-exclude *.whl *.tar.gz
