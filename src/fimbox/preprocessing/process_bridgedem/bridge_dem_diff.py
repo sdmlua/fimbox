@@ -24,6 +24,8 @@ from rasterio.transform import rowcol
 from shapely.geometry import Point
 from tqdm import tqdm
 
+from .bridge_source import resolve_bridge_gpkg
+
 log = logging.getLogger(__name__)
 
 
@@ -160,6 +162,7 @@ class BridgeDEMDiff:
         return out_path
 
     def _load_bridges(self) -> gpd.GeoDataFrame:
+        self.bridge_gpkg = resolve_bridge_gpkg(self.bridge_gpkg)
         gdf = gpd.read_file(self.bridge_gpkg)
         if "osmid" in gdf.columns:
             col = "osmid"

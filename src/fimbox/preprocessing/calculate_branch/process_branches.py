@@ -59,6 +59,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, Sequence, Union
 
+from ..._workers import RAM_PER_WORKER_BRANCH_GB, resolve_workers
 from ...logging_utils import aoi_root, attach_case_log
 from ..source_naming import detect_identifier, resolve_source, source_name
 from .adjust_floodplains import adjust_floodplains
@@ -170,8 +171,9 @@ class AOIProcessingConfig:
         keep_failed_branches: bool = False,
         deny_branch_zero_list: Optional[Path] = None,
         deny_branches_list: Optional[Path] = None,
-        # parallelism
-        n_workers: int = 1,
+        # parallelism — None/0 sizes to the machine, 1 is serial, and a number
+        # bigger than CPU/RAM can feed is clamped instead of obeyed.
+        n_workers: Optional[int] = None,
         timeout_seconds: Optional[int] = None,
     ):
         self.aoi_dir = _pick_one("aoi_dir", aoi_dir, "huc_dir", huc_dir, required=True)
@@ -265,11 +267,23 @@ def _pick_one(name_a: str, val_a, name_b: str, val_b, *, required: bool):
 HucProcessingConfig = AOIProcessingConfig
 
 
-def process_branches(cfg: AOIProcessingConfig) -> list[BranchResult]:
-    """Run every non-zero branch in parallel.
+def process_branches(
+    cfg: AOIProcessingConfig, *, include_branch_zero: bool = False
+) -> list[BranchResult]:
+    """Run the branch loop in parallel.
 
     Pure branch calculation: BranchZero, adjust_floodplains, CreateHAND,
     USGS crosswalk, per-branch, branch-zero cleanup.
+
+    With ``include_branch_zero=True`` branch zero joins the same pool instead of
+    being run to completion ahead of it. Its raster prep and CreateHAND cover the
+    whole AOI, so together they are the longest work in the run and nothing else
+    reads their outputs — holding the other branches back until they finish
+    wastes every other core. The caller only has to have published the shared
+    AOI-root rasters first (``BranchZero.publish_shared_inputs``), which is what
+    the siblings clip from. Note that ``cfg.timeout_seconds``, if set, now also
+    applies to branch zero, and it needs a far longer leash than a single level
+    path.
 
     Calibration is NOT invoked here — run it explicitly via ``fimbox.run_calibration`` once
     the branch loop and any deny-list cleanups are complete.
@@ -281,7 +295,6 @@ def process_branches(cfg: AOIProcessingConfig) -> list[BranchResult]:
     start = time.time()
     log.info(f"=== process_branches: {cfg.aoi_id} ===")
     log.info(f"Branch list: {cfg.branch_list_path}")
-    log.info(f"Workers: {cfg.n_workers}")
 
     # Stage 0: AOI-level USGS gage assignment
     if cfg.usgs_gages_gpkg and cfg.levelpaths_gpkg:
@@ -301,23 +314,36 @@ def process_branches(cfg: AOIProcessingConfig) -> list[BranchResult]:
         except Exception as exc:
             log.error(f"USGS gage assignment failed: {exc}", exc_info=True)
 
-    # If outputs already exist, we run the branch-zero post-steps here.
-    _run_branch_zero_post_steps(cfg)
-
     branch_ids = _read_branch_list(cfg.branch_list_path, cfg.branch_zero_id)
     log.info(f"Branches to process (excluding branch zero): {len(branch_ids)}")
     if not branch_ids:
         log.warning("No non-zero branches found — only branch zero will exist.")
 
+    # Branch zero goes in first: it is the whole-AOI task, so starting the
+    # longest job before the short ones keeps the tail of the run from being
+    # one lonely branch on one core (longest-processing-time-first).
+    dispatch_ids = (
+        [cfg.branch_zero_id] + branch_ids if include_branch_zero else branch_ids
+    )
+
+    # Resolved against the machine: None/0 -> as many as CPU+RAM allow, an
+    # over-ambitious request -> clamped, 1 -> the serial path below. Never more
+    # workers than branches, so a 3-branch AOI doesn't spin up 12 processes.
+    n_workers = resolve_workers(
+        cfg.n_workers,
+        n_tasks=len(dispatch_ids) or None,
+        ram_per_worker_gb=RAM_PER_WORKER_BRANCH_GB,
+        label="Branch processing",
+    )
+
     results: list[BranchResult] = []
-    if branch_ids and cfg.n_workers is not None and cfg.n_workers <= 1:
+    if dispatch_ids and n_workers <= 1:
         # True serial path: one branch at a time, no Dask. Use n_workers=1 to
         # isolate concurrency effects from deterministic per-branch behaviour.
-        # n_workers=None means "auto" (all cores) -> takes the Dask path below.
-        log.info("Processing %d branches serially (n_workers=1)", len(branch_ids))
-        for bid in branch_ids:
+        log.info("Processing %d branches serially (n_workers=1)", len(dispatch_ids))
+        for bid in dispatch_ids:
             results.append(_process_single_branch(cfg, bid))
-    elif branch_ids:
+    elif dispatch_ids:
         from distributed import as_completed as dask_as_completed
 
         from ..._dask import get_client
@@ -325,10 +351,10 @@ def process_branches(cfg: AOIProcessingConfig) -> list[BranchResult]:
 
         _ensure_wbt_source(cfg.wbt_path if hasattr(cfg, "wbt_path") else None)
 
-        client = get_client(n_workers=cfg.n_workers)
+        client = get_client(n_workers=n_workers)
         log.info(
             "Dispatching %d branches to Dask (%d workers, dashboard %s)",
-            len(branch_ids),
+            len(dispatch_ids),
             len(client.scheduler_info()["workers"]),
             client.dashboard_link,
         )
@@ -339,12 +365,12 @@ def process_branches(cfg: AOIProcessingConfig) -> list[BranchResult]:
         # 'failed' result and move on to siblings.
         futures = client.map(
             _process_single_branch,
-            [cfg] * len(branch_ids),
-            branch_ids,
+            [cfg] * len(dispatch_ids),
+            dispatch_ids,
             pure=False,
             retries=0,
         )
-        future_to_bid = {fut.key: bid for fut, bid in zip(futures, branch_ids)}
+        future_to_bid = {fut.key: bid for fut, bid in zip(futures, dispatch_ids)}
         for fut in dask_as_completed(futures):
             bid = future_to_bid.get(fut.key, "?")
             try:
@@ -370,6 +396,10 @@ def process_branches(cfg: AOIProcessingConfig) -> list[BranchResult]:
 
     branches_elapsed = time.time() - start
     _log_branch_summary(results, branches_elapsed)
+
+    # Branch-zero crosswalk waits until the loop drains — it reads branch zero's
+    # CreateHAND outputs, which may have just been produced inside the pool.
+    _run_branch_zero_post_steps(cfg)
 
     # Per-branch + branch-zero deny-list cleanup runs once here, after
     # every branch has finished, instead of inside each worker. Tests
@@ -960,7 +990,12 @@ if __name__ == "__main__":
     parser.add_argument("--aoi-dir", required=True)
     parser.add_argument("--aoi-id", required=True)
     parser.add_argument("--branch-list", default=None)
-    parser.add_argument("--workers", type=int, default=1)
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=None,
+        help="Parallel branch workers. Omit to size to the machine; 1 for serial.",
+    )
     parser.add_argument("--fema-nfhl", default=None)
     parser.add_argument("--usgs-gages", default=None)
     parser.add_argument("--ahps", default=None)

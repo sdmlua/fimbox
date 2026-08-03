@@ -143,6 +143,43 @@ class BranchZero:
             log.exception("BranchZero failed")
             raise
 
+    def publish_shared_inputs(self) -> dict:
+        """Clip just the AOI-root rasters — steps 1-2, the only ones anything
+        outside ``branches/0/`` reads.
+
+        Split out of :meth:`run` so a caller can satisfy the siblings' one real
+        prerequisite and then start the fan-out. The rest of branch zero's stack
+        (levee burn, AGREE, pit fill, D8) writes only into its own branch
+        directory, so it belongs in branch zero's pool task rather than in front
+        of it. Typically a no-op: when ``dem_path`` already *is*
+        ``<aoi_dir>/dem.tif`` both clips skip.
+        """
+        from ...logging_utils import attach_case_log
+
+        attach_case_log(self.out_dir)
+        crs, res = self._resolve_crs_and_res()
+
+        outputs: dict = {}
+        dem_clipped = self.out_dir / "dem.tif"
+        _rasterio_clip_reproject(
+            self.dem_path, self.boundary_gpkg, dem_clipped, crs=crs, res=res
+        )
+        log.info("DEM clipped --> %s", dem_clipped.name)
+        outputs["dem"] = dem_clipped
+
+        if self.bridge_elev_diff_path and self.bridge_elev_diff_path.exists():
+            bridge_clipped = self.out_dir / "bridge_elev_diff.tif"
+            _rasterio_clip_reproject(
+                self.bridge_elev_diff_path,
+                self.boundary_gpkg,
+                bridge_clipped,
+                crs=crs,
+                res=res,
+            )
+            log.info("Bridge elev diff clipped --> %s", bridge_clipped.name)
+            outputs["bridge_elev_diff"] = bridge_clipped
+        return outputs
+
     def _run(self) -> dict:
         bid = self.branch_zero_id
         branch_dir = self.out_dir / "branches" / bid
@@ -156,36 +193,34 @@ class BranchZero:
         # on the AOI-root dem.tif corrupts the shared input. Non-zero
         # branches write their per-branch clip directly into branch_dir.
         is_branch_zero = bid == "0"
+        bridge_clipped: Optional[Path] = None
         if is_branch_zero:
-            dem_clipped = self.out_dir / "dem.tif"
+            shared = self.publish_shared_inputs()
+            dem_clipped = shared["dem"]
+            bridge_clipped = shared.get("bridge_elev_diff")
         else:
             dem_clipped = branch_dir / f"dem_{bid}.tif"
-
-        _rasterio_clip_reproject(
-            self.dem_path, self.boundary_gpkg, dem_clipped, crs=crs, res=res
-        )
-        log.info("DEM clipped --> %s", dem_clipped.name)
+            _rasterio_clip_reproject(
+                self.dem_path, self.boundary_gpkg, dem_clipped, crs=crs, res=res
+            )
+            log.info("DEM clipped --> %s", dem_clipped.name)
+            if self.bridge_elev_diff_path and self.bridge_elev_diff_path.exists():
+                bridge_clipped = branch_dir / f"bridge_elev_diff_{bid}.tif"
+                _rasterio_clip_reproject(
+                    self.bridge_elev_diff_path,
+                    self.boundary_gpkg,
+                    bridge_clipped,
+                    crs=crs,
+                    res=res,
+                )
+                log.info("Bridge elev diff clipped --> %s", bridge_clipped.name)
 
         dem_branch = branch_dir / f"dem_{bid}.tif"
         if dem_clipped != dem_branch:
             shutil.copy2(dem_clipped, dem_branch)
 
-        # clip bridge elev diff once, then copy into branch subdirectory
-        bridge_clipped: Optional[Path] = None
         bridge_branch: Optional[Path] = None
-        if self.bridge_elev_diff_path and self.bridge_elev_diff_path.exists():
-            if is_branch_zero:
-                bridge_clipped = self.out_dir / "bridge_elev_diff.tif"
-            else:
-                bridge_clipped = branch_dir / f"bridge_elev_diff_{bid}.tif"
-            _rasterio_clip_reproject(
-                self.bridge_elev_diff_path,
-                self.boundary_gpkg,
-                bridge_clipped,
-                crs=crs,
-                res=res,
-            )
-            log.info("Bridge elev diff clipped --> %s", bridge_clipped.name)
+        if bridge_clipped is not None:
             bridge_branch = branch_dir / f"bridge_elev_diff_{bid}.tif"
             if bridge_clipped != bridge_branch:
                 shutil.copy2(bridge_clipped, bridge_branch)

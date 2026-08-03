@@ -18,7 +18,6 @@ Inputs / outputs:
 from __future__ import annotations
 
 import logging
-from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
@@ -28,22 +27,13 @@ import numpy as np
 import rasterio
 import rasterio.features
 import rasterio.sample
+from numba import njit
 from shapely import ops as shapely_ops
 from shapely.geometry import Point
 
-log = logging.getLogger(__name__)
+from ._d8 import downstream_index
 
-# WBT D8 pointer: power-of-2 code --> (row_offset, col_offset)
-_D8_OFFSETS: dict[int, tuple[int, int]] = {
-    1: (0, 1),
-    2: (1, 1),
-    4: (1, 0),
-    8: (1, -1),
-    16: (0, -1),
-    32: (-1, -1),
-    64: (-1, 0),
-    128: (-1, 1),
-}
+log = logging.getLogger(__name__)
 
 
 # Stream pixel centroids
@@ -211,36 +201,56 @@ def _fill_interior_holes(labels: np.ndarray) -> np.ndarray:
     return out
 
 
+def _orthogonal_neighbours(lab: np.ndarray, flat_idx: np.ndarray) -> np.ndarray:
+    """The 4 edge-neighbour labels at `flat_idx`, as (4, m); 0 off the grid.
+
+    Order is south, north, east, west — the order the majority vote breaks ties in.
+    """
+    rows, cols = lab.shape
+    flat = lab.ravel()
+    r, c = flat_idx // cols, flat_idx % cols
+    out = np.zeros((4, flat_idx.size), dtype=lab.dtype)
+    for k, (dr, dc) in enumerate(((1, 0), (-1, 0), (0, 1), (0, -1))):
+        rr, cc = r + dr, c + dc
+        on_grid = (rr >= 0) & (rr < rows) & (cc >= 0) & (cc < cols)
+        out[k, on_grid] = flat[rr[on_grid] * cols + cc[on_grid]]
+    return out
+
+
 def _declutter_boundaries(labels: np.ndarray, max_iter: int = 50) -> np.ndarray:
     """
     Remove artefacts along catchment boundaries.
     Reassign corner-only cells to the dominant 4-neighbour label until stable.
+
+    Teeth are a handful of cells out of hundreds of millions, so the pass finds
+    them first and votes only there — the whole-grid neighbour stack it used to
+    build cost gigabytes of copying per iteration.
     """
     lab = labels.astype(np.int32).copy()
     background = lab == 0
 
     for iteration in range(max_iter):
-        up = np.roll(lab, -1, 0)
-        dn = np.roll(lab, 1, 0)
-        lf = np.roll(lab, -1, 1)
-        rt = np.roll(lab, 1, 1)
-        # rolled wrap-around edges are not real neighbours — treat as background.
-        up[-1, :] = 0
-        dn[0, :] = 0
-        lf[:, -1] = 0
-        rt[:, 0] = 0
+        # A cell keeps its label if any edge-neighbour matches it. Off-grid
+        # neighbours count as background, which only ever matters for background
+        # cells — and those are excluded from teeth anyway.
+        same_label_edge = np.zeros(lab.shape, dtype=bool)
+        eq_vertical = lab[1:, :] == lab[:-1, :]
+        same_label_edge[:-1, :] |= eq_vertical
+        same_label_edge[1:, :] |= eq_vertical
+        eq_horizontal = lab[:, 1:] == lab[:, :-1]
+        same_label_edge[:, :-1] |= eq_horizontal
+        same_label_edge[:, 1:] |= eq_horizontal
 
         # "teeth": labelled cells sharing no edge (only corners) with their own label.
-        same_label_edge = (up == lab) | (dn == lab) | (lf == lab) | (rt == lab)
-        teeth = (~background) & (~same_label_edge)
-        if not teeth.any():
+        teeth = np.flatnonzero(~background.ravel() & ~same_label_edge.ravel())
+        if teeth.size == 0:
             break
 
         # Majority vote over the 4 orthogonal neighbours, ignoring background.
-        neighbours = np.stack([up, dn, lf, rt])
+        neighbours = _orthogonal_neighbours(lab, teeth)
         valid = neighbours > 0
-        best_label = np.zeros_like(lab)
-        best_count = np.zeros_like(lab)
+        best_label = np.zeros(teeth.size, dtype=lab.dtype)
+        best_count = np.zeros(teeth.size, dtype=np.int64)
         for k in range(4):
             candidate = neighbours[k]
             count = ((neighbours == candidate) & valid).sum(axis=0) * (candidate > 0)
@@ -248,14 +258,10 @@ def _declutter_boundaries(labels: np.ndarray, max_iter: int = 50) -> np.ndarray:
             best_count = np.where(take, count, best_count)
             best_label = np.where(take, candidate, best_label)
 
-        apply = teeth & (best_count > 0)
+        apply = best_count > 0
         if not apply.any():
             break  # remaining teeth are fully isolated (no labelled edge neighbour).
-        new_lab = lab.copy()
-        new_lab[apply] = best_label[apply]
-        if np.array_equal(new_lab, lab):
-            break
-        lab = new_lab
+        lab.flat[teeth[apply]] = best_label[apply]
 
     n_changed = int((lab != labels).sum())
     log.info(
@@ -336,6 +342,43 @@ def _enforce_connectivity(labels: np.ndarray, max_iter: int = 8) -> np.ndarray:
     return lab
 
 
+@njit(cache=True)
+def _label_downstream_paths(
+    ds: np.ndarray, result: np.ndarray, state: np.ndarray
+) -> None:
+    """Give every cell the label of the first seed on its downstream path.
+
+    Seeds arrive already marked done in ``state``, which is what stops the walk.
+    Each path is walked twice — once to find the label, once to stamp it — and
+    every cell is marked done on the way, so the whole grid costs O(n) rather
+    than one traversal per cell.
+    """
+    n = ds.size
+    for start in range(n):
+        if state[start] == 2:
+            continue
+
+        j = start
+        while state[j] == 0:
+            state[j] = 1
+            nxt = ds[j]
+            if nxt == j:  # pit or off-grid: nothing downstream to inherit from
+                result[j] = 0
+                state[j] = 2
+                break
+            j = nxt
+
+        # state 1 here means the walk came back on itself — a flow cycle, which
+        # the label can't come out of, so the whole path stays unlabelled.
+        label = result[j] if state[j] == 2 else 0
+
+        j = start
+        while state[j] != 2:
+            result[j] = label
+            state[j] = 2
+            j = ds[j]
+
+
 def _gage_watershed(
     d8: np.ndarray,
     outlet_rc_ids: list[tuple[int, int, int]],
@@ -344,87 +387,30 @@ def _gage_watershed(
 ) -> np.ndarray:
     """
     Algorithm: label propagation in topological downstream-->upstream order.
-    Each cell inherits the label of its downstream neighbor.  We process
-    cells in the order they are visited during a BFS seeded from the outlet
-    points — a cell is only enqueued once its downstream neighbor is already
-    labeled, guaranteeing the label is ready when we process it.
+    Each cell inherits the label of its downstream neighbor, so its label is the
+    first outlet found by walking downstream; cells whose path reaches no outlet
+    stay 0.
 
     Runtime O(n): every cell is visited exactly once.
     """
     rows, cols = d8.shape
     n = rows * cols
 
-    flat_d8 = d8.ravel().astype(np.int32)
-    if nodata_d8 is not None:
-        flat_d8[flat_d8 == int(nodata_d8)] = 0
-
-    # Build downstream flat-index (self-loop = no valid downstream)
-    ds = np.arange(n, dtype=np.int64)
-    r_all = np.arange(n, dtype=np.int64) // cols
-    c_all = np.arange(n, dtype=np.int64) % cols
-
-    for d8_val, (dr, dc) in _D8_OFFSETS.items():
-        sel = flat_d8 == d8_val
-        if not sel.any():
-            continue
-        r_ds = r_all + dr
-        c_ds = c_all + dc
-        in_bounds = sel & (r_ds >= 0) & (r_ds < rows) & (c_ds >= 0) & (c_ds < cols)
-        ds[in_bounds] = (r_ds * cols + c_ds)[in_bounds]
-
-    # Build upstream adjacency: us[j] = list of cells that drain into j
-    idx_all = np.arange(n, dtype=np.int64)
-    non_self = ds != idx_all
-    src_cells = idx_all[non_self]
-    dst_cells = ds[non_self]
-    sort_order = np.argsort(dst_cells, kind="stable")
-    dst_sorted = dst_cells[sort_order]
-    src_sorted = src_cells[sort_order]
-    split_pts = np.flatnonzero(np.diff(dst_sorted)) + 1
-    boundaries = np.concatenate([[0], split_pts, [len(dst_sorted)]])
-    groups = np.split(src_sorted, split_pts)
-    us: dict[int, np.ndarray] = {
-        int(dst_sorted[boundaries[k]]): groups[k] for k in range(len(groups))
-    }
+    flat_d8 = d8 if nodata_d8 is None else np.where(d8 == int(nodata_d8), 0, d8)
+    ds = downstream_index(flat_d8)
 
     result = np.zeros(n, dtype=np.int32)
-    visited = np.zeros(n, dtype=bool)
-    is_seed = np.zeros(n, dtype=bool)
+    state = np.zeros(n, dtype=np.uint8)  # 0 unseen, 1 on the current path, 2 settled
 
-    # Seed pass 1: fix every outlet cell to its own id. Seeds are adjacent along
-    # the channel, so this must finish for ALL seeds before propagation — else
-    # an upstream seed gets overwritten by a downstream seed's label.
+    # Fix every outlet cell to its own id first. Seeds sit next to each other
+    # along the channel, so they must all be pinned before propagation — else an
+    # upstream seed gets overwritten by a downstream seed's label.
     for r, c, hid in outlet_rc_ids:
         idx = int(r) * cols + int(c)
         result[idx] = hid
-        visited[idx] = True
-        is_seed[idx] = True
+        state[idx] = 2
 
-    # Seed pass 2: enqueue the upstream neighbours of every seed.
-    queue: deque[int] = deque()
-    for r, c, _ in outlet_rc_ids:
-        idx = int(r) * cols + int(c)
-        for upstream_cell in us.get(idx, []):
-            if not visited[int(upstream_cell)]:
-                queue.append(int(upstream_cell))
-
-    # Process upstream: cell i inherits label from its downstream neighbor ds[i],
-    # which is already labeled because it was processed before i was enqueued.
-    while queue:
-        i = int(queue.popleft())
-        if visited[i] or is_seed[i]:
-            continue
-        j = int(ds[i])
-        lbl = result[j]
-        if lbl == 0:
-            # downstream not labeled yet — re-enqueue and retry (confluences).
-            queue.append(i)
-            continue
-        visited[i] = True
-        result[i] = lbl
-        for upstream_cell in us.get(i, []):
-            if not visited[int(upstream_cell)]:
-                queue.append(int(upstream_cell))
+    _label_downstream_paths(ds, result, state)
 
     log.debug(
         "gage_watershed: %d/%d cells labeled",

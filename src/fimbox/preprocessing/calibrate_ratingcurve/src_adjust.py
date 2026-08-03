@@ -28,11 +28,12 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 from concurrent.futures.process import BrokenProcessPool
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Optional
 
 import numpy as np
 import pandas as pd
 
+from ..._workers import RAM_PER_WORKER_TABLE_GB, resolve_workers
 from ._common import (
     BEDAREA_VAR,
     HRADIUS_VAR,
@@ -51,22 +52,29 @@ def _run_branches(
     branches: list[tuple[str, Path]],
     worker: Callable[..., str],
     worker_args: tuple,
-    n_workers: int,
+    n_workers: Optional[int],
     label: str,
 ) -> dict[str, str]:
     """Run ``worker(branch_dir, bid, *worker_args)`` over every branch.
 
-    Serial when ``n_workers <= 1``. Otherwise a ProcessPoolExecutor, with a
-    fallback to serial if the pool breaks (``BrokenProcessPool`` — seen when a
-    native lib can't fork, common on macOS). A broken pool would otherwise
-    record every branch as a silent "FAIL", so we re-run serially instead of
-    publishing an empty calibration. Individual branch exceptions are caught
-    and recorded as ``FAIL ...`` without sinking the batch.
+    ``n_workers`` is resolved against the machine first: ``None``/``0`` auto-size
+    to every core the RAM can feed, an over-ambitious number is clamped, and
+    ``n_workers=1`` stays serial for debugging. Parallel runs use a
+    ProcessPoolExecutor with a fallback to serial if the pool breaks
+    (``BrokenProcessPool`` — seen when a native lib can't fork, common on
+    macOS). A broken pool would otherwise record every branch as a silent
+    "FAIL", so we re-run serially instead of publishing an empty calibration.
+    Individual branch exceptions are caught and recorded as ``FAIL ...`` without
+    sinking the batch.
     """
     results: dict[str, str] = {}
-    # n_workers=None means "auto" (let ProcessPoolExecutor size to cpu count) ->
-    # takes the parallel path below; only an explicit <=1 runs serially.
-    if n_workers is not None and n_workers <= 1:
+    n_workers = resolve_workers(
+        n_workers,
+        n_tasks=len(branches),
+        ram_per_worker_gb=RAM_PER_WORKER_TABLE_GB,
+        label=label,
+    )
+    if n_workers <= 1:
         for bid, bp in branches:
             try:
                 results[bid] = worker(bp, bid, *worker_args)
@@ -107,7 +115,7 @@ class SrcBankfull:
 
     aoi_dir: PathLike
     bankfull_flows_file: PathLike
-    n_workers: int = 1
+    n_workers: Optional[int] = None
     include_branch_zero: bool = True
 
     def run(self) -> dict[str, str]:
@@ -123,7 +131,7 @@ class SrcBankfull:
             log.warning(f"SrcBankfull: no branches found under {aoi_dir}")
             return {}
 
-        log.info(f"SrcBankfull: {len(branches)} branches, {self.n_workers} workers")
+        log.info(f"SrcBankfull: {len(branches)} branches")
         return _run_branches(
             branches,
             _bankfull_one_branch,
@@ -249,7 +257,7 @@ class SrcSubdiv:
 
     aoi_dir: PathLike
     vmann_table: PathLike  # CSV/Parquet keyed on feature_id, channel_n, overbank_n
-    n_workers: int = 1
+    n_workers: Optional[int] = None
     include_branch_zero: bool = True
     default_channel_n: float = 0.06
     default_overbank_n: float = 0.12
@@ -265,7 +273,7 @@ class SrcSubdiv:
         branches = list(
             iter_branches(aoi_dir, exclude_zero=not self.include_branch_zero)
         )
-        log.info(f"SrcSubdiv: {len(branches)} branches, {self.n_workers} workers")
+        log.info(f"SrcSubdiv: {len(branches)} branches")
         return _run_branches(
             branches,
             _subdiv_one_branch,
@@ -473,7 +481,7 @@ class SrcNonmonotonic:
     aoi_dir: PathLike
     stream_order_min: int = 4
     include_branch_zero: bool = True
-    n_workers: int = 1
+    n_workers: Optional[int] = None
 
     def run(self) -> dict[str, str]:
         aoi_dir = resolve_aoi_dir(self.aoi_dir)
@@ -482,9 +490,7 @@ class SrcNonmonotonic:
         self._normalize_branch_zero(aoi_dir)
 
         branches = list(iter_branches(aoi_dir, exclude_zero=True))
-        log.info(
-            f"SrcNonmonotonic: {len(branches)} non-zero branches, {self.n_workers} workers"
-        )
+        log.info(f"SrcNonmonotonic: {len(branches)} non-zero branches")
         return _run_branches(
             branches,
             _nonmonotonic_one_branch,

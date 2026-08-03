@@ -18,16 +18,16 @@ from fimbox import (
 )
 
 # AOI_DIR = Path(__file__).resolve().parents[2] / "out" / "test_smallB"
-AOI_DIR = Path(__file__).resolve().parents[2] / "out" / "nwm_11239459and2more"
+AOI_DIR = Path(__file__).resolve().parents[2] / "out" / "HUC08060202"
 
 START = "2016-10-05"
 END = "2016-10-20"
 EVENT = "2020-10-10 21:00:00"
 
 
-# retrospective — different extraction combinations
-def test_retrospective_event_date():
-    getNWMretrospective(AOI_DIR, date=EVENT)
+# # retrospective — different extraction combinations
+# def test_retrospective_event_date():
+#     getNWMretrospective(AOI_DIR, date=EVENT)
 
 
 # def test_retrospective_range_continuous():
@@ -35,9 +35,9 @@ def test_retrospective_event_date():
 #     getNWMretrospective(AOI_DIR, start=START, end=END)
 
 
-# def test_retrospective_range_sortby():
-#     # start + end + sortby -> one aggregated CSV
-#     getNWMretrospective(AOI_DIR, start=START, end=END, sortby="maximum")
+def test_retrospective_range_sortby():
+    # start + end + sortby -> one aggregated CSV
+    getNWMretrospective(AOI_DIR, start=START, end=END, sortby="maximum")
 
 
 # def test_retrospective_feature_ids_list():

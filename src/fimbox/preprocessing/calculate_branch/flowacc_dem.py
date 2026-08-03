@@ -18,27 +18,16 @@ out_stream_pixels: demDerived_streamPixels_{id}.tif  (1=stream, nodata=-9999)
 from __future__ import annotations
 
 import logging
-from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
 import numpy as np
+from numba import njit
+
+from ._d8 import downstream_index
 
 log = logging.getLogger(__name__)
-
-# WBT D8 pointer encoding: powers-of-2 --> (row_offset, col_offset)
-# 64=N  128=NE  1=E  2=SE  4=S  8=SW  16=W  32=NW
-_D8_OFFSETS: dict[int, tuple[int, int]] = {
-    1: (0, 1),
-    2: (1, 1),
-    4: (1, 0),
-    8: (1, -1),
-    16: (0, -1),
-    32: (-1, -1),
-    64: (-1, 0),
-    128: (-1, 1),
-}
 
 
 @dataclass
@@ -46,8 +35,7 @@ class FlowAccDEM:
     """
     Headwater-weighted D8 flow accumulation using a topological BFS.
 
-    No external dependencies beyond numpy and rasterio — avoids the
-    numba/llvmlite build requirement that pyflwdir carries.
+    Hand-rolled on numpy + a compiled traversal rather than pulling in pyflwdir.
 
     Parameters
     ----------
@@ -223,38 +211,47 @@ def _d8_flow_accum(d8: np.ndarray, hw: np.ndarray) -> np.ndarray:
     accum : float32 accumulated headwater count at each cell
     """
     rows, cols = d8.shape
-    n = rows * cols
-    flat_d8 = d8.ravel()
 
-    # build flat downstream index; self-loop marks outlet / no-flow
-    ds = np.arange(n, dtype=np.int32)
-    for code, (dr, dc) in _D8_OFFSETS.items():
-        mask = flat_d8 == code
-        if not mask.any():
-            continue
-        idxs = np.where(mask)[0]
-        r = idxs // cols
-        c = idxs % cols
-        nr = r + dr
-        nc = c + dc
-        valid = (nr >= 0) & (nr < rows) & (nc >= 0) & (nc < cols)
-        ds[idxs[valid]] = (nr[valid] * cols + nc[valid]).astype(np.int32)
+    accum = hw.ravel().astype(np.float32).copy()
+    _accumulate_downstream(downstream_index(d8), accum)
+    return accum.reshape(rows, cols)
 
-    # in-degree: number of upstream cells draining into each cell
-    non_self = ds != np.arange(n, dtype=np.int32)
+
+@njit(cache=True)
+def _accumulate_downstream(ds: np.ndarray, accum: np.ndarray) -> None:
+    """Push each cell's running total into its downstream neighbour, Kahn order.
+
+    In-degree and the source list are counted here rather than with bincount so
+    nothing wider than the grid itself gets allocated — that temporary is over a
+    gigabyte on a HUC8 and grows with the area.
+
+    A cell is released only once every upstream contributor has been added in, so
+    each is touched exactly once, and each joins the queue exactly when its
+    in-degree hits zero — so the preallocated queue can never overflow.
+    """
+    n = ds.size
+
     in_deg = np.zeros(n, dtype=np.int16)
-    np.add.at(in_deg, ds[non_self], 1)
+    for i in range(n):
+        j = ds[i]
+        if j != i:
+            in_deg[j] += 1
 
-    # BFS from source cells (nothing flows into them)
-    accum = hw.ravel().astype(np.float32)
-    queue: deque[int] = deque(np.where(in_deg == 0)[0].tolist())
-    while queue:
-        i = queue.popleft()
-        j = int(ds[i])
+    queue = np.empty(n, dtype=np.int32)
+    tail = 0
+    for i in range(n):
+        if in_deg[i] == 0:
+            queue[tail] = i
+            tail += 1
+
+    head = 0
+    while head < tail:
+        i = queue[head]
+        head += 1
+        j = ds[i]
         if j != i:
             accum[j] += accum[i]
             in_deg[j] -= 1
             if in_deg[j] == 0:
-                queue.append(j)
-
-    return accum.reshape(rows, cols)
+                queue[tail] = j
+                tail += 1

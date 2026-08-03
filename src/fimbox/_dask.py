@@ -18,9 +18,11 @@ started pausing/killing workers mid-task.
 
 The new defaults:
 
-1. ``n_workers`` is the minimum of CPU count and (free RAM GB / 6),
-   floored at 2. On a 32 GB / 8-core box that gives 5 workers with
-   ~6 GB each — enough for a HUC8 branch with margin.
+1. ``n_workers`` is the minimum of CPU count and (RAM GB / 8), floored
+   at 2. On a 64 GB / 12-core box that gives 8 workers with ~8 GB each
+   — enough for a HUC8 branch with margin. A caller-supplied count is
+   capped by the same ceiling (see ``fimbox._workers``), so
+   ``n_workers=64`` on a laptop lands on what the laptop can feed.
 2. Dask's "pause-at-80% / terminate-at-95%" governor is disabled.
    Branches run with stable RSS once the rasters are loaded; the
    transient peaks were causing Dask to pause workers, which made the
@@ -46,6 +48,8 @@ import os
 import threading
 from typing import Optional
 
+from ._workers import resolve_workers, system_ram_gb
+
 log = logging.getLogger(__name__)
 
 _lock = threading.Lock()
@@ -62,26 +66,22 @@ _DEFAULT_RAM_PER_BRANCH_GB = 8.0
 
 def _system_ram_gb() -> float:
     """Best-effort total RAM in GB. Returns 8.0 if it can't be detected."""
-    try:
-        import psutil  # type: ignore
-
-        return psutil.virtual_memory().total / (1024**3)
-    except Exception:
-        pass
-    # POSIX fallback (Linux + macOS): sysconf
-    try:
-        return (os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES")) / (1024**3)
-    except (ValueError, AttributeError, OSError):
-        return 8.0
+    return system_ram_gb()
 
 
-def _resolve_n_workers() -> int:
-    """Pick worker count that fits comfortably in RAM.
+def _ram_per_branch_gb() -> float:
+    return float(
+        os.environ.get("FIMBOX_DASK_RAM_PER_BRANCH", _DEFAULT_RAM_PER_BRANCH_GB)
+    )
 
-    Explicit env override wins. Otherwise: min(cpu_count, RAM_GB /
-    RAM_PER_BRANCH_GB), floored at 2 so very small machines still get
-    some parallelism, capped at cpu_count so we don't oversubscribe
-    cores.
+
+def _resolve_n_workers(requested: Optional[int] = None) -> int:
+    """Worker count that fits comfortably in RAM.
+
+    ``FIMBOX_DASK_WORKERS`` still wins outright — it's the escape hatch for
+    people who know their box. Otherwise ``requested`` is honoured only as far
+    as CPU and RAM allow: asking for 64 workers on a 12-core laptop gets you 12
+    fighting over 8 GB slices, which is slower than the 8 the machine can feed.
     """
     env = os.environ.get("FIMBOX_DASK_WORKERS")
     if env:
@@ -92,23 +92,11 @@ def _resolve_n_workers() -> int:
         except ValueError:
             log.warning("FIMBOX_DASK_WORKERS=%r is not an int; auto-sizing", env)
 
-    cpu = max(1, os.cpu_count() or 1)
-    ram_gb = _system_ram_gb()
-
-    per_branch = float(
-        os.environ.get("FIMBOX_DASK_RAM_PER_BRANCH", _DEFAULT_RAM_PER_BRANCH_GB)
+    return resolve_workers(
+        requested,
+        ram_per_worker_gb=_ram_per_branch_gb(),
+        label="Dask worker sizing",
     )
-    by_ram = max(2, int(ram_gb // per_branch))
-    n = min(cpu, by_ram)
-    log.info(
-        "Dask worker sizing: cpu_count=%d, system_ram=%.1f GB, "
-        "ram_per_branch=%.1f GB => n_workers=%d",
-        cpu,
-        ram_gb,
-        per_branch,
-        n,
-    )
-    return n
 
 
 def _resolve_memory_limit():
@@ -153,7 +141,8 @@ def get_client(n_workers: Optional[int] = None):
 
     Pass ``n_workers`` to override the env/CPU default on first call
     only — once the cluster exists, later calls return the same client
-    regardless of the argument.
+    regardless of the argument. The request is bounded by what the machine
+    can feed; see :func:`_resolve_n_workers`.
     """
     global _client, _cluster
 
@@ -168,7 +157,7 @@ def get_client(n_workers: Optional[int] = None):
 
         from distributed import Client, LocalCluster
 
-        n = n_workers if n_workers else _resolve_n_workers()
+        n = _resolve_n_workers(n_workers)
         mem = _resolve_memory_limit()
 
         log.info(

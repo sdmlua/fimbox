@@ -892,15 +892,17 @@ class getAllInputData:
             return
 
         self.logger.info("--- NLD ---")
+        nld_failed: list = []
         if not lines_exist:
             try:
-                DownloadNLD(
+                nld = DownloadNLD(
                     boundary=self.buffer_gdf,
                     out_dir=str(self.case_dir),
                     epsg=self.epsg,
                     lines_name=_FILENAMES["levee_lines"],
                     polys_name=_FILENAMES["levee_protected_areas"],
                 )
+                nld_failed = list(nld.failed_layers)
             except Exception as exc:
                 self.logger.error(f"NLD download failed: {exc}", exc_info=True)
                 return
@@ -925,6 +927,12 @@ class getAllInputData:
                             f"Levee burn lines ({len(burned)} features) --> "
                             f"{_FILENAMES['levee_lines_burned']}"
                         )
+                elif "lines" in nld_failed:
+                    self.logger.error(
+                        "NLD: levee lines could not be downloaded — levee burn "
+                        "skipped. This is a download failure, not an area "
+                        "without levees; re-run before using this HAND output."
+                    )
                 else:
                     self.logger.info(
                         "NLD: no levee lines in this area — skipping levee burn."
@@ -939,6 +947,12 @@ class getAllInputData:
             if polys_path.exists():
                 self.logger.info(
                     f"Levee protected areas --> {_FILENAMES['levee_protected_areas']}"
+                )
+            elif "polys" in nld_failed:
+                self.logger.error(
+                    "NLD: leveed-area polygons could not be downloaded — "
+                    "levee masking will be missing, and this is a download "
+                    "failure rather than an area without leveed areas."
                 )
             else:
                 self.logger.info("NLD: no levee protected areas in this area.")
