@@ -34,12 +34,20 @@ NHDPlus layers::
 
     ID          numeric stem shared by wb-N / cat-N, joins catchments to reaches
     order_      flowpaths."order"
-    levpa_id    flowpaths.mainstem   (level path, drives branch derivation)
+    levpa_id    flowpaths.mainstem   (native level path)
     feature_id  network.hf_id        (NWM / NHD comid)
+    toid        flowpaths.toid       (downstream nexus; the connectivity key)
 
 ``feature_id`` is load-bearing: FIM is driven from NWM feature-id discharge, so
 mapping it from ``hf_id`` keeps the existing streamflow sources working against
 ngen geometry. Native ngen keys (``wb_id``, ``divide_id``) are kept alongside.
+
+``toid`` matters as much for an AOI subset. ngen routes reaches through nexus
+points and leaves a gap between neighbouring geometries, so the shared-endpoint
+matching the NWM layers rely on finds no network here — branch derivation reads
+``toid`` instead, whose numeric stem is the downstream flowpath's ``ID``. Branch
+derivation then re-derives its own level paths from that network rather than
+using ``levpa_id``, so branches mean the same thing across every source.
 """
 
 from __future__ import annotations
@@ -52,6 +60,7 @@ from pathlib import Path
 from typing import Iterable, Optional, Sequence, Union
 
 import geopandas as gpd
+import shapely
 
 from ..preprocessing.source_naming import source_name
 from . import _ngiab
@@ -441,6 +450,12 @@ class NgenHydrofabric:
             LEFT JOIN hf ON hf.id = f.id
             WHERE {self._id_filter("f.id", selection.wb_ids)}
         """)
+        # Flowpaths are stored as MultiLineString, one part per reach. The NWM /
+        # NHDPlus layers this stands in for are plain LineStrings, and several
+        # downstream steps read ``.coords`` — which shapely refuses on a multi —
+        # so the parts are stitched here, at the schema boundary.
+        if not gdf.empty:
+            gdf["geometry"] = shapely.line_merge(gdf.geometry.values)
         log.info(f"ngen flowlines: {len(gdf)} reach(es)")
         return gdf
 

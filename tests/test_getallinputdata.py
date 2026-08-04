@@ -20,18 +20,19 @@ test_ngen_cat_ids = ["cat-1096367", "cat-1096368"]
 
 # Combined preprocessing pipeline tests
 # Run full pipeline from a boundary shapefile
-def test_preprocess_all_from_boundary():
-    pp = fimbox.getAllInputData(
-        huc8=test_huc8,
-        out_dir=OUT_DIR,
-        buffer_m=5000,  # metres to buffer boundary for data downloads
-        headwater_buffer_cells=8,  # pixels to shrink buffer for headwater clip
-        get_flowlines=True,  # set False to use your own flowlines and corresponding catchments
-        get_catchments=True,  # set False to skip NWM catchments--> use
-        source="nwmmedium",  # "nwmhigh" -> NHDPlus HR via pynhd; "ngen" -> NextGen hydrofabric. Lakes always NWM.
-        identifier="nwmmr",  # filename prefix for ALL source files; flows download->processing. Default "nwm".
-    )
-    pp.run()
+# def test_preprocess_all_from_boundary():
+#     pp = fimbox.getAllInputData(
+#         huc8=test_huc8,
+#         out_dir=OUT_DIR,
+#         buffer_m=5000,  # metres to buffer boundary for data downloads
+#         headwater_buffer_cells=8,  # pixels to shrink buffer for headwater clip
+#         get_flowlines=True,  # set False to use your own flowlines and corresponding catchments
+#         get_catchments=True,  # set False to skip NWM catchments--> use
+#         apply_levees=True,  # False --> skip NLD lines + protected areas (no levees anywhere in the run)
+#         source="nwmmedium",  # "nwmhigh" -> NHDPlus HR via pynhd; "ngen" -> NextGen hydrofabric. Lakes always NWM.
+#         identifier="nwmmr",  # filename prefix for ALL source files; flows download->processing. Default "nwm".
+#     )
+#     pp.run()
 
 
 # Bring your own flowlines / catchments / DEM (any column names, any source).
@@ -93,19 +94,19 @@ def test_preprocess_all_from_boundary():
 #                           reaches inside the buffer come too, giving the
 #                           upstream area HAND needs to be right
 # --> out/nwm_11239455and2more/
-def test_preprocess_all_from_nwm_ids():
-    pp = fimbox.getAllInputData(
-        nwm_ids=test_nwm_ids,  # reach IDs instead of boundary=...
-        out_dir=OUT_DIR,
-        buffer_m=5000,  # 0 -> exactly these reaches; >0 --> also their neighbours
-        headwater_buffer_cells=0,  # pixels to shrink buffer for headwater clip (capped by buffer_m)
-        get_flowlines=True,  # only applies once buffer_m > 0 pulls hydrography
-        get_catchments=True,  # same
-        dem_resolution=10,  # 3DEP DEM resolution in metres (1/3/10/30/60)
-        source="nwmmedium",  # "nwmhigh" -> NHDPlus HR via pynhd; "ngen" -> NextGen hydrofabric. Lakes always NWM.
-        identifier="nwmmr",  # filename prefix for ALL source files; flows download->processing. Default "nwm".
-    )
-    pp.run()
+# def test_preprocess_all_from_nwm_ids():
+#     pp = fimbox.getAllInputData(
+#         nwm_ids=test_nwm_ids,  # reach IDs instead of boundary=...
+#         out_dir=OUT_DIR,
+#         buffer_m=5000,  # 0 -> exactly these reaches; >0 --> also their neighbours
+#         headwater_buffer_cells=0,  # pixels to shrink buffer for headwater clip (capped by buffer_m)
+#         get_flowlines=True,  # only applies once buffer_m > 0 pulls hydrography
+#         get_catchments=True,  # same
+#         dem_resolution=10,  # 3DEP DEM resolution in metres (1/3/10/30/60)
+#         source="nwmmedium",  # "nwmhigh" -> NHDPlus HR via pynhd; "ngen" -> NextGen hydrofabric. Lakes always NWM.
+#         identifier="nwmmr",  # filename prefix for ALL source files; flows download->processing. Default "nwm".
+#     )
+#     pp.run()
 
 
 # One reach on its own. No network to split, so only branch zero is built later.
@@ -190,15 +191,19 @@ def test_preprocess_all_from_nwm_ids():
 #
 # Any AOI works: a boundary file, a HUC8, ngen cat IDs, or NWM feature IDs.
 # --> out/test_smallB/
-# def test_preprocess_ngen_from_boundary():
-#     pp = fimbox.getAllInputData(
-#         boundary=test_boundary,
-#         out_dir=OUT_DIR,
-#         buffer_m=5000,
-#         source="ngen",             #NextGen hydrofabric flowlines + catchments
-#         identifier="ngen",         #--> ngen_subset_streams.gpkg etc.
-#     )
-#     pp.run()
+def test_preprocess_ngen_from_boundary():
+    pp = fimbox.getAllInputData(
+        boundary=test_boundary,
+        out_dir=OUT_DIR,
+        buffer_m=5000,
+        headwater_buffer_cells=8,  # pixels to shrink buffer for headwater clip
+        get_flowlines=True,        # set False to use your own flowlines and corresponding catchments
+        get_catchments=True,       # set False to skip catchments --> use your own in later steps
+        apply_levees=True,         # False --> no NLD lines/protected areas anywhere in the run
+        source="ngen",             #NextGen hydrofabric flowlines + catchments
+        identifier="ngen",         #--> ngen_subset_streams.gpkg etc.
+    )
+    pp.run()
 
 
 # Same, from a HUC8: every catchment whose centroid falls inside the HUC.
@@ -207,6 +212,10 @@ def test_preprocess_all_from_nwm_ids():
 #     pp = fimbox.getAllInputData(
 #         huc8=test_huc8,
 #         out_dir=OUT_DIR,
+#         headwater_buffer_cells=8,
+#         get_flowlines=True,
+#         get_catchments=True,
+#         apply_levees=True,
 #         source="ngen",
 #         identifier="ngen",
 #     )
@@ -220,6 +229,10 @@ def test_preprocess_all_from_nwm_ids():
 #     pp = fimbox.getAllInputData(
 #         cat_ids=test_ngen_cat_ids,  # implies source="ngen"
 #         out_dir=OUT_DIR,
+#         headwater_buffer_cells=8,
+#         get_flowlines=True,
+#         get_catchments=True,
+#         apply_levees=True,
 #         subset_type="nexus",       #everything draining into the outlet nexus
 #         # subset_type="catchment", #stop at the selected catchments themselves
 #         identifier="ngen",
@@ -233,6 +246,10 @@ def test_preprocess_all_from_nwm_ids():
 #     pp = fimbox.getAllInputData(
 #         feature_ids=test_nwm_ids,  # or nwm_ids=... with source="ngen"
 #         out_dir=OUT_DIR,
+#         headwater_buffer_cells=8,
+#         get_flowlines=True,
+#         get_catchments=True,
+#         apply_levees=True,
 #         source="ngen",
 #         identifier="ngen",
 #     )

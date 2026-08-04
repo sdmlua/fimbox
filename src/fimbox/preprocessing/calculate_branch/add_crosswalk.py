@@ -271,10 +271,14 @@ def _prepare_nwm(
       * ``SLOPE_IRIS_SWORD``  — merged from the IRIS-SWORD table by feature_id.
     The DEM rise/run slope is not here — it rides through ``src_base``.
     """
-    if "ID" in nwm.columns:
+    # ID is the feature_id only where the source has no separate one (NWM).
+    if "ID" in nwm.columns and "feature_id" not in nwm.columns:
         nwm = nwm.rename(columns={"ID": "feature_id"})
     if "feature_id" not in nwm.columns:
-        raise ValueError("NWM streams file must contain an 'ID' or 'feature_id' column")
+        raise ValueError(
+            "streams must carry the discharge join key as 'feature_id', or as "
+            "'ID' where the reach id is the feature_id; rename it before staging."
+        )
     nwm["feature_id"] = nwm["feature_id"].astype(int)
 
     if "order_" not in nwm.columns:
@@ -299,8 +303,8 @@ def _prepare_nwm(
     else:
         nwm["SLOPE_HFAB"] = np.nan
         log.warning(
-            "add_crosswalk: hydrofabric slope column %s not found in NWM streams; "
-            "SLOPE_HFAB set to NaN",
+            "add_crosswalk: hydrofabric slope column %s not found in the staged "
+            "streams; SLOPE_HFAB set to NaN",
             hfab_slope_column or "'Slope'/'So'",
         )
 

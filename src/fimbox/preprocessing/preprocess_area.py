@@ -310,6 +310,12 @@ class getAllInputData:
         Default True. Set False to skip.
     get_catchments : bool, optional
         Download NWM/NHDPlus catchments. Default True. Set False to skip.
+    apply_levees : bool, optional
+        Stage the NLD layers — levee lines (burned into the DEM) and leveed /
+        protected-area polygons (masked out of it). Default True. Set False to
+        run the AOI with no levees at all: nothing is downloaded here, and the
+        branch stages find no levee files to apply. Pass the same value to
+        ``BranchDerivation`` / ``AOIProcessingConfig`` so the whole run agrees.
     source : str, optional
         Flowline/catchment source: ``"nwmmedium"`` (default) the NWM ArcGIS
         FeatureServer, ``"nwmhigh"`` NHDPlus High Resolution via ``pynhd``, or
@@ -366,6 +372,7 @@ class getAllInputData:
         get_flowlines: bool = True,
         get_catchments: bool = True,
         get_gages: bool = True,
+        apply_levees: bool = True,
         source: str = NWM_MEDIUM,
         cat_ids: Optional[Sequence[Union[int, str]]] = None,
         feature_ids: Optional[Sequence[Union[int, str]]] = None,
@@ -433,6 +440,7 @@ class getAllInputData:
         self.get_flowlines = get_flowlines
         self.get_catchments = get_catchments
         self.get_gages = get_gages
+        self.apply_levees = apply_levees
         # bring-your-own flowlines/catchments + their field maps
         self.byo_flowlines = Path(flowlines) if flowlines else None
         self.byo_catchments = Path(catchments) if catchments else None
@@ -877,6 +885,13 @@ class getAllInputData:
             return False
 
     def run_nld(self):
+        # No levees means no NLD at all: the branch stages key off these files
+        # existing, so skipping the download is what turns the levee burn and
+        # the protected-area mask off downstream.
+        if not self.apply_levees:
+            self.logger.info("apply_levees=False --> skipping NLD levees/leveed areas")
+            return
+
         lines_path = self._out("levee_lines")
         burned_exist = self._out("levee_lines_burned").exists()
         polys_exist = self._out("levee_protected_areas").exists()
@@ -1141,6 +1156,12 @@ if __name__ == "__main__":
         help="Skip NWM catchment download (bring your own).",
     )
     parser.add_argument(
+        "--no-levees",
+        action="store_true",
+        help="Skip the NLD levee lines and leveed-area polygons — run the AOI "
+        "with no levee burn and no levee-protected-area mask.",
+    )
+    parser.add_argument(
         "--source",
         default=NWM_MEDIUM,
         choices=SOURCES,
@@ -1183,6 +1204,7 @@ if __name__ == "__main__":
         headwater_buffer_cells=args.headwater_buffer_cells,
         get_flowlines=not args.no_flowlines,
         get_catchments=not args.no_catchments,
+        apply_levees=not args.no_levees,
         source=args.source,
         subset_type=args.subset_type,
         identifier=args.identifier,

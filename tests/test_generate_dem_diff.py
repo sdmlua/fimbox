@@ -11,13 +11,13 @@ import fimbox
 
 log = logging.getLogger(__name__)
 
-# OUT_DIR = Path(__file__).resolve().parents[2] / "out" / "test_smallB" / "watershed-data"
-OUT_DIR = (
-    Path(__file__).resolve().parents[2]
-    / "out"
-    / "nwm_11239459and2more"
-    / "watershed-data"
-)
+OUT_DIR = Path(__file__).resolve().parents[2] / "out" / "test_smallB" / "watershed-data"
+# OUT_DIR = (
+#     Path(__file__).resolve().parents[2]
+#     / "out"
+#     / "nwm_11239459and2more"
+#     / "watershed-data"
+# )
 
 bridge_gpkg = OUT_DIR / "osm_bridges_subset.gpkg"  # TODO: change to full bridges gpkg
 dem_path = OUT_DIR / "dem.tif"

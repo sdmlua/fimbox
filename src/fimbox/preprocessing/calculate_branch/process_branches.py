@@ -37,6 +37,10 @@ aoi_dir              <aoi_dir>/                 (output of getAllInputData + Bra
 branch_list          <aoi_dir>/branch_list.csv  (default location, override via param)
 fema_nfhl_gpkg       optional, for adjust_floodplains
 usgs_gages_gpkg      optional, for gage crosswalk
+apply_levees         True (default) applies both NLD layers — levee lines burned
+                     into the DEM (BranchZero) and leveed / protected areas masked
+                     out of it (CreateHAND step 1), each when its file is staged.
+                     False runs the AOI with no levees at all.
 delete_deny_list     True (default) deletes branch-zero, per-branch, and AOI
                      intermediates from fimbox/config/deny_*.lst; False keeps everything.
 
@@ -119,6 +123,9 @@ class AOIProcessingConfig:
         bridge_elev_diff_path: Optional[Path] = None,
         levee_gpkg_path: Optional[Path] = None,
         levee_raster_path: Optional[Path] = None,
+        levee_protected_areas_gpkg: Optional[Path] = None,
+        levee_levelpaths_csv: Optional[Path] = None,
+        apply_levees: bool = True,
         headwaters_gpkg: Optional[Path] = None,
         levelpaths_extended_gpkg: Optional[Path] = None,
         fema_nfhl_gpkg: Optional[Path] = None,
@@ -193,6 +200,9 @@ class AOIProcessingConfig:
         self.bridge_elev_diff_path = bridge_elev_diff_path
         self.levee_gpkg_path = levee_gpkg_path
         self.levee_raster_path = levee_raster_path
+        self.levee_protected_areas_gpkg = levee_protected_areas_gpkg
+        self.levee_levelpaths_csv = levee_levelpaths_csv
+        self.apply_levees = bool(apply_levees)
         self.headwaters_gpkg = headwaters_gpkg
         self.levelpaths_extended_gpkg = levelpaths_extended_gpkg
         self.fema_nfhl_gpkg = fema_nfhl_gpkg
@@ -498,9 +508,29 @@ def _resolve_paths(cfg: AOIProcessingConfig) -> AOIProcessingConfig:
         if cfg.headwaters_gpkg is None:
             hw = resolve_source(d, "headwaters")
             cfg.headwaters_gpkg = hw if hw.exists() else None
+    # Both NLD layers ride on the same switch: the lines are burned into the DEM
+    # (BranchZero) and the leveed-area polygons are masked out of it (CreateHAND
+    # step 1). apply_levees=False drops both, whatever is staged on disk.
+    if not cfg.apply_levees:
+        log.info("apply_levees=False — no levee burn, no levee-protected-area mask")
+        cfg.levee_gpkg_path = None
+        cfg.levee_raster_path = None
+        cfg.levee_protected_areas_gpkg = None
+        cfg.levee_levelpaths_csv = None
+        return cfg
+
     if cfg.levee_gpkg_path is None:
         lg = d / "3d_nld_subset_levees_burned.gpkg"
         cfg.levee_gpkg_path = lg if lg.exists() else None
+    if cfg.levee_protected_areas_gpkg is None:
+        pa = d / "LeveeProtectedAreas_subset.gpkg"
+        cfg.levee_protected_areas_gpkg = pa if pa.exists() else None
+    if cfg.levee_levelpaths_csv is None:
+        # Written by BranchDerivation. Branch zero masks every leveed area
+        # regardless; the non-zero branches mask nothing without this table,
+        # since it is what says which levee protects which level path.
+        lp = d / "levee_levelpaths.csv"
+        cfg.levee_levelpaths_csv = lp if lp.exists() else None
     return cfg
 
 
@@ -726,8 +756,8 @@ def _process_single_branch(cfg: AOIProcessingConfig, branch_id: str) -> BranchRe
             aoi_dir=cfg.aoi_dir,
             branch_dir=branch_dir,
             branch_id=branch_id,
-            levee_protected_areas_gpkg=None,  # set by user if needed
-            levee_levelpaths_csv=None,
+            levee_protected_areas_gpkg=cfg.levee_protected_areas_gpkg,
+            levee_levelpaths_csv=cfg.levee_levelpaths_csv,
             lakes_gpkg=(
                 resolve_source(cfg.aoi_dir, "lakes", identifier)
                 if resolve_source(cfg.aoi_dir, "lakes", identifier).exists()

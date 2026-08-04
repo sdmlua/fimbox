@@ -28,16 +28,16 @@ log = logging.getLogger(__name__)
 # are not imported here.
 
 # AOI parameters — point this at any user-supplied AOI working directory.
-# OUT_DIR = Path(__file__).resolve().parents[2] / "out" / "test_smallB" / "watershed-data"
-OUT_DIR = (
-    Path(__file__).resolve().parents[2]
-    / "out"
-    / "nwm_11239459and2more"
-    / "watershed-data"
-)
+OUT_DIR = Path(__file__).resolve().parents[2] / "out" / "test_smallB" / "watershed-data"
+# OUT_DIR = (
+#     Path(__file__).resolve().parents[2]
+#     / "out"
+#     / "nwm_11239459and2more"
+#     / "watershed-data"
+# )
 
 # Source-data filename prefix.
-IDENTIFIER = "nwmmr"
+IDENTIFIER = "ngen"
 
 # Tunable CreateHAND parameters- All have sensible defaults in CreateHAND itself.
 PARAMS_CREATE_HAND = dict(
@@ -174,6 +174,186 @@ def test_single_reach_writes_empty_branch_list(tmp_path):
     assert result.levelpaths.is_file()  # the reach itself is still written
 
 
+# =============================================================================
+# CROSS-SOURCE STANDARDISATION
+#
+# BranchDerivation folds every staged network onto one shape before it derives
+# anything: single-part geometry, one row per reach, and connectivity taken from
+# whichever convention the data actually honours. These tests stage the same
+# Y-shaped watershed twice — once the way NWM/NHDPlus ships it, once the way the
+# NextGen hydrofabric ships it — and assert both derive the same branches.
+#
+#     A (0,2000)        B (500,2000)
+#           \              /
+#            +-- junction (0,1000)
+#                    |
+#                    C --> outlet (0,0)
+#
+# NWM: plain LineStrings, A and B end exactly on C's inlet coordinate.
+# NextGen: MultiLineStrings with a nexus gap at the junction, so only `toid`
+# records the link; catchments are keyed on `divide_id` (cat-N), not `ID`.
+# =============================================================================
+
+# reach id -> (stream order, expected branch role)
+_REACHES = {101: 3, 102: 3, 103: 4}
+
+
+def _stage_network(tmp_path, streams, catchment_id_column="ID"):
+    """Write a synthetic AOI (streams + catchments + boundary) to ``tmp_path``."""
+    import geopandas as gpd
+    from shapely.geometry import box
+
+    from fimbox.preprocessing.source_naming import source_name
+
+    streams.to_file(tmp_path / source_name("streams"), driver="GPKG")
+
+    # One square catchment per reach — only the id join matters here, not shape.
+    catchments = gpd.GeoDataFrame(
+        {
+            catchment_id_column: (
+                list(_REACHES)
+                if catchment_id_column == "ID"
+                else [f"cat-{i}" for i in _REACHES]
+            )
+        },
+        geometry=[box(-100, 900 + 400 * n, 600, 2100) for n in range(len(_REACHES))],
+        crs=5070,
+    )
+    catchments.to_file(tmp_path / source_name("catchments"), driver="GPKG")
+
+    gpd.GeoDataFrame(
+        {"id": [1]}, geometry=[box(-1000, -1000, 1500, 3000)], crs=5070
+    ).to_file(tmp_path / "wbd.gpkg", driver="GPKG")
+
+
+def _branch_of(levelpaths_gpkg):
+    """reach id -> level path id, read back off the written levelpath layer."""
+    import geopandas as gpd
+
+    lp = gpd.read_file(levelpaths_gpkg)
+    return dict(zip(lp["ID"].astype(int), lp["levpa_id"]))
+
+
+def test_nwm_style_network_derives_two_branches(tmp_path):
+    """Baseline: snapped LineStrings, connectivity from shared coordinates."""
+    import geopandas as gpd
+    from shapely.geometry import LineString
+
+    _stage_network(
+        tmp_path,
+        gpd.GeoDataFrame(
+            {
+                "ID": list(_REACHES),
+                "order_": list(_REACHES.values()),
+                "to_": [103, 103, 0],
+            },
+            geometry=[
+                LineString([(0, 2000), (0, 1000)]),
+                LineString([(500, 2000), (0, 1000)]),
+                LineString([(0, 1000), (0, 0)]),
+            ],
+            crs=5070,
+        ),
+    )
+
+    result = BranchDerivation(
+        out_dir=tmp_path,
+        excluded_stream_orders=(),
+        branch_buffer_distance_meters=200.0,
+        apply_levees=False,
+    ).run()
+
+    branch = _branch_of(result.levelpaths)
+    # B is the longer of the two order-3 inflows, so it carries the mainstem.
+    assert branch[102] == branch[103]
+    assert branch[101] != branch[103]
+    assert len(result.branch_dataframe) == 2
+
+
+def test_ngen_style_network_derives_same_branches(tmp_path):
+    """NextGen layout: MultiLineStrings, nexus gaps, cat-N catchment ids.
+
+    Regression for the crash this shape used to cause — shapely refuses
+    ``.coords`` on a MultiLineString — and for the silent failure behind it:
+    with a nexus gap at the junction, coordinate matching would have left three
+    orphan reaches and three single-reach branches.
+    """
+    import geopandas as gpd
+    from shapely.geometry import LineString, MultiLineString
+
+    _stage_network(
+        tmp_path,
+        gpd.GeoDataFrame(
+            {
+                "ID": list(_REACHES),
+                "order_": [float(o) for o in _REACHES.values()],
+                "toid": ["nex-103", "nex-103", "nex-104"],  # 104 drains out of the AOI
+                "divide_id": [f"cat-{i}" for i in _REACHES],
+            },
+            geometry=[
+                MultiLineString([LineString([(0, 2000), (0, 1010)])]),
+                MultiLineString([LineString([(500, 2000), (10, 1005)])]),
+                MultiLineString([LineString([(0, 990), (0, 0)])]),
+            ],
+            crs=5070,
+        ),
+        catchment_id_column="divide_id",
+    )
+
+    result = BranchDerivation(
+        out_dir=tmp_path,
+        excluded_stream_orders=(),
+        branch_buffer_distance_meters=200.0,
+        apply_levees=False,
+    ).run()
+
+    branch = _branch_of(result.levelpaths)
+    assert branch[102] == branch[103]
+    assert branch[101] != branch[103]
+    assert len(result.branch_dataframe) == 2
+
+    # Parts are merged on the way in, so every consumer downstream sees LineString.
+    assert set(gpd.read_file(result.levelpaths).geom_type) == {"LineString"}
+    # Headwaters land on a reach vertex, which is what flow accumulation seeds from.
+    headwaters = gpd.read_file(result.headwaters)
+    assert len(headwaters) == 2
+
+
+def test_reach_split_across_rows_is_dissolved(tmp_path):
+    """A reach stored as two rows collapses to one, keeping its full length."""
+    import geopandas as gpd
+    from shapely.geometry import LineString
+
+    _stage_network(
+        tmp_path,
+        gpd.GeoDataFrame(
+            {
+                "ID": [101, 102, 103, 103],
+                "order_": [3, 3, 4, 4],
+                "to_": [103, 103, 0, 0],
+            },
+            geometry=[
+                LineString([(0, 2000), (0, 1000)]),
+                LineString([(500, 2000), (0, 1000)]),
+                LineString([(0, 1000), (0, 500)]),
+                LineString([(0, 500), (0, 0)]),
+            ],
+            crs=5070,
+        ),
+    )
+
+    result = BranchDerivation(
+        out_dir=tmp_path,
+        excluded_stream_orders=(),
+        branch_buffer_distance_meters=200.0,
+        apply_levees=False,
+    ).run()
+
+    levelpaths = gpd.read_file(result.levelpaths)
+    assert (levelpaths["ID"].astype(int) == 103).sum() == 1
+    assert len(result.branch_dataframe) == 2
+
+
 # ==========================
 # COMBINED — the whole branch pipeline in one go, matching the step-by-step
 # sequence exactly:
@@ -209,6 +389,7 @@ def test_branchprocessing_combined():
         branch_id_attribute="levpa_id",
         reach_id_attribute="ID",
         branch_buffer_distance_meters=7000.0,  # Change this if the area is small
+        apply_levees=True,  # False -> no levee_levelpaths.csv, so no levee mask later
         # single_levelpath_branch_zero_only=True,  #1 reach -> empty branch list, branch zero only
     ).run()
 
@@ -227,6 +408,10 @@ def test_branchprocessing_combined():
         boundary_gpkg=BOUNDARY_BUF,
         bridge_elev_diff_path=bridge_diff,
         levee_gpkg_path=levee_gpkg,
+        # True (default) burns the levee lines into the DEM and masks the
+        # leveed/protected areas out of it; both files are auto-resolved from
+        # OUT_DIR when present. False runs the AOI with no levees at all.
+        apply_levees=True,
         headwaters_gpkg=headwaters,
         levelpaths_extended_gpkg=levelpaths_extended,
         # AGREE DEM conditioning
