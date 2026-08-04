@@ -97,6 +97,11 @@ include-package-data = true
 where = ["src"]
 exclude = ["tests*"]
 
+[tool.setuptools.package-data]
+# Ship the NextGen per-VPU bounding-box index so AOI->VPU resolution needs no
+# network round-trip. (Other runtime data is fetched on demand via pooch/S3.)
+"fimbox.nextgen" = ["data/*.json"]
+
 [tool.ruff]
 line-length = 88
 target-version = "py310"
