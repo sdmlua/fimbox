@@ -8,17 +8,15 @@ branch-derivation helpers for area inputs.
 3. buffer dissolved branches into processing polygons
 4. write a branch list file
 
-Step 1 is what makes the rest source-agnostic. NWM, NHDPlus HR and the NextGen
-hydrofabric each stage the same information differently — single- vs multi-part
-flowlines, coordinate- vs nexus-based connectivity, ``ID`` vs ``divide_id`` on
-the catchments — so every input is folded onto one shape before any branch
-logic runs. Nothing downstream needs to know which source it was handed.
+Step 1 lives in :mod:`.standardize_network`, which is what makes the rest
+source-agnostic: it identifies the staged hydrofabric from its attributes and
+folds NWM, NHDPlus HR or NextGen onto one shape before any branch logic runs.
+Nothing here needs to know which source it was handed.
 """
 
 from __future__ import annotations
 
 import logging
-import re
 import warnings
 from collections import defaultdict
 from dataclasses import dataclass, field
@@ -28,52 +26,20 @@ from typing import Iterable, Optional
 import geopandas as gpd
 import numpy as np
 import pandas as pd
-import shapely
 from shapely.geometry import Point
 
 from ..source_naming import detect_identifier, resolve_source, source_name
+from .standardize_network import (
+    HydrofabricFields,
+    HydrofabricProfile,
+    detect_hydrofabric,
+    standardize_catchments,
+    standardize_network,
+)
 
 gpd.options.io_engine = "pyogrio"
 
 log = logging.getLogger(__name__)
-
-# ---------------------------------------------------------------------------
-# Cross-source conventions
-#
-# Hydrography sources disagree on the two things the level-path walk depends
-# on. Geometry: NWM and NHDPlus stage plain LineStrings, the NextGen
-# hydrofabric stages MultiLineStrings (shapely refuses ``.coords`` on those).
-# Connectivity: NWM reaches share exact endpoint coordinates, NextGen
-# flowpaths route through nexus points and leave a gap between neighbours, so
-# coordinate matching silently shreds the network into single-reach branches.
-# Everything below normalises both before any branch logic runs.
-# ---------------------------------------------------------------------------
-
-# Downstream-reach id columns, in preference order. NWM uses ``to_``; NextGen
-# uses ``toid`` and points at a nexus (``nex-270518``) whose numeric stem is
-# the downstream flowpath's id.
-_TO_ID_CANDIDATES = (
-    "to_",
-    "toid",
-    "to_id",
-    "tocomid",
-    "dscomid",
-    "ds_id",
-    "downstream",
-)
-
-# Explicit node-id pairs (NHDPlus ``FromNode``/``ToNode``) — already node keys,
-# so they are used verbatim.
-_NODE_PAIR_CANDIDATES = (("fromnode", "tonode"), ("from_node", "to_node"))
-
-# Catchment columns that may carry the reach id, tried when the requested one
-# is absent or joins nothing.
-_CATCHMENT_ID_CANDIDATES = ("ID", "divide_id", "wb_id", "feature_id", "COMID", "comid")
-
-# "no downstream" sentinels seen across sources.
-_NULL_IDS = {"", "0", "-1", "none", "nan", "<na>", "null"}
-
-_DIGITS = re.compile(r"\d+")
 
 
 @dataclass(slots=True)
@@ -91,6 +57,9 @@ class BranchDerivationResult:
     branch_list: Path
     branch_dataframe: pd.DataFrame
     levee_levelpaths: Optional[Path] = field(default=None)
+    # Which hydrofabric was staged and the columns read off it — the run record
+    # for a source-agnostic stage.
+    hydrofabric: Optional[HydrofabricProfile] = field(default=None)
 
 
 @dataclass(slots=True)
@@ -181,6 +150,7 @@ class BranchDerivation:
         catchment_reach_id_attribute: str = "ID",
         stream_order_attribute: str = "order_",
         to_id_attribute: Optional[str] = None,
+        hydrofabric_fields: Optional[HydrofabricFields] = None,
         branch_buffer_distance_meters: float = 7000.0,
         excluded_stream_orders: tuple[int, ...] = (1, 2),
         min_stream_order: Optional[int] = None,
@@ -214,6 +184,9 @@ class BranchDerivation:
         self.catchment_reach_id_attribute = catchment_reach_id_attribute
         self.stream_order_attribute = stream_order_attribute
         self.to_id_attribute = to_id_attribute
+        # Column overrides for a source whose schema the attribute sniffing
+        # cannot name on its own; anything left unset is still detected.
+        self.hydrofabric_fields = hydrofabric_fields
         self.branch_buffer_distance_meters = branch_buffer_distance_meters
         self.excluded_stream_orders = excluded_stream_orders
         self.min_stream_order = min_stream_order
@@ -388,9 +361,19 @@ class BranchDerivation:
         # load and filter streams, then assign levelpaths
         self._announce("Reading staged hydro inputs")
         streams = _read_vector(stream_path, self.stream_layer)
+        # Identify the hydrofabric before anything reads a column off it: order
+        # filtering, the catchment join and the connectivity walk each have to be
+        # pointed at this source's own spelling of the field they need.
+        profile = detect_hydrofabric(
+            streams,
+            fields=self.hydrofabric_fields,
+            reach_id=self.reach_id_attribute,
+            stream_order=self.stream_order_attribute,
+            to_id=self.to_id_attribute,
+        )
         streams = _filter_stream_orders(
             streams,
-            self.stream_order_attribute,
+            profile.stream_order,
             self.excluded_stream_orders,
             min_stream_order=self.min_stream_order,
             max_stream_order=self.max_stream_order,
@@ -399,12 +382,12 @@ class BranchDerivation:
             self.logger.warning("No stream reaches remain after stream-order filtering")
             raise ValueError("No stream reaches remain after stream-order filtering.")
 
-        streams = _ensure_reach_id(streams, self.reach_id_attribute)
-        streams = _standardize_streams(streams, self.reach_id_attribute)
-        streams = _derive_network_fields(
-            streams,
-            reach_id_attribute=self.reach_id_attribute,
-            to_id_attribute=self.to_id_attribute,
+        streams, profile = standardize_network(streams, profile)
+        # The resolved columns stand in for the requested ones from here on.
+        self.reach_id_attribute = profile.reach_id
+        self.stream_order_attribute = profile.stream_order
+        self.catchment_reach_id_attribute = (
+            profile.catchment_id or self.catchment_reach_id_attribute
         )
         streams = _assign_levelpaths(
             streams,
@@ -420,7 +403,7 @@ class BranchDerivation:
         # seed landing exactly on the line. Hand the AOI to branch zero instead.
         n_levelpaths = streams[self.branch_id_attribute].nunique()
         if self.single_levelpath_branch_zero_only and n_levelpaths <= 1:
-            return self._branch_zero_only_result(streams, n_levelpaths)
+            return self._branch_zero_only_result(streams, n_levelpaths, profile)
 
         # load supporting layers and align CRS
         catchments_gdf = _read_vector(catchment_path, self.catchments_layer)
@@ -439,7 +422,7 @@ class BranchDerivation:
         )
 
         catchments_gdf = _align_crs(catchments_gdf, streams.crs)
-        catchments_gdf = _standardize_catchments(
+        catchments_gdf = standardize_catchments(
             catchments_gdf,
             streams[self.reach_id_attribute],
             self.catchment_reach_id_attribute,
@@ -528,6 +511,7 @@ class BranchDerivation:
             branch_polygons=self.out_dir / "branch_polygons.gpkg",
             branch_list=self.out_dir / "branch_ids.lst",
             branch_dataframe=branch_df,
+            hydrofabric=profile,
         )
 
         _write_gpkg(streams, result.levelpaths)
@@ -591,7 +575,10 @@ class BranchDerivation:
         return result
 
     def _branch_zero_only_result(
-        self, streams: gpd.GeoDataFrame, n_levelpaths: int
+        self,
+        streams: gpd.GeoDataFrame,
+        n_levelpaths: int,
+        profile: HydrofabricProfile,
     ) -> BranchDerivationResult:
         """Outputs for an AOI that needs no branches: streams, empty branch list.
 
@@ -627,6 +614,7 @@ class BranchDerivation:
             branch_polygons=self.out_dir / "branch_polygons.gpkg",
             branch_list=self.out_dir / "branch_ids.lst",
             branch_dataframe=pd.DataFrame({self.branch_id_attribute: []}),
+            hydrofabric=profile,
         )
 
         _write_gpkg(streams, result.levelpaths)
@@ -692,6 +680,7 @@ def derive_area_branches(
     catchment_reach_id_attribute: str = "ID",
     stream_order_attribute: str = "order_",
     to_id_attribute: Optional[str] = None,
+    hydrofabric_fields: Optional[HydrofabricFields] = None,
     branch_buffer_distance_meters: float = 7000.0,
     excluded_stream_orders: tuple[int, ...] = (1, 2),
     min_stream_order: Optional[int] = None,
@@ -714,6 +703,7 @@ def derive_area_branches(
         catchment_reach_id_attribute=catchment_reach_id_attribute,
         stream_order_attribute=stream_order_attribute,
         to_id_attribute=to_id_attribute,
+        hydrofabric_fields=hydrofabric_fields,
         branch_buffer_distance_meters=branch_buffer_distance_meters,
         excluded_stream_orders=excluded_stream_orders,
         min_stream_order=min_stream_order,
@@ -791,238 +781,6 @@ def _filter_stream_orders(
     filtered = filtered.loc[mask].copy()
     filtered[stream_order_attribute] = order_series.loc[filtered.index]
     return filtered
-
-
-def _ensure_reach_id(
-    streams: gpd.GeoDataFrame, reach_id_attribute: str
-) -> gpd.GeoDataFrame:
-    if reach_id_attribute not in streams.columns:
-        raise KeyError(
-            f"Reach id column '{reach_id_attribute}' was not found in the stream network."
-        )
-    streams = streams.copy()
-    streams[reach_id_attribute] = streams[reach_id_attribute].astype(str)
-    return streams
-
-
-def _find_column(gdf: gpd.GeoDataFrame, candidates: Iterable[str]) -> Optional[str]:
-    """First candidate present in ``gdf``, matched without regard to case."""
-    lookup = {str(col).lower(): col for col in gdf.columns}
-    for name in candidates:
-        hit = lookup.get(name.lower())
-        if hit is not None:
-            return hit
-    return None
-
-
-def _id_stem(value) -> str:
-    """Numeric stem of an id, so ``nex-270518`` lines up with reach ``270518``."""
-    match = _DIGITS.search(str(value))
-    return match.group(0) if match else str(value).strip()
-
-
-def _endpoints(geom) -> tuple[tuple[float, float], tuple[float, float]]:
-    """Upstream-most and downstream-most vertex of a flowline.
-
-    Multi-part reaches that resisted merging keep their parts in the order the
-    source digitised them, which for every hydrography source is downstream.
-    """
-    if geom.geom_type == "LineString":
-        coords = geom.coords
-        return coords[0], coords[-1]
-    parts = list(geom.geoms)
-    return parts[0].coords[0], parts[-1].coords[-1]
-
-
-def _standardize_streams(
-    streams: gpd.GeoDataFrame, reach_id_attribute: str
-) -> gpd.GeoDataFrame:
-    """One row, one single-part LineString, one reach id — whatever was staged.
-
-    Three source quirks are ironed out here so nothing downstream has to know
-    which hydrography it is looking at:
-
-    * empty / missing geometry is dropped rather than crashing the node walk;
-    * a reach split across several rows is dissolved back into one;
-    * MultiLineStrings are stitched with ``line_merge`` (NextGen wraps every
-      flowpath in a multi, and shapely refuses ``.coords`` on those).
-    """
-    streams = streams.copy()
-    geometry = streams.geometry.name
-
-    blank = streams.geometry.isna() | streams.geometry.is_empty
-    if blank.any():
-        log.warning(
-            "Dropping %d stream reach(es) with empty geometry", int(blank.sum())
-        )
-        streams = streams.loc[~blank].copy()
-    if streams.empty:
-        return streams
-
-    # A duplicated reach id would silently collapse in the reach->length lookup
-    # the level-path walk builds, so fold the parts together up front instead.
-    duplicated = streams[reach_id_attribute].duplicated(keep=False)
-    if duplicated.any():
-        n_ids = streams.loc[duplicated, reach_id_attribute].nunique()
-        log.warning(
-            "Dissolving %d reach id(s) that span multiple rows into one row each",
-            n_ids,
-        )
-        merged = streams.dissolve(by=reach_id_attribute, as_index=False)
-        # dissolve keeps the first row's attributes, which is what we want; only
-        # the column order needs restoring.
-        streams = merged[
-            [c for c in streams.columns if c in merged.columns and c != geometry]
-            + [geometry]
-        ]
-        streams = gpd.GeoDataFrame(streams, geometry=geometry, crs=merged.crs)
-
-    streams[geometry] = shapely.line_merge(streams.geometry.values)
-    still_multi = streams.geom_type == "MultiLineString"
-    if still_multi.any():
-        log.warning(
-            "%d reach(es) stayed multi-part after merging (disconnected segments); "
-            "their end vertices are read from the first and last part",
-            int(still_multi.sum()),
-        )
-
-    if streams.crs is not None and streams.crs.is_geographic:
-        log.warning(
-            "Stream CRS %s is geographic — branch buffers and reach lengths are "
-            "in metres, so project the AOI (EPSG:5070 by default) before staging",
-            streams.crs.to_string(),
-        )
-    return streams.reset_index(drop=True)
-
-
-def _coordinate_nodes(streams: gpd.GeoDataFrame) -> tuple[list[str], list[str]]:
-    """Node keys from shared endpoint coordinates — the NWM / NHDPlus convention."""
-    from_nodes, to_nodes = [], []
-    for geom in streams.geometry:
-        start, end = _endpoints(geom)
-        from_nodes.append(f"{round(start[0], 6)}_{round(start[1], 6)}")
-        to_nodes.append(f"{round(end[0], 6)}_{round(end[1], 6)}")
-    return from_nodes, to_nodes
-
-
-def _explicit_nodes(
-    streams: gpd.GeoDataFrame, reach_id_attribute: str, to_id_attribute: str
-) -> tuple[list[str], list[str]]:
-    """Node keys from a downstream-id column — the NextGen / nexus convention.
-
-    Each reach owns the node at its head (``reach:<id>``) and points at the head
-    node of the reach it drains into, so equality of these opaque keys carries
-    exactly the same meaning as a shared coordinate would. Terminal reaches get
-    a private key that nothing else can match.
-    """
-    reach_ids = streams[reach_id_attribute].astype(str)
-    by_id = set(reach_ids)
-    by_stem = {_id_stem(rid): rid for rid in by_id}
-
-    from_nodes = [f"reach:{rid}" for rid in reach_ids]
-    to_nodes = []
-    for rid, raw in zip(reach_ids, streams[to_id_attribute]):
-        target = str(raw).strip()
-        if target not in by_id:
-            # ``nex-270518`` -> ``270518``; also rescues int/float round-trips.
-            target = by_stem.get(_id_stem(target), "") if target else ""
-        if not target or target.lower() in _NULL_IDS or target == rid:
-            to_nodes.append(f"outlet:{rid}")
-        else:
-            to_nodes.append(f"reach:{target}")
-    return from_nodes, to_nodes
-
-
-def _internal_edges(from_nodes: list[str], to_nodes: list[str]) -> int:
-    """Upstream->downstream links these node keys resolve inside the network.
-
-    This is the score the two connectivity conventions are compared on: a
-    convention that leaves reaches unlinked scores low, whatever the reason.
-    """
-    heads: dict[str, int] = defaultdict(int)
-    for node in from_nodes:
-        heads[node] += 1
-    return sum(heads.get(node, 0) for node in to_nodes)
-
-
-def _derive_network_fields(
-    streams: gpd.GeoDataFrame,
-    *,
-    reach_id_attribute: str = "ID",
-    to_id_attribute: Optional[str] = None,
-) -> gpd.GeoDataFrame:
-    """Attach the node keys, reach length, and inlet vertex the branch walk needs.
-
-    Connectivity is taken from whichever convention the staged network actually
-    honours: an explicit downstream-id column when one is present and links more
-    reaches than the geometry does, otherwise shared endpoint coordinates.
-    Picking by connected-reach count means a source with a stale or partly-null
-    ``to_`` column still falls back to coordinates instead of producing a
-    network of orphans.
-
-    ``to_id_attribute`` forces a specific column; leave it ``None`` to
-    auto-detect (``to_``, ``toid``, ``FromNode``/``ToNode``, ...).
-    """
-    streams = streams.copy()
-
-    coord_from, coord_to = _coordinate_nodes(streams)
-    from_nodes, to_nodes = coord_from, coord_to
-    source = "endpoint coordinates"
-
-    node_pair = next(
-        (
-            (_find_column(streams, [a]), _find_column(streams, [b]))
-            for a, b in _NODE_PAIR_CANDIDATES
-            if _find_column(streams, [a]) and _find_column(streams, [b])
-        ),
-        None,
-    )
-    if to_id_attribute is None and node_pair is None:
-        to_id_attribute = _find_column(streams, _TO_ID_CANDIDATES)
-
-    if node_pair is not None:
-        candidate = (
-            [f"node:{v}" for v in streams[node_pair[0]]],
-            [f"node:{v}" for v in streams[node_pair[1]]],
-        )
-        label = f"node columns {node_pair[0]}/{node_pair[1]}"
-    elif to_id_attribute and to_id_attribute in streams.columns:
-        candidate = _explicit_nodes(streams, reach_id_attribute, to_id_attribute)
-        label = f"downstream-id column '{to_id_attribute}'"
-    else:
-        candidate = None
-        label = ""
-
-    if candidate is not None and _internal_edges(*candidate) > _internal_edges(
-        coord_from, coord_to
-    ):
-        from_nodes, to_nodes = candidate
-        source = label
-
-    log.info(
-        "Network connectivity from %s — %d of %d reach(es) linked",
-        source,
-        _internal_edges(from_nodes, to_nodes),
-        len(streams),
-    )
-
-    streams["_from_node"] = from_nodes
-    streams["_to_node"] = to_nodes
-    streams["_length_km"] = _reach_lengths_km(streams)
-    # Inlet vertex, carried as plain floats so it survives the GeoPackage write
-    # and headwater derivation never has to touch ``.coords`` again.
-    inlets = [_endpoints(geom)[0] for geom in streams.geometry]
-    streams["_inlet_x"] = [float(pt[0]) for pt in inlets]
-    streams["_inlet_y"] = [float(pt[1]) for pt in inlets]
-    return streams
-
-
-def _reach_lengths_km(streams: gpd.GeoDataFrame) -> list[float]:
-    """Reach lengths in km, measured in a projected CRS whatever the input is."""
-    geometry = streams.geometry
-    if streams.crs is not None and streams.crs.is_geographic:
-        geometry = streams.geometry.to_crs(streams.estimate_utm_crs())
-    return [float(length) / 1000.0 for length in geometry.length]
 
 
 def _assign_levelpaths(
@@ -1133,61 +891,6 @@ def _assign_levelpaths(
     streams[branch_id_attribute] = streams[reach_id_attribute].map(assigned).astype(str)
     streams["arbolate_sum"] = streams[reach_id_attribute].map(arbolate_cache)
     return streams
-
-
-def _standardize_catchments(
-    catchments: gpd.GeoDataFrame,
-    stream_reach_ids: Iterable[str],
-    catchment_reach_id_attribute: str,
-) -> gpd.GeoDataFrame:
-    """Add ``_reach_key``: the catchment id in the form the reach ids use.
-
-    Sources label the same catchment differently — ``ID``, ``divide_id``
-    (``cat-270517``), ``wb_id`` (``wb-270517``) — and a BYO layer may only carry
-    one of them. The column that actually overlaps the reach ids wins, with
-    numeric-stem matching as the last resort so a prefix mismatch alone never
-    strands a branch.
-    """
-    reach_ids = {str(rid) for rid in stream_reach_ids}
-    stems = {_id_stem(rid): rid for rid in reach_ids}
-
-    candidates = [catchment_reach_id_attribute] + [
-        c for c in _CATCHMENT_ID_CANDIDATES if c != catchment_reach_id_attribute
-    ]
-    best_column, best_keys, best_hits = None, None, 0
-    for name in candidates:
-        column = _find_column(catchments, [name])
-        if column is None:
-            continue
-        keys = catchments[column].astype(str)
-        direct = keys.isin(reach_ids)
-        # Only pay for the regex pass when the labels don't already line up.
-        if not direct.all():
-            keys = keys.where(direct, keys.map(lambda v: stems.get(_id_stem(v), v)))
-            direct = keys.isin(reach_ids)
-        hits = int(direct.sum())
-        if hits > best_hits:
-            best_column, best_keys, best_hits = column, keys, hits
-        if best_hits == len(catchments):
-            break
-
-    if best_column is None:
-        raise KeyError(
-            f"Catchment reach id column '{catchment_reach_id_attribute}' was not "
-            f"found in catchments, and none of {_CATCHMENT_ID_CANDIDATES} matched. "
-            "Pass catchment_reach_id_attribute=<your column>."
-        )
-    if best_column != catchment_reach_id_attribute:
-        log.info(
-            "Catchments joined on '%s' (%d match) — '%s' matched no reach ids",
-            best_column,
-            best_hits,
-            catchment_reach_id_attribute,
-        )
-
-    catchments = catchments.copy()
-    catchments["_reach_key"] = best_keys
-    return catchments
 
 
 def _remove_branches_without_catchments(

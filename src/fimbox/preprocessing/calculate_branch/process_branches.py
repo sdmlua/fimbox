@@ -70,6 +70,7 @@ from .adjust_floodplains import adjust_floodplains
 from .calculate_branchzero import BranchZero
 from .create_hand import CreateHAND
 from .gage_crosswalk import assign_gages_to_branches, run_branch_crosswalk
+from .standardize_network import HydrofabricFields
 
 log = logging.getLogger(__name__)
 
@@ -165,6 +166,10 @@ class AOIProcessingConfig:
         src_slope_source: str = "iris_sword",
         iris_slope_csv: Optional[Path] = None,
         hfab_slope_column: Optional[str] = None,
+        # Same object passed to BranchDerivation, so one declaration of the
+        # staged schema covers the whole run. Only ``feature_id`` is read here —
+        # the crosswalk's discharge join key; the rest is derivation's business.
+        hydrofabric_fields: Optional[HydrofabricFields] = None,
         evaluate_crosswalk: bool = False,
         convert_to_int16: bool = False,
         # gage crosswalk schema
@@ -236,6 +241,10 @@ class AOIProcessingConfig:
         self.src_slope_source = src_slope_source
         self.iris_slope_csv = iris_slope_csv
         self.hfab_slope_column = hfab_slope_column
+        self.hydrofabric_fields = hydrofabric_fields
+        self.feature_id_column = (
+            hydrofabric_fields.feature_id if hydrofabric_fields else None
+        )
         self.evaluate_crosswalk = evaluate_crosswalk
         self.convert_to_int16 = convert_to_int16
         self.gage_aoi_filter_column = gage_aoi_filter_column
@@ -782,6 +791,7 @@ def _process_single_branch(cfg: AOIProcessingConfig, branch_id: str) -> BranchRe
             src_slope_source=cfg.src_slope_source,
             iris_slope_csv=cfg.iris_slope_csv,
             hfab_slope_column=cfg.hfab_slope_column,
+            feature_id_column=cfg.feature_id_column,
         ).run()
 
         # USGS gage crosswalk (optional)

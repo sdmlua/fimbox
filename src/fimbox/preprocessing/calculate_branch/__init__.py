@@ -102,6 +102,14 @@ from .split_reaches import split_derived_reaches
 # stage ladder + per-HydroID catchment list
 from .stages_catchlist import make_stages_and_catchlist
 
+# cross-source standardisation of a staged network (NWM / NHDPlus / NextGen)
+from .standardize_network import (
+    HydrofabricFields,
+    HydrofabricProfile,
+    detect_hydrofabric,
+    standardize_network,
+)
+
 # stream network delineation
 from .streamnet_reaches import StreamNetReaches
 
@@ -114,6 +122,11 @@ __all__ = [
     "BranchDerivationResult",
     "derive_area_branches",
     "discover_area_inputs",
+    # cross-source network standardisation
+    "HydrofabricFields",
+    "HydrofabricProfile",
+    "detect_hydrofabric",
+    "standardize_network",
     # branch zero
     "BranchZero",
     # HAND pipeline

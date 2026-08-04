@@ -107,6 +107,7 @@ def add_crosswalk(
     src_slope_source: str = "iris_sword",
     iris_slope_csv: Optional[PathLike] = None,
     hfab_slope_column: Optional[str] = None,
+    feature_id_column: Optional[str] = None,
 ) -> dict[str, Path]:
     """
     Run the full crosswalk and hydraulic table build. Returns a dict of output
@@ -166,7 +167,7 @@ def add_crosswalk(
     # appear when overlay + explode created small fragments per HydroID.
     catchments = catchments.dissolve(by="HydroID").reset_index()
 
-    nwm = _prepare_nwm(nwm, iris_slope_csv, hfab_slope_column)
+    nwm = _prepare_nwm(nwm, iris_slope_csv, hfab_slope_column, feature_id_column)
 
     # Reproject NWM streams to the catchment CRS so sjoin_nearest distances
     # are in the same projected metres used elsewhere in the pipeline.
@@ -259,6 +260,7 @@ def _prepare_nwm(
     nwm: gpd.GeoDataFrame,
     iris_slope_csv: Optional[Path] = None,
     hfab_slope_column: Optional[str] = None,
+    feature_id_column: Optional[str] = None,
 ) -> gpd.GeoDataFrame:
     """Normalise the NWM streams gdf to a feature_id-indexed table.
 
@@ -271,13 +273,28 @@ def _prepare_nwm(
       * ``SLOPE_IRIS_SWORD``  — merged from the IRIS-SWORD table by feature_id.
     The DEM rise/run slope is not here — it rides through ``src_base``.
     """
-    # ID is the feature_id only where the source has no separate one (NWM).
-    if "ID" in nwm.columns and "feature_id" not in nwm.columns:
+    # The discharge join key. A caller-named column is authoritative — a source
+    # can ship its own 'feature_id' meaning something else — so anything already
+    # under that name steps aside. Otherwise 'ID' is the feature_id only where
+    # the source has no separate one (NWM).
+    if feature_id_column and feature_id_column in nwm.columns:
+        if feature_id_column != "feature_id":
+            nwm = nwm.drop(columns=["feature_id"], errors="ignore").rename(
+                columns={feature_id_column: "feature_id"}
+            )
+    elif feature_id_column:
+        log.warning(
+            "feature_id_column=%r is not in the streams layer — falling back to "
+            "'feature_id' / 'ID'",
+            feature_id_column,
+        )
+    if "feature_id" not in nwm.columns and "ID" in nwm.columns:
         nwm = nwm.rename(columns={"ID": "feature_id"})
     if "feature_id" not in nwm.columns:
         raise ValueError(
             "streams must carry the discharge join key as 'feature_id', or as "
-            "'ID' where the reach id is the feature_id; rename it before staging."
+            "'ID' where the reach id is the feature_id; name it explicitly with "
+            "hydrofabric_fields=HydrofabricFields(feature_id=<your column>)."
         )
     nwm["feature_id"] = nwm["feature_id"].astype(int)
 

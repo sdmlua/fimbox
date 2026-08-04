@@ -105,6 +105,8 @@ class CreateHAND:
     iris_slope_csv: Optional[Path] = None
     # Hydrofabric slope column name when it isn't the usual 'Slope'/'So'.
     hfab_slope_column: Optional[str] = None
+    # Discharge join key on the staged streams when it isn't 'feature_id'/'ID'.
+    feature_id_column: Optional[str] = None
 
     # back-compat alias — older callers pass ``wbd8_clp_gpkg``. Resolved to
     # ``boundary_gpkg`` in __post_init__ if explicitly set.
@@ -661,6 +663,7 @@ class CreateHAND:
                     src_slope_source=self.src_slope_source,
                     iris_slope_csv=self.iris_slope_csv,
                     hfab_slope_column=self.hfab_slope_column,
+                    feature_id_column=self.feature_id_column,
                 )
                 outputs.update(xwalk_out)
             except NoCrosswalkError as exc:

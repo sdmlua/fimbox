@@ -18,6 +18,7 @@ The stream network is split into branches (level paths) that are processed indep
 
 | File | What it contains |
 |---|---|
+| `standardize_network.py` | Identify the staged hydrofabric (NWM / NHDPlus HR / NextGen) from its attributes and fold it onto one shape — single-part geometry, one row per reach, connectivity from whichever convention the data honours. `HydrofabricFields` declares a column the sniffing would miss. |
 | `branch_derivation.py` | `BranchDerivation`: derive level paths, branch polygons, and the branch list from staged streams/catchments. |
 | `process_branches.py` | `AOIProcessingConfig` (all AOI/branch settings in one object) and `process_branches`: parallel multi-branch orchestrator. |
 | `calculate_allbranches.py` | `calculate_allbranches`: full AOI loop: BranchZero, all branches in parallel, cleanup, `branch_ids.csv` registry. |
@@ -63,6 +64,7 @@ fimbox.BranchDerivation(
     # branch_id_attribute: str = "levpa_id",     #column holding branch (level path) IDs
     # reach_id_attribute: str = "ID",            #reach ID column in the stream network
     # stream_order_attribute: str = "order_",    #stream order column
+    # hydrofabric_fields: Optional[HydrofabricFields] = None, #None -> detect the staged source
     # branch_buffer_distance_meters: float = 7000.0, #branch processing polygon buffer (m)
     # excluded_stream_orders: tuple = (1, 2),    #stream orders left to branch zero only
     # stream_network / catchments / lakes / boundary / headwaters / levees: Optional[Path], #file overrides
@@ -114,6 +116,9 @@ cfg = fimbox.AOIProcessingConfig(
     # crosswalk_max_distance_m: float = 100.0,   #max snap distance for NWM crosswalk (m)
     # src_slope_source: str = "iris_sword",      #reach slope source: "iris_sword" | "dem" | "hfab"
     # iris_slope_csv: Optional[Path] = None,     #IRIS/SWORD slope table when used
+    # hfab_slope_column: Optional[str] = None,   #hydrofabric slope column if not Slope/So
+    # hydrofabric_fields: Optional[HydrofabricFields] = None, #same object as above; feature_id
+    #                                            #names the crosswalk's discharge join key
     # - execution -
     # evaluate_crosswalk: bool = False,          #write crosswalk diagnostics
     # convert_to_int16: bool = False,            #downcast HAND/HydroID rasters to Int16

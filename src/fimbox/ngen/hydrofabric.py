@@ -60,8 +60,8 @@ from pathlib import Path
 from typing import Iterable, Optional, Sequence, Union
 
 import geopandas as gpd
-import shapely
 
+from ..preprocessing.calculate_branch.standardize_network import merge_parts
 from ..preprocessing.source_naming import source_name
 from . import _ngiab
 
@@ -455,7 +455,7 @@ class NgenHydrofabric:
         # downstream steps read ``.coords`` — which shapely refuses on a multi —
         # so the parts are stitched here, at the schema boundary.
         if not gdf.empty:
-            gdf["geometry"] = shapely.line_merge(gdf.geometry.values)
+            gdf["geometry"] = merge_parts(gdf.geometry.values)
         log.info(f"ngen flowlines: {len(gdf)} reach(es)")
         return gdf
 

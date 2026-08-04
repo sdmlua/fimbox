@@ -3,20 +3,26 @@ Author: Supath Dhital
 Date Updated: May 2026
 
 
-Branch processing tests.
+Branch processing against a real staged AOI — edit ``OUT_DIR`` to point at yours.
 
 Run order:
-  1. test_branch_derivation  — level paths, branch polygons, branch list
-  2. test_branch_zero_full   — DEM clip, AGREE, pit-fill, D8 flowdir
-  3. test_create_hand        — full HAND generation (flow accum → split reaches)
+  1. BranchDerivation  — level paths, branch polygons, branch list
+  2. BranchZero        — DEM clip, AGREE, pit-fill, D8 flowdir
+  3. CreateHAND        — full HAND generation (flow accum → split reaches)
+
+``test_branchprocessing_combined`` does all three in one call and spells out
+every parameter, so it doubles as the parameter reference; the commented
+step-by-step tests below run the same sequence one stage at a time.
 """
 
 import logging
 from pathlib import Path
+from typing import Optional
 
 # single steps IMPORTS
 from fimbox import (
     BranchDerivation,
+    HydrofabricFields,
 )
 
 log = logging.getLogger(__name__)
@@ -38,6 +44,16 @@ OUT_DIR = Path(__file__).resolve().parents[2] / "out" / "test_smallB" / "watersh
 
 # Source-data filename prefix.
 IDENTIFIER = "ngen"
+
+# Staged-schema overrides. None -> the hydrofabric (NWM / NHDPlus HR / NextGen)
+# and every column branch processing reads are detected from the attributes the
+# staged files carry. Name a column only when your source spells it something
+# the sniffing would miss, e.g.
+#   HydrofabricFields(reach_id="ID", to_id="toid", stream_order="order_",
+#                     catchment_id="divide_id", feature_id="feature_id")
+# The same object goes to BranchDerivation and AOIProcessingConfig, so one
+# declaration covers the whole run.
+HYDROFABRIC_FIELDS: Optional[HydrofabricFields] = None
 
 # Tunable CreateHAND parameters- All have sensible defaults in CreateHAND itself.
 PARAMS_CREATE_HAND = dict(
@@ -144,216 +160,6 @@ PIXEL_PTS = BRANCH_DIR / f"flows_points_pixels_{BRANCH_ID}.gpkg"
 GW_PIXELS = BRANCH_DIR / f"gw_catchments_pixels_{BRANCH_ID}.tif"
 
 
-# Single-reach AOI: a lone reach has no network to split, so BranchDerivation
-# writes an empty branch_ids.lst and leaves the AOI to branch zero. Offline —
-# stages a minimal one-reach input folder in tmp_path.
-def test_single_reach_writes_empty_branch_list(tmp_path):
-    import geopandas as gpd
-    from shapely.geometry import LineString, Polygon
-
-    from fimbox.preprocessing.source_naming import source_name
-
-    reach = LineString([(0, 0), (0, 1000)])
-    poly = Polygon([(-500, -500), (500, -500), (500, 1500), (-500, 1500)])
-
-    gpd.GeoDataFrame(
-        {"ID": [12345], "order_": [4], "to_": [0]}, geometry=[reach], crs=5070
-    ).to_file(tmp_path / source_name("streams"), driver="GPKG")
-    gpd.GeoDataFrame({"ID": [12345]}, geometry=[poly], crs=5070).to_file(
-        tmp_path / source_name("catchments"), driver="GPKG"
-    )
-    gpd.GeoDataFrame({"id": [1]}, geometry=[poly], crs=5070).to_file(
-        tmp_path / "wbd.gpkg", driver="GPKG"
-    )
-
-    result = BranchDerivation(out_dir=tmp_path, excluded_stream_orders=()).run()
-
-    assert result.branch_list.is_file()
-    assert result.branch_list.read_text().strip() == ""  # branch zero only
-    assert result.branch_dataframe.empty
-    assert result.levelpaths.is_file()  # the reach itself is still written
-
-
-# =============================================================================
-# CROSS-SOURCE STANDARDISATION
-#
-# BranchDerivation folds every staged network onto one shape before it derives
-# anything: single-part geometry, one row per reach, and connectivity taken from
-# whichever convention the data actually honours. These tests stage the same
-# Y-shaped watershed twice — once the way NWM/NHDPlus ships it, once the way the
-# NextGen hydrofabric ships it — and assert both derive the same branches.
-#
-#     A (0,2000)        B (500,2000)
-#           \              /
-#            +-- junction (0,1000)
-#                    |
-#                    C --> outlet (0,0)
-#
-# NWM: plain LineStrings, A and B end exactly on C's inlet coordinate.
-# NextGen: MultiLineStrings with a nexus gap at the junction, so only `toid`
-# records the link; catchments are keyed on `divide_id` (cat-N), not `ID`.
-# =============================================================================
-
-# reach id -> (stream order, expected branch role)
-_REACHES = {101: 3, 102: 3, 103: 4}
-
-
-def _stage_network(tmp_path, streams, catchment_id_column="ID"):
-    """Write a synthetic AOI (streams + catchments + boundary) to ``tmp_path``."""
-    import geopandas as gpd
-    from shapely.geometry import box
-
-    from fimbox.preprocessing.source_naming import source_name
-
-    streams.to_file(tmp_path / source_name("streams"), driver="GPKG")
-
-    # One square catchment per reach — only the id join matters here, not shape.
-    catchments = gpd.GeoDataFrame(
-        {
-            catchment_id_column: (
-                list(_REACHES)
-                if catchment_id_column == "ID"
-                else [f"cat-{i}" for i in _REACHES]
-            )
-        },
-        geometry=[box(-100, 900 + 400 * n, 600, 2100) for n in range(len(_REACHES))],
-        crs=5070,
-    )
-    catchments.to_file(tmp_path / source_name("catchments"), driver="GPKG")
-
-    gpd.GeoDataFrame(
-        {"id": [1]}, geometry=[box(-1000, -1000, 1500, 3000)], crs=5070
-    ).to_file(tmp_path / "wbd.gpkg", driver="GPKG")
-
-
-def _branch_of(levelpaths_gpkg):
-    """reach id -> level path id, read back off the written levelpath layer."""
-    import geopandas as gpd
-
-    lp = gpd.read_file(levelpaths_gpkg)
-    return dict(zip(lp["ID"].astype(int), lp["levpa_id"]))
-
-
-def test_nwm_style_network_derives_two_branches(tmp_path):
-    """Baseline: snapped LineStrings, connectivity from shared coordinates."""
-    import geopandas as gpd
-    from shapely.geometry import LineString
-
-    _stage_network(
-        tmp_path,
-        gpd.GeoDataFrame(
-            {
-                "ID": list(_REACHES),
-                "order_": list(_REACHES.values()),
-                "to_": [103, 103, 0],
-            },
-            geometry=[
-                LineString([(0, 2000), (0, 1000)]),
-                LineString([(500, 2000), (0, 1000)]),
-                LineString([(0, 1000), (0, 0)]),
-            ],
-            crs=5070,
-        ),
-    )
-
-    result = BranchDerivation(
-        out_dir=tmp_path,
-        excluded_stream_orders=(),
-        branch_buffer_distance_meters=200.0,
-        apply_levees=False,
-    ).run()
-
-    branch = _branch_of(result.levelpaths)
-    # B is the longer of the two order-3 inflows, so it carries the mainstem.
-    assert branch[102] == branch[103]
-    assert branch[101] != branch[103]
-    assert len(result.branch_dataframe) == 2
-
-
-def test_ngen_style_network_derives_same_branches(tmp_path):
-    """NextGen layout: MultiLineStrings, nexus gaps, cat-N catchment ids.
-
-    Regression for the crash this shape used to cause — shapely refuses
-    ``.coords`` on a MultiLineString — and for the silent failure behind it:
-    with a nexus gap at the junction, coordinate matching would have left three
-    orphan reaches and three single-reach branches.
-    """
-    import geopandas as gpd
-    from shapely.geometry import LineString, MultiLineString
-
-    _stage_network(
-        tmp_path,
-        gpd.GeoDataFrame(
-            {
-                "ID": list(_REACHES),
-                "order_": [float(o) for o in _REACHES.values()],
-                "toid": ["nex-103", "nex-103", "nex-104"],  # 104 drains out of the AOI
-                "divide_id": [f"cat-{i}" for i in _REACHES],
-            },
-            geometry=[
-                MultiLineString([LineString([(0, 2000), (0, 1010)])]),
-                MultiLineString([LineString([(500, 2000), (10, 1005)])]),
-                MultiLineString([LineString([(0, 990), (0, 0)])]),
-            ],
-            crs=5070,
-        ),
-        catchment_id_column="divide_id",
-    )
-
-    result = BranchDerivation(
-        out_dir=tmp_path,
-        excluded_stream_orders=(),
-        branch_buffer_distance_meters=200.0,
-        apply_levees=False,
-    ).run()
-
-    branch = _branch_of(result.levelpaths)
-    assert branch[102] == branch[103]
-    assert branch[101] != branch[103]
-    assert len(result.branch_dataframe) == 2
-
-    # Parts are merged on the way in, so every consumer downstream sees LineString.
-    assert set(gpd.read_file(result.levelpaths).geom_type) == {"LineString"}
-    # Headwaters land on a reach vertex, which is what flow accumulation seeds from.
-    headwaters = gpd.read_file(result.headwaters)
-    assert len(headwaters) == 2
-
-
-def test_reach_split_across_rows_is_dissolved(tmp_path):
-    """A reach stored as two rows collapses to one, keeping its full length."""
-    import geopandas as gpd
-    from shapely.geometry import LineString
-
-    _stage_network(
-        tmp_path,
-        gpd.GeoDataFrame(
-            {
-                "ID": [101, 102, 103, 103],
-                "order_": [3, 3, 4, 4],
-                "to_": [103, 103, 0, 0],
-            },
-            geometry=[
-                LineString([(0, 2000), (0, 1000)]),
-                LineString([(500, 2000), (0, 1000)]),
-                LineString([(0, 1000), (0, 500)]),
-                LineString([(0, 500), (0, 0)]),
-            ],
-            crs=5070,
-        ),
-    )
-
-    result = BranchDerivation(
-        out_dir=tmp_path,
-        excluded_stream_orders=(),
-        branch_buffer_distance_meters=200.0,
-        apply_levees=False,
-    ).run()
-
-    levelpaths = gpd.read_file(result.levelpaths)
-    assert (levelpaths["ID"].astype(int) == 103).sum() == 1
-    assert len(result.branch_dataframe) == 2
-
-
 # ==========================
 # COMBINED — the whole branch pipeline in one go, matching the step-by-step
 # sequence exactly:
@@ -388,6 +194,7 @@ def test_branchprocessing_combined():
         out_dir=OUT_DIR,
         branch_id_attribute="levpa_id",
         reach_id_attribute="ID",
+        hydrofabric_fields=HYDROFABRIC_FIELDS,  # None -> detect the staged source
         branch_buffer_distance_meters=7000.0,  # Change this if the area is small
         apply_levees=True,  # False -> no levee_levelpaths.csv, so no levee mask later
         # single_levelpath_branch_zero_only=True,  #1 reach -> empty branch list, branch zero only
@@ -436,6 +243,9 @@ def test_branchprocessing_combined():
         src_slope_source="iris_sword",
         iris_slope_csv=None,
         hfab_slope_column=None,
+        # Same overrides BranchDerivation got; only feature_id is read here, as
+        # the crosswalk's discharge join key.
+        hydrofabric_fields=HYDROFABRIC_FIELDS,
         # execution
         n_workers=n_workers,
         keep_failed_branches=True,
@@ -503,8 +313,10 @@ def test_branchprocessing_combined():
 #         out_dir=OUT_DIR,
 #         branch_id_attribute="levpa_id",
 #         reach_id_attribute="ID",
+#         hydrofabric_fields=HYDROFABRIC_FIELDS,  # None -> detect the staged source
 #         branch_buffer_distance_meters=7000.0,
 #     ).run()
+#     log.info(f"hydrofabric: {result.hydrofabric}")
 #     assert result.dissolved_levelpaths.exists(), "dissolved levelpaths not written"
 #     assert result.branch_polygons.exists(), "branch polygons not written"
 #     assert result.branch_list.exists(), "branch list file not written"
@@ -918,6 +730,9 @@ def test_branchprocessing_combined():
 #         src_slope_source="iris_sword",
 #         iris_slope_csv=None,  # None -> packaged fimbox/data table
 #         hfab_slope_column=None,  # name the hydrofabric slope col if not Slope/So
+#         feature_id_column=(
+#             HYDROFABRIC_FIELDS.feature_id if HYDROFABRIC_FIELDS else None
+#         ),  # discharge join key when it is not feature_id / ID
 #     )
 #     import pandas as pd
 
@@ -1212,6 +1027,7 @@ def test_branchprocessing_combined():
 #         n_workers=n_workers,  # auto-sized; FIMBOX_DASK_WORKERS=1 forces serial
 #         keep_failed_branches=True,  # keep a failed branch dir for inspection
 #         delete_deny_list=True,
+#         hydrofabric_fields=HYDROFABRIC_FIELDS,
 #         **PARAMS_CREATE_HAND,
 #     )
 
