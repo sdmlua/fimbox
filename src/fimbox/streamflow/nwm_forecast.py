@@ -29,6 +29,7 @@ from typing import Optional, Union
 
 import pandas as pd
 
+from ..logging_utils import log_errors
 from . import _common as C
 
 log = logging.getLogger(__name__)
@@ -65,15 +66,16 @@ def getNWMforecast(
     the cycle (defaults to the latest complete one); ``sort_by`` aggregates each
     forecast day ('maximum' | 'minimum' | 'median').
     """
-    fid_csv = C.resolve_feature_id_csv(
-        aoi_dir, feature_id_csv=feature_id_csv, feature_ids=feature_ids
-    )
-    return NWMForecast(aoi_dir, fid_csv).to_fim_inputs(
-        forecast_range,
-        forecast_date=forecast_date,
-        hour=hour,
-        sort_by=sort_by,
-    )
+    with log_errors(f"{forecast_range} forecast streamflow"):
+        fid_csv = C.resolve_feature_id_csv(
+            aoi_dir, feature_id_csv=feature_id_csv, feature_ids=feature_ids
+        )
+        return NWMForecast(aoi_dir, fid_csv).to_fim_inputs(
+            forecast_range,
+            forecast_date=forecast_date,
+            hour=hour,
+            sort_by=sort_by,
+        )
 
 
 class NWMForecast:

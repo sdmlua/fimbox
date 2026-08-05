@@ -4,25 +4,26 @@ Date Updated: June 2026
 
 Synthetic rating curve (SRC) calibration pipeline.
 
-The whole configuration lives in a single ``CalibrationConfig`` dataclass:
-the toggles that decide which steps run and the input file paths those steps
-consume. Every step is gated by an explicit boolean, and the field defaults
-form the "default pipeline" — the two always-on aggregations that bracket the
-run, plus a reset when ``calibration_rerun`` is set. Every optional adjustment
-stays off until you flip its toggle and supply its input file.
+The whole configuration lives in a single ``CalibrationConfig`` dataclass, and
+every step is a socket with two independent halves:
+
+  * a toggle, on by default — pass ``False`` to unplug that step;
+  * an input path, ``None`` by default — meaning "fetch the fimbox dataset for
+    this AOI". Pass your own file to substitute it.
+
+So ``CalibrationConfig()`` runs the full pipeline on published data with nothing
+to stage by hand, and each step is independently swappable or removable without
+disturbing the rest.
 
 Usage
 -----
     from fimbox import CalibrationConfig, run_calibration
 
-    # default pipeline: aggregate elev tables -> aggregate htable/bridge/road
-    run_calibration(aoi_dir, CalibrationConfig())
+    run_calibration(aoi_dir)                       #everything, published data
 
-    # turn on the two big-lift SRC routines
     run_calibration(aoi_dir, CalibrationConfig(
-        src_bankfull_toggle=True, bankfull_flows_file="bankfull.csv",
-        src_subdiv_toggle=True,   vmann_input_file="mannings.csv",
-        nonmonotonic_src_adjustment=True,
+        vmann_input_file="my_roughness.parquet",    #my table, this step only
+        src_adjust_spatial=False,                   #unplug one step
     ))
     # job_branch_limit is left unset above: the branch-parallel steps size
     # themselves to the machine. Set it only to cap the pool (or 1 to go serial).
@@ -38,7 +39,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
-from ...logging_utils import attach_case_log
+from ..._aoi_lock import aoi_write_lock
+from ...logging_utils import attach_case_log, log_errors
 from ._common import CalibrationNotImplemented, PathLike, aoi_id_of, resolve_aoi_dir
 from .aggregate import BranchAggregator
 from .dem_adjust import (
@@ -48,7 +50,7 @@ from .dem_adjust import (
 )
 from .logscan import LogScanner
 from .reset import HydroTableReset
-from .src_adjust import SrcBankfull, SrcNonmonotonic, SrcSubdiv
+from .src_adjust import SlopeAdjustment, SrcBankfull, SrcNonmonotonic, SrcSubdiv
 from .src_calibrate import (
     ManualCalibrator,
     Ras2fimCalibrator,
@@ -63,9 +65,9 @@ log = logging.getLogger(__name__)
 class CalibrationConfig:
     """Every calibration knob in one dataclass.
 
-    The defaults below ARE the default pipeline: a rerun resets first, then
-    the two bracketing aggregations always run, and every optional
-    adjustment stays off until you toggle it on and provide its input file.
+    Toggles default on and input paths default to ``None``, which resolves to
+    the published fimbox dataset for the AOI being calibrated. Set a toggle
+    ``False`` to unplug a step; set its path to run the step on your own data.
     """
 
     # --- mode ----
@@ -73,22 +75,29 @@ class CalibrationConfig:
     calibration_rerun: bool = False
 
     # --- step toggles ----
-    # SRC bankfull + subdivision give the biggest accuracy lift; everything else is a smaller refinement
-    thalweg_notches_adjustment: bool = False
-    longitudinal_filter: bool = False
-    bathymetry_adjust: bool = False
-    src_bankfull_toggle: bool = False
-    src_subdiv_toggle: bool = False
-    nonmonotonic_src_adjustment: bool = False
-    src_adjust_usgs: bool = False
-    src_adjust_ras2fim: bool = False
-    src_adjust_spatial: bool = False
-    manual_calb_toggle: bool = False
+    # All on: this is the full pipeline. Pass False to unplug an individual step.
+    slope_adjustment: bool = True
+    thalweg_notches_adjustment: bool = True
+    longitudinal_filter: bool = True
+    bathymetry_adjust: bool = True
+    src_bankfull_toggle: bool = True
+    src_subdiv_toggle: bool = True
+    nonmonotonic_src_adjustment: bool = True
+    src_adjust_usgs: bool = True
+    src_adjust_ras2fim: bool = True
+    src_adjust_spatial: bool = True
+    manual_calb_toggle: bool = True
 
-    # --- input files consumed by the toggled-on routines ----
+    # --- input files: None -> fetch the published dataset, or pass your own ----
+    # Slope replacing the DEM rise/run slope the crosswalk built each SRC on.
+    # "table" (default) reads slope_table, which resolves to the published
+    # reach-slope dataset; "hfab" reads the SLOPE_HFAB column already carried
+    # through the SRC. Reaches the chosen source does not cover keep the DEM slope.
+    slope_source: str = "table"
+    slope_table: Optional[PathLike] = None
     bathy_file_ehydro: Optional[PathLike] = None
     bathy_file_aibased: Optional[PathLike] = None
-    ai_toggle: int = 0
+    ai_toggle: int = 1  # 1 = also apply predicted (AI) channel geometry
     ai_strm_order: int = 4  # min stream order for AI-based bathymetry
     bankfull_flows_file: Optional[PathLike] = None
     vmann_input_file: Optional[PathLike] = None
@@ -97,9 +106,13 @@ class CalibrationConfig:
     nwm_recur_file: Optional[PathLike] = None
     ras_rating_curve_csv: Optional[PathLike] = None
     calib_points_file: Optional[PathLike] = (
-        None  # benchmark obs points for src_adjust_spatial
+        None  # flood-edge obs points for src_adjust_spatial
     )
     man_calb_file: Optional[PathLike] = None
+
+    # Skip the S3 lookups entirely and run only on paths given explicitly. Steps
+    # whose input is then missing are logged and skipped.
+    offline: bool = False
 
     # --- tunables ------
     # Default Manning's n used by the subdivision step when a feature_id is absent from vmann_input_file.
@@ -134,6 +147,16 @@ class Calibrator:
     cfg: CalibrationConfig
 
     def run(self) -> None:
+        # One writer per AOI: every step below rewrites the branch tables in
+        # place, so a second run over the same AOI would interleave with this
+        # one and splice the CSVs.
+        aoi_dir = resolve_aoi_dir(self.aoi_dir)
+        attach_case_log(aoi_dir)
+        with log_errors(f"Calibration {aoi_id_of(aoi_dir)}"):
+            with aoi_write_lock(aoi_dir, "calibration"):
+                self._run()
+
+    def _run(self) -> None:
         aoi_dir = resolve_aoi_dir(self.aoi_dir)
         cfg = self.cfg
         aoi_id = aoi_id_of(aoi_dir)
@@ -152,6 +175,28 @@ class Calibrator:
             log.info("--- aggregate usgs + ras2fim elev tables ---")
             BranchAggregator(aoi_dir=aoi_dir, usgs_elev=True, ras_elev=True).run()
 
+        if cfg.slope_adjustment:
+            # "hfab" needs no external table — the column rides through the SRC.
+            slope_table = (
+                self._dataset("reach_slope", cfg.slope_table)
+                if cfg.slope_source == "table"
+                else None
+            )
+            if cfg.slope_source == "table" and slope_table is None:
+                log.info("Skipping slope adjustment: no reach-slope table available")
+            else:
+                self._maybe(
+                    True,
+                    f"slope adjustment ({cfg.slope_source})",
+                    lambda: SlopeAdjustment(
+                        aoi_dir=aoi_dir,
+                        slope_source=cfg.slope_source,
+                        slope_table=slope_table,
+                        n_workers=cfg.job_branch_limit,
+                        include_branch_zero=cfg.include_branch_zero,
+                    ).run(),
+                )
+
         self._maybe(
             cfg.thalweg_notches_adjustment,
             "thalweg notches adjustment",
@@ -169,33 +214,35 @@ class Calibrator:
         )
 
         if cfg.bathymetry_adjust:
-            # eHydro is the base source; AI (bathy_file_aibased) only when ai_toggle=1.
-            if cfg.bathy_file_ehydro is None and cfg.bathy_file_aibased is None:
-                raise ValueError(
-                    "bathymetry_adjust requires bathy_file_ehydro and/or bathy_file_aibased"
-                )
-            self._maybe(
-                True,
+            # Surveyed channels are the base source; predicted geometry only when ai_toggle=1.
+            ehydro = self._dataset("channel_bathymetry", cfg.bathy_file_ehydro)
+            aibased = (
+                self._dataset("channel_geometry_predicted", cfg.bathy_file_aibased)
+                if cfg.ai_toggle
+                else None
+            )
+            self._needs(
                 "bathymetry adjustment",
+                ehydro or aibased,
                 lambda: BathymetricAdjustment(
                     aoi_dir=aoi_dir,
-                    bathy_file_ehydro=cfg.bathy_file_ehydro,
-                    bathy_file_aibased=cfg.bathy_file_aibased,
-                    ai_toggle=cfg.ai_toggle,
+                    bathy_file_ehydro=ehydro,
+                    bathy_file_aibased=aibased,
+                    ai_toggle=cfg.ai_toggle if aibased else 0,
                     ai_strm_order=cfg.ai_strm_order,
                     n_workers=cfg.job_branch_limit,
                 ).run(),
             )
 
+        bankfull_flows = None
         if cfg.src_bankfull_toggle:
-            if cfg.bankfull_flows_file is None:
-                raise ValueError("src_bankfull_toggle requires bankfull_flows_file")
-            self._maybe(
-                True,
+            bankfull_flows = self._dataset("bankfull_flows", cfg.bankfull_flows_file)
+            self._needs(
                 "SRC bankfull identification",
+                bankfull_flows,
                 lambda: SrcBankfull(
                     aoi_dir=aoi_dir,
-                    bankfull_flows_file=cfg.bankfull_flows_file,
+                    bankfull_flows_file=bankfull_flows,
                     n_workers=cfg.job_branch_limit,
                     include_branch_zero=cfg.include_branch_zero,
                 ).run(),
@@ -206,7 +253,7 @@ class Calibrator:
         # this same flag rather than src_subdiv_toggle alone: they read the
         # per-stage channel_n / overbank_n only subdivision writes, so the
         # toggle being set is not enough — it has to have actually run.
-        subdiv_ran = cfg.src_subdiv_toggle and cfg.src_bankfull_toggle
+        subdiv_ran = cfg.src_subdiv_toggle and bankfull_flows is not None
         if cfg.src_subdiv_toggle and not cfg.src_bankfull_toggle:
             log.warning(
                 "src_subdiv_toggle is set but src_bankfull_toggle is not — "
@@ -215,14 +262,14 @@ class Calibrator:
             )
 
         if subdiv_ran:
-            if cfg.vmann_input_file is None:
-                raise ValueError("src_subdiv_toggle requires vmann_input_file")
-            self._maybe(
-                True,
+            vmann = self._dataset("channel_roughness", cfg.vmann_input_file)
+            subdiv_ran = vmann is not None
+            self._needs(
                 "SRC channel/overbank subdivision",
+                vmann,
                 lambda: SrcSubdiv(
                     aoi_dir=aoi_dir,
-                    vmann_table=cfg.vmann_input_file,
+                    vmann_table=vmann,
                     n_workers=cfg.job_branch_limit,
                     include_branch_zero=cfg.include_branch_zero,
                     default_channel_n=cfg.default_channel_n,
@@ -240,61 +287,62 @@ class Calibrator:
             ).run(),
         )
 
+        # Recurrence flows are shared by the two rating-curve calibrators.
+        recur = (
+            self._dataset("recurrence_flows", cfg.nwm_recur_file)
+            if subdiv_ran and (cfg.src_adjust_usgs or cfg.src_adjust_ras2fim)
+            else None
+        )
+
         if cfg.src_adjust_usgs and subdiv_ran:
-            # Rating curve + recurrence flows required; acceptable-gage list optional.
-            if cfg.usgs_rating_curve_csv is None or cfg.nwm_recur_file is None:
-                raise ValueError(
-                    "src_adjust_usgs requires usgs_rating_curve_csv + nwm_recur_file"
-                )
-            self._maybe(
-                True,
-                "SRC adjust (USGS rating curves)",
+            # Rating curves + recurrence flows required; the gage-quality filter is optional.
+            rating = self._dataset("gage_rating_curves", cfg.usgs_rating_curve_csv)
+            self._needs(
+                "SRC adjust (gage rating curves)",
+                rating and recur,
                 lambda: UsgsRatingCalibrator(
                     aoi_dir=aoi_dir,
-                    usgs_rating_curve_csv=cfg.usgs_rating_curve_csv,
-                    nwm_recur_file=cfg.nwm_recur_file,
-                    usgs_acceptable_gages=cfg.usgs_acceptable_gages,
+                    usgs_rating_curve_csv=rating,
+                    nwm_recur_file=recur,
+                    usgs_acceptable_gages=self._dataset(
+                        "gage_quality_filter", cfg.usgs_acceptable_gages
+                    ),
                     n_workers=cfg.job_branch_limit,
                 ).run(),
             )
 
         if cfg.src_adjust_ras2fim and subdiv_ran:
-            if cfg.ras_rating_curve_csv is None or cfg.nwm_recur_file is None:
-                raise ValueError(
-                    "src_adjust_ras2fim requires ras_rating_curve_csv + nwm_recur_file"
-                )
-            self._maybe(
-                True,
-                "SRC adjust (RAS2FIM)",
+            xsec = self._dataset("xsec_rating_curves", cfg.ras_rating_curve_csv)
+            self._needs(
+                "SRC adjust (cross-section rating curves)",
+                xsec and recur,
                 lambda: Ras2fimCalibrator(
                     aoi_dir=aoi_dir,
-                    ras_rating_curve_csv=cfg.ras_rating_curve_csv,
-                    nwm_recur_file=cfg.nwm_recur_file,
+                    ras_rating_curve_csv=xsec,
+                    nwm_recur_file=recur,
                     n_workers=cfg.job_branch_limit,
                 ).run(),
             )
 
         if cfg.src_adjust_spatial and subdiv_ran:
-            self._maybe(
-                True,
-                "SRC adjust (spatial observations)",
+            points = self._dataset("flood_edge_points", cfg.calib_points_file)
+            self._needs(
+                "SRC adjust (flood-edge observations)",
+                points,
                 lambda: SpatialObsCalibrator(
                     aoi_dir=aoi_dir,
-                    calib_points_file=cfg.calib_points_file,
+                    calib_points_file=points,
                     n_workers=cfg.job_branch_limit,
                 ).run(),
             )
 
         if cfg.manual_calb_toggle:
-            if cfg.man_calb_file is None or not Path(cfg.man_calb_file).is_file():
-                log.warning(
-                    f"manual_calb_toggle set but file missing: {cfg.man_calb_file}"
-                )
-            else:
-                log.info("--- manual calibration ---")
-                ManualCalibrator(
-                    aoi_dir=aoi_dir, calibration_file=cfg.man_calb_file
-                ).run()
+            coefs = self._dataset("manual_coefficients", cfg.man_calb_file)
+            self._needs(
+                "manual calibration",
+                coefs,
+                lambda: ManualCalibrator(aoi_dir=aoi_dir, calibration_file=coefs).run(),
+            )
 
         if cfg.aggregate_post:
             log.info("--- aggregate hydroTable + bridge + road outputs ---")
@@ -306,7 +354,36 @@ class Calibrator:
 
         log.info(f"=== {verb} complete: {aoi_id} ===")
 
+    def _dataset(
+        self, key: Optional[str], override: Optional[PathLike]
+    ) -> Optional[Path]:
+        """One step's input: the caller's file, else the published dataset.
+
+        None means nothing resolved, which the caller turns into a skip — a
+        missing dataset should cost that one step, not the run."""
+        if override is not None:
+            p = Path(override)
+            if p.exists():
+                return p
+            log.warning(f"{key}: no such file {p}")
+            if self.cfg.offline:
+                return None
+        if key is None or self.cfg.offline:
+            return None
+        from ...datasets import fetch
+
+        return fetch(key)
+
+    def _needs(self, name: str, dataset: Optional[object], fn) -> None:
+        # Run the step only if its input resolved.
+        if not dataset:
+            log.info(f"Skipping {name}: no input dataset available")
+            return
+        self._maybe(True, name, fn)
+
     def _maybe(self, enabled: bool, name: str, fn) -> None:
+        # A step that blows up is logged and skipped: one bad input or a quirk of
+        # somebody's catchments shouldn't cost them the rest of the pipeline.
         if not enabled:
             return
         log.info(f"--- {name} ---")
@@ -317,6 +394,8 @@ class Calibrator:
                 log.warning(f"Skipping {name}: {exc}")
             else:
                 raise
+        except Exception:
+            log.exception(f"{name} failed — skipping to the next step")
 
 
 def run_calibration(

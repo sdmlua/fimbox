@@ -195,6 +195,12 @@ class BranchDerivation:
         return discover_area_inputs(out_dir, area_id=area_id)
 
     def run(self) -> BranchDerivationResult:
+        from ...logging_utils import log_errors
+
+        with log_errors(f"Branch derivation {self.out_dir.name}", logger=self.logger):
+            return self._run()
+
+    def _run(self) -> BranchDerivationResult:
         self._announce("Branch derivation started")
         self.logger.info("=== BRANCH DERIVATION START ===")
         discovered = None

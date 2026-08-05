@@ -1,9 +1,9 @@
-# Keep large data assets and docs out of the sdist/build.
-# Runtime data is fetched on demand via pooch, so it does not
-# need to ship in the package. These files remain in the git repo.
-prune data
+# Keep docs out of the sdist/build. No reference data lives in the repo --
+# fimbox.datasets fetches it from S3 -- so the only data to exclude is a local
+# cache someone parked in the checkout.
 prune docs
 prune workflows
+prune .fimbox_data
 exclude uv.lock
 
 # dist/ is committed to git, so setuptools-scm's file finder would otherwise

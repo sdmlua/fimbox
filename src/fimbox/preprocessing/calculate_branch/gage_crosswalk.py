@@ -161,6 +161,14 @@ def assign_gages_to_branches(
     )
 
 
+def _read_points(path: PathLike) -> gpd.GeoDataFrame:
+    # Point layers arrive as either a local .gpkg or a fetched geoparquet.
+    path = Path(path)
+    if path.suffix.lower() in (".parquet", ".pq"):
+        return gpd.read_parquet(path)
+    return gpd.read_file(path)
+
+
 def _load_aoi_gages(
     usgs_gages_gpkg: PathLike,
     aoi_id: str,
@@ -170,14 +178,14 @@ def _load_aoi_gages(
     aoi_filter_column: str,
 ) -> gpd.GeoDataFrame:
     aoi_id = str(aoi_id)
-    usgs = gpd.read_file(usgs_gages_gpkg)
+    usgs = _read_points(usgs_gages_gpkg)
     usgs["source"] = "usgs_gage"
     usgs = usgs.to_crs(target_crs)
 
     frames = [usgs]
 
     if ras_locs_gpkg and Path(ras_locs_gpkg).exists():
-        ras = gpd.read_file(ras_locs_gpkg).to_crs(target_crs)
+        ras = _read_points(ras_locs_gpkg).to_crs(target_crs)
         # RAS2FIM uses lowercase "huc8"; normalise to the configured column.
         if aoi_filter_column not in ras.columns and "huc8" in ras.columns:
             ras = ras.rename(columns={"huc8": aoi_filter_column})

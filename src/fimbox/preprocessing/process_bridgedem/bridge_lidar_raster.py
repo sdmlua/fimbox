@@ -220,7 +220,11 @@ def _bridge_tiles(ept_url: str, bounds: tuple, min_depth: int = 6) -> tuple:
     qxmin, qymin = tr.transform(bounds[0], bounds[1])
     qxmax, qymax = tr.transform(bounds[2], bounds[3])
     query = (qxmin, qymin, qxmax, qymax)
-    return base, tuple(_intersecting_tiles(hierarchy, ept_bounds, query, min_depth)), query
+    return (
+        base,
+        tuple(_intersecting_tiles(hierarchy, ept_bounds, query, min_depth)),
+        query,
+    )
 
 
 def _fetch_ept_points(
@@ -385,22 +389,24 @@ class generateBridgeRaster:
         }
 
     def run(self) -> Path:
-        from ...logging_utils import attach_case_log
+        from ...logging_utils import attach_case_log, log_errors
 
         attach_case_log(self._log_dir)
-        bridges = self._load_bridges()
-        footprints = self._make_footprints(bridges)
-        index = self._load_entwine_index()
-        footprints = self._assign_lidar_urls(footprints, index)
-        log.info(
-            f"Processing {len(footprints)} bridges: {self.n_workers} workers, "
-            f"{self.tile_workers} tile-threads, min_tile_depth={self.min_tile_depth}, "
-            f"skip_existing={self.skip_existing}"
-        )
-        self._process_parallel(footprints)
-        n_out = len(list(self._tif_dir.glob("*.tif")))
-        log.info(f"Bridge rasters complete: {n_out} files --> {self._tif_dir.name}")
-        return self._tif_dir
+        with log_errors(f"Bridge LiDAR rasters {self._log_dir.name}"):
+            bridges = self._load_bridges()
+            footprints = self._make_footprints(bridges)
+            index = self._load_entwine_index()
+            footprints = self._assign_lidar_urls(footprints, index)
+            log.info(
+                f"Processing {len(footprints)} bridges: {self.n_workers} workers, "
+                f"{self.tile_workers} tile-threads, "
+                f"min_tile_depth={self.min_tile_depth}, "
+                f"skip_existing={self.skip_existing}"
+            )
+            self._process_parallel(footprints)
+            n_out = len(list(self._tif_dir.glob("*.tif")))
+            log.info(f"Bridge rasters complete: {n_out} files --> {self._tif_dir.name}")
+            return self._tif_dir
 
     def _load_bridges(self) -> gpd.GeoDataFrame:
         self.bridge_gpkg = resolve_bridge_gpkg(self.bridge_gpkg)
@@ -684,7 +690,9 @@ def _process_one_bridge(
     if ymax <= ymin:
         ymax = ymin + resolution
 
-    grid, transform, nodata = _idw_rasterize(xy, z, (xmin, ymin, xmax, ymax), resolution)
+    grid, transform, nodata = _idw_rasterize(
+        xy, z, (xmin, ymin, xmax, ymax), resolution
+    )
 
     with rasterio.open(
         tif_path,

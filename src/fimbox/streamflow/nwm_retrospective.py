@@ -22,6 +22,7 @@ from typing import Optional, Union
 
 import pandas as pd
 
+from ..logging_utils import log_errors
 from . import _common as C
 
 log = logging.getLogger(__name__)
@@ -51,15 +52,16 @@ def getNWMretrospective(
       * ``start`` + ``end`` -> one CSV per hour (continuous)
       * ``start`` + ``end`` + ``sortby`` -> one aggregated CSV (max/min/mean)
     """
-    fid_csv = C.resolve_feature_id_csv(
-        aoi_dir, feature_id_csv=feature_id_csv, feature_ids=feature_ids
-    )
-    retro = NWMRetrospective(aoi_dir, fid_csv)
-    if date:
-        return [retro.at(date)]
-    if start and end:
-        return retro.to_fim_inputs(start, end, sortby=sortby)
-    raise ValueError("Provide date=, or start= and end=.")
+    with log_errors("Retrospective streamflow"):
+        fid_csv = C.resolve_feature_id_csv(
+            aoi_dir, feature_id_csv=feature_id_csv, feature_ids=feature_ids
+        )
+        retro = NWMRetrospective(aoi_dir, fid_csv)
+        if date:
+            return [retro.at(date)]
+        if start and end:
+            return retro.to_fim_inputs(start, end, sortby=sortby)
+        raise ValueError("Provide date=, or start= and end=.")
 
 
 class NWMRetrospective:

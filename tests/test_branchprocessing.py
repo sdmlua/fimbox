@@ -28,13 +28,13 @@ log = logging.getLogger(__name__)
 # are not imported here.
 
 # AOI parameters — point this at any user-supplied AOI working directory.
-# OUT_DIR = Path(__file__).resolve().parents[2] / "out" / "test_smallB" / "watershed-data"
-OUT_DIR = (
-    Path(__file__).resolve().parents[2]
-    / "out"
-    / "nwm_11239459and2more"
-    / "watershed-data"
-)
+OUT_DIR = Path(__file__).resolve().parents[2] / "out" / "test_smallB" / "watershed-data"
+# OUT_DIR = (
+#     Path(__file__).resolve().parents[2]
+#     / "out"
+#     / "nwm_11239459and2more"
+#     / "watershed-data"
+# )
 
 # Source-data filename prefix.
 IDENTIFIER = "nwmmr"
@@ -55,13 +55,9 @@ PARAMS_CREATE_HAND = dict(
     min_stream_length=0.5,  # km, short-reach replace threshold
     crosswalk_max_distance_m=100.0,  # m, midpoint-to-NWM-flowline cap
     # SRC slope source feeding Manning's equation:
-    #   "iris_sword" (default) - IRIS-SWORD slope on order>=4 streams, else DEM
-    #   "dem"                  - DEM rise/run slope only
-    #   "hfab"                 - hydrofabric native slope, else DEM fallback
-    src_slope_source="iris_sword",
-    # IRIS-SWORD slope table (feature_id, slope_iris_sword). None -> the table
-    # shipped in fimbox/data is used when src_slope_source == "iris_sword".
-    iris_slope_csv=None,
+    #   "dem" (default) - DEM rise/run slope computed into src_base
+    #   "hfab"          - hydrofabric native slope, else DEM fallback
+    src_slope_source="dem",
     # Hydrofabric slope column when it isn't the usual 'Slope'/'So'.
     hfab_slope_column=None,
 )
@@ -247,9 +243,8 @@ def test_branchprocessing_combined():
         min_catchment_area=0.25,
         min_stream_length=0.5,
         crosswalk_max_distance_m=100.0,
-        # SRC slope source: "iris_sword" | "dem" | "hfab"
-        src_slope_source="iris_sword",
-        iris_slope_csv=None,
+        # SRC slope source: "dem" | "hfab"
+        src_slope_source="dem",
         hfab_slope_column=None,
         # execution
         n_workers=n_workers,
@@ -729,9 +724,8 @@ def test_branchprocessing_combined():
 #         min_stream_length=0.5,
 #         max_distance_m=100.0,
 #         small_segments_csv=BRANCH_DIR / f"small_segments_{BRANCH_ID}.csv",
-#         # SRC slope source (optional): "iris_sword" (default) | "dem" | "hfab".
-#         src_slope_source="iris_sword",
-#         iris_slope_csv=None,  # None -> packaged fimbox/data table
+#         # SRC slope source (optional): "dem" (default) | "hfab".
+#         src_slope_source="dem",
 #         hfab_slope_column=None,  # name the hydrofabric slope col if not Slope/So
 #     )
 #     import pandas as pd
@@ -739,8 +733,8 @@ def test_branchprocessing_combined():
 #     ht = pd.read_csv(HYDRO_TABLE, dtype={"HydroID": str})
 #     log.info(f"hydroTable: {len(ht)} rows  HydroIDs={ht['HydroID'].nunique()}")
 #     assert HYDRO_TABLE.exists() and (ht["discharge_cms"] >= 0).all()
-#     # The three slope variants are carried so the chosen source is transparent.
-#     for col in ("SLOPE", "SLOPE_RISE_RUN", "SLOPE_IRIS_SWORD"):
+#     # Both slope variants are carried so the chosen source is transparent.
+#     for col in ("SLOPE", "SLOPE_RISE_RUN", "SLOPE_HFAB"):
 #         assert col in ht.columns, f"hydroTable missing {col}"
 
 

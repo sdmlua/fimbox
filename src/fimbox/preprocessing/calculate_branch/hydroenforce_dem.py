@@ -17,6 +17,8 @@ import numpy as np
 import rasterio
 from scipy.ndimage import distance_transform_edt
 
+from ...logging_utils import log_errors
+
 log = logging.getLogger(__name__)
 
 
@@ -65,7 +67,7 @@ class HydroenforceDEM:
             self.sharp_drop,
             self.dem.name,
         )
-        try:
+        with log_errors(f"AGREE DEM (dem={self.dem} rivers={self.rivers_raster})"):
             with rasterio.open(str(self.dem)) as src:
                 profile = src.profile.copy()
                 dem_data = src.read(1).astype(np.float32)
@@ -134,9 +136,3 @@ class HydroenforceDEM:
 
             log.info("AGREE DEM written --> %s", self.output_raster.name)
             return self.output_raster
-
-        except Exception:
-            log.exception(
-                "AGREE DEM FAILED: dem=%s rivers=%s", self.dem, self.rivers_raster
-            )
-            raise

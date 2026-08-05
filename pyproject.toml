@@ -111,8 +111,13 @@ ignore = ["E501"]
 
 [tool.pytest.ini_options]
 minversion = "6.0"
-addopts = "-ra -q"
+# The per-stage calibration tests re-run work the combined pipeline test already
+# covers, so they sit out a normal run; `pytest -m step` selects them.
+addopts = "-ra -q -m 'not step'"
 testpaths = ["tests"]
+markers = [
+    "step: a single calibration stage, run on its own for debugging",
+]
 # Silence third-party DeprecationWarnings we don't control: py3dep/pygeoutils
 # and rioxarray emit `include_z` positional-arg warnings (legacy DEM path), and
 # planetary-computer emits a Pydantic v2 class-based-config warning. None come

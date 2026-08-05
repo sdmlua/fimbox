@@ -4,8 +4,12 @@ Date Updated: May 2026
 
 Synthetic rating curve (SRC) geometry-side adjustments.
 
-Three classes, one per routine:
+Four classes, one per routine:
 
+  SlopeAdjustment    swap the reach slope feeding Manning's equation. Branch
+                     processing builds every SRC on the DEM's computed rise/run
+                     slope; this is where a surveyed slope table, or the
+                     hydrofabric's own slope, replaces it where it has cover.
   SrcBankfull        identify the in-channel bankfull stage for each HydroID
                      using an external table of NWM bankfull-recurrence flows.
   SrcSubdiv          subdivide each rating curve into channel + overbank
@@ -106,6 +110,124 @@ def _run_branches(
     return results
 
 
+# Slope
+# Matched to the crosswalk's bounds — an out-of-range replacement slope is
+# treated as missing rather than clipped into plausibility.
+SLOPE_MIN = 9.999e-7
+SLOPE_MAX = 0.5
+
+
+@dataclass
+class SlopeAdjustment:
+    # Re-derive SRC discharge on a different reach slope. Geometry is untouched:
+    # WetArea and HydraulicRadius are already in src_full, so only the sqrt(SLOPE)
+    # term changes. Reaches with no usable replacement keep the slope they had.
+
+    aoi_dir: PathLike
+    slope_source: str = "table"  # "table" = slope_table, "hfab" = the SLOPE_HFAB column
+    slope_table: Optional[PathLike] = None  # feature_id -> slope, when source="table"
+    n_workers: Optional[int] = None
+    include_branch_zero: bool = True
+
+    def run(self) -> dict[str, str]:
+        aoi_dir = resolve_aoi_dir(self.aoi_dir)
+        if self.slope_source not in ("hfab", "table"):
+            raise ValueError(
+                f"slope_source must be 'hfab' or 'table', got {self.slope_source!r}"
+            )
+        table_path = None
+        if self.slope_source == "table":
+            if self.slope_table is None:
+                raise ValueError("slope_source='table' requires slope_table")
+            table_path = Path(self.slope_table)
+            if not table_path.is_file():
+                raise FileNotFoundError(f"slope table not found: {table_path}")
+
+        branches = list(
+            iter_branches(aoi_dir, exclude_zero=not self.include_branch_zero)
+        )
+        if not branches:
+            log.warning(f"SlopeAdjustment: no branches found under {aoi_dir}")
+            return {}
+
+        log.info(
+            f"SlopeAdjustment: {len(branches)} branches (source={self.slope_source})"
+        )
+        return _run_branches(
+            branches,
+            _slope_one_branch,
+            (self.slope_source, table_path),
+            self.n_workers,
+            "SlopeAdjustment",
+        )
+
+
+def _slope_column(table: pd.DataFrame) -> Optional[str]:
+    # Named candidates first: slope tables ship provenance columns alongside the
+    # value ("slope_source_*", "slope_original"), so a prefix match alone can pick
+    # the wrong one.
+    for name in ("slope", "slope_m_per_m", "slope_iris_sword", "SLOPE"):
+        if name in table.columns:
+            return name
+    numeric = [
+        c
+        for c in table.columns
+        if c.lower().startswith("slope")
+        and not any(t in c.lower() for t in ("source", "original", "status"))
+        and pd.api.types.is_numeric_dtype(table[c])
+    ]
+    return numeric[0] if numeric else None
+
+
+def _slope_one_branch(
+    branch_dir: Path, bid: str, slope_source: str, table_path: Optional[Path]
+) -> str:
+    src_path = branch_dir / f"src_full_crosswalked_{bid}.csv"
+    if not src_path.is_file():
+        return "SKIP no src_full_crosswalked"
+
+    src = pd.read_csv(src_path, low_memory=False)
+    src.columns = src.columns.str.strip()
+    if not {"SLOPE", HRADIUS_VAR, "WetArea (m2)", "ManningN"}.issubset(src.columns):
+        return "SKIP missing hydraulic columns"
+
+    if slope_source == "hfab":
+        if "SLOPE_HFAB" not in src.columns:
+            return "SKIP no SLOPE_HFAB column"
+        new = pd.to_numeric(src["SLOPE_HFAB"], errors="coerce")
+    else:
+        table = read_table(table_path, dtype={"feature_id": int})
+        if "id" in table.columns and "feature_id" not in table.columns:
+            table = table.rename(columns={"id": "feature_id"})
+        col = _slope_column(table)
+        if col is None or "feature_id" not in table.columns:
+            return "SKIP slope table lacks feature_id/slope columns"
+        table = table[["feature_id", col]].drop_duplicates("feature_id")
+        src["feature_id"] = pd.to_numeric(src["feature_id"], errors="coerce")
+        new = src["feature_id"].map(table.set_index("feature_id")[col])
+
+    new = new.where((new >= SLOPE_MIN) & (new <= SLOPE_MAX))
+    applied = int(new.notna().sum())
+    if not applied:
+        return "SKIP no in-range replacement slopes"
+
+    # Kept once, so a rerun without a reset still has the original.
+    if "preslope_SLOPE" not in src.columns:
+        src["preslope_SLOPE"] = src["SLOPE"]
+    src["SLOPE"] = new.combine_first(pd.to_numeric(src["SLOPE"], errors="coerce"))
+    src["Discharge (m3s-1)"] = (
+        src["WetArea (m2)"]
+        * src[HRADIUS_VAR] ** (2 / 3)
+        * src["SLOPE"] ** 0.5
+        / src["ManningN"]
+    )
+    src.loc[src["Stage"] == 0, "Discharge (m3s-1)"] = 0
+
+    src.to_csv(src_path, index=False)
+    _sync_htable_from_src(branch_dir / f"hydroTable_{bid}.csv", src)
+    return f"OK slope replaced on {applied} rows"
+
+
 # Bankfull
 @dataclass
 class SrcBankfull:
@@ -157,7 +279,9 @@ def _bankfull_one_branch(branch_dir: Path, bid: str, bflows_path: Path) -> str:
     if not src_path.is_file():
         return "SKIP no src_full_crosswalked"
 
-    df_src = pd.read_csv(src_path, dtype={"HydroID": int, "feature_id": int})
+    df_src = pd.read_csv(
+        src_path, dtype={"HydroID": int, "feature_id": int}, low_memory=False
+    )
     df_bflows = _load_bankfull_flows(bflows_path, df_src["feature_id"].unique())
 
     # Remove old bankfull columns before merging.
@@ -378,7 +502,7 @@ def _subdiv_one_branch(
     if not src_path.is_file() or not ht_path.is_file():
         return "SKIP src or hydroTable missing"
 
-    df = pd.read_csv(src_path, dtype={"feature_id": "int64"})
+    df = pd.read_csv(src_path, dtype={"feature_id": "int64"}, low_memory=False)
     if "Stage_bankfull" not in df.columns:
         return "SKIP no Stage_bankfull (run SrcBankfull first)"
 
@@ -623,6 +747,7 @@ _HT_SYNC_COLS = {
     "HydraulicRadius (m)": "HydraulicRadius (m)",
     "WetArea (m2)": "WetArea (m2)",
     "Volume (m3)": "Volume (m3)",
+    "SLOPE": "SLOPE",
     "discharge_cms": "Discharge (m3s-1)",
     "subdiv_discharge_cms": "Discharge (m3s-1)_subdiv",
     "Bathymetry_source": "Bathymetry_source",

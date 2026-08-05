@@ -54,7 +54,6 @@ _PRESERVE_COLUMNS = [
     # Slope variants carried from the crosswalk (kept only if present).
     "SLOPE_RISE_RUN",
     "SLOPE_HFAB",
-    "SLOPE_IRIS_SWORD",
 ]
 
 

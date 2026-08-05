@@ -9,7 +9,8 @@ from __future__ import annotations
 # here so they sit at module top; the annotated groups below build __all__ per
 # source file (see module docstring). Public names are still appended in the
 # grouped sections that follow.
-from .datasets import fetch_data
+from . import datasets
+from .datasets import fetch, fetch_data, prefetch
 from .fimevaluation import (
     BenchmarkQuery,
     BenchmarkQueryResult,
@@ -71,6 +72,7 @@ from .preprocessing import (
     run_branch_crosswalk,
     run_calibration,
     scan_logs,
+    slope_adjustment,
     split_derived_reaches,
     stream_pixel_points,
 )
@@ -130,6 +132,7 @@ __all__ = [
     "reset_hydro_and_src",
     "run_calibration",
     "scan_logs",
+    "slope_adjustment",
 ]
 
 # FIM generation: forecast -> per-branch inundation -> AOI mosaic
@@ -320,6 +323,7 @@ __all__ += [
     "evaluateFIM",
 ]
 
-# On-the-fly access to the bundled reference/calibration lookup tables, fetched
-# anonymously from the public SDML S3 bucket via pooch (imported at module top).
-__all__ += ["fetch_data"]
+# On-demand access to the calibration lookup tables. Nothing ships in the
+# package: each is fetched anonymously from the public SDML S3 bucket via pooch
+# and cached locally. See fimbox.datasets for the full surface.
+__all__ += ["datasets", "fetch", "fetch_data", "prefetch"]

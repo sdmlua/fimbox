@@ -17,8 +17,8 @@ from fimbox import (
     getNWMretrospective,
 )
 
-# AOI_DIR = Path(__file__).resolve().parents[2] / "out" / "test_smallB"
-AOI_DIR = Path(__file__).resolve().parents[2] / "out" / "HUC08060202"
+AOI_DIR = Path(__file__).resolve().parents[2] / "out" / "test_smallB"
+# AOI_DIR = Path(__file__).resolve().parents[2] / "out" / "HUC08060202"
 
 START = "2016-10-05"
 END = "2016-10-20"

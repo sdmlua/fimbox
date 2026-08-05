@@ -96,13 +96,9 @@ class CreateHAND:
     crosswalk_max_distance_m: float = 100.0
 
     # SRC slope source for the crosswalk's rating-curve build:
-    #   "iris_sword" (default) — IRIS-SWORD slope on order_>=4 streams, else DEM
-    #   "dem"                  — DEM rise/run slope only
-    #   "hfab"                 — hydrofabric native slope, else DEM fallback
-    src_slope_source: str = "iris_sword"
-    # IRIS-SWORD slope table (feature_id, slope_iris_sword). None -> the table
-    # shipped with the package is used when src_slope_source == "iris_sword".
-    iris_slope_csv: Optional[Path] = None
+    #   "dem" (default) — DEM rise/run slope computed into src_base
+    #   "hfab"          — hydrofabric native slope, else DEM fallback
+    src_slope_source: str = "dem"
     # Hydrofabric slope column name when it isn't the usual 'Slope'/'So'.
     hfab_slope_column: Optional[str] = None
 
@@ -148,7 +144,6 @@ class CreateHAND:
             "osm_bridges_gpkg",
             "osm_roads_gpkg",
             "bridge_diff_raster",
-            "iris_slope_csv",
         ):
             val = getattr(self, attr)
             if val is not None:
@@ -167,18 +162,15 @@ class CreateHAND:
 
     def run(self) -> dict[str, Path]:
         """Execute all HAND preprocessing steps and return output paths."""
-        from ...logging_utils import attach_case_log
+        from ...logging_utils import attach_case_log, log_errors
 
         attach_case_log(self.aoi_dir)
-        try:
+        with log_errors(f"CreateHAND branch {self.branch_id}"):
             log.info(f"--- CreateHAND: branch_id={self.branch_id} ---")
             log.info(f"branch_dir: {self.branch_dir}")
             result = self._run()
             log.info(f"CreateHAND complete: {len(result)} outputs")
             return result
-        except Exception:
-            log.exception(f"CreateHAND failed for branch {self.branch_id}")
-            raise
 
     def _run(self) -> dict[str, Path]:
         from ..._skip_if_valid import should_skip
@@ -659,7 +651,6 @@ class CreateHAND:
                     max_distance_m=self.crosswalk_max_distance_m,
                     small_segments_csv=sml_seg_csv,
                     src_slope_source=self.src_slope_source,
-                    iris_slope_csv=self.iris_slope_csv,
                     hfab_slope_column=self.hfab_slope_column,
                 )
                 outputs.update(xwalk_out)

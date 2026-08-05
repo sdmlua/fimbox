@@ -50,6 +50,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional, Sequence, Union
 
+from ..logging_utils import attach_case_log, log_errors
 from .benchmark_query import BENCHMARK_DIR, FIM_OUTPUTS_DIR
 
 PathLike = Union[str, Path]
@@ -215,6 +216,13 @@ class FIMEvaluator:
         return case_dir, staged_candidates, staged_benchmark
 
     def run(self) -> EvaluationResult:
+        # Evaluation belongs in the same AOI log as the FIM it is judging.
+        if Path(self.aoi_dir).is_dir():
+            attach_case_log(self.aoi_dir)
+        with log_errors(f"FIM evaluation {Path(self.aoi_dir).name}"):
+            return self._run()
+
+    def _run(self) -> EvaluationResult:
         fimeval = _require_fimeval()
 
         if self.method_name not in EVALUATION_METHODS:

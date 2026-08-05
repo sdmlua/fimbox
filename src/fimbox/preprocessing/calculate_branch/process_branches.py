@@ -31,6 +31,10 @@ AOI's combined ``processing.log`` (at the AOI root) AND in a per-branch
 duration of that worker only). The shared format is the standard fimbox
 ``HH:MM:SS [LEVEL] message``.
 
+Failures go to both files too: a branch that dies is logged at ERROR with the
+traceback of the step that raised, and so is a crash that takes the whole run
+down. Nothing fails only on the terminal.
+
 Inputs
 ------
 aoi_dir              <aoi_dir>/                 (output of getAllInputData + BranchDerivation)
@@ -59,8 +63,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, Sequence, Union
 
+from ..._aoi_lock import aoi_write_lock
 from ..._workers import RAM_PER_WORKER_BRANCH_GB, resolve_workers
-from ...logging_utils import aoi_root, attach_case_log
+from ...logging_utils import already_logged, aoi_root, attach_case_log, log_errors
 from ..source_naming import detect_identifier, resolve_source, source_name
 from .adjust_floodplains import adjust_floodplains
 from .calculate_branchzero import BranchZero
@@ -77,6 +82,14 @@ EXIT_OK = 0
 EXIT_NO_FLOWLINES = 61
 EXIT_NO_CROSSWALK = 64
 EXIT_TOO_MANY_HYDROIDS = 65
+
+
+def _published_xsec_locations() -> Optional[Path]:
+    # Best-effort: a fetch failure just means the cross-section crosswalk is
+    # skipped, which is the same outcome as not having the file.
+    from ...datasets import fetch
+
+    return fetch("xsec_locations")
 
 
 @dataclass
@@ -126,7 +139,7 @@ class AOIProcessingConfig:
         # USGS crosswalk inputs
         usgs_gages_gpkg: Optional[Path] = None,
         ahps_gpkg: Optional[Path] = None,
-        ras_locs_gpkg: Optional[Path] = None,
+        ras_locs_gpkg: Optional[Path] = None,  # unset -> published locations
         # CRS / numeric
         target_crs: Union[str, int] = 5070,
         branch_zero_id: str = "0",
@@ -154,9 +167,8 @@ class AOIProcessingConfig:
         min_catchment_area: float = 0.25,
         min_stream_length: float = 0.5,
         crosswalk_max_distance_m: float = 100.0,
-        # SRC slope source: "iris_sword" (default) | "dem" | "hfab".
-        src_slope_source: str = "iris_sword",
-        iris_slope_csv: Optional[Path] = None,
+        # SRC slope source: "dem" (default) | "hfab".
+        src_slope_source: str = "dem",
         hfab_slope_column: Optional[str] = None,
         evaluate_crosswalk: bool = False,
         convert_to_int16: bool = False,
@@ -199,7 +211,10 @@ class AOIProcessingConfig:
         self.branch_polygons_gpkg = branch_polygons_gpkg
         self.usgs_gages_gpkg = usgs_gages_gpkg
         self.ahps_gpkg = ahps_gpkg
-        self.ras_locs_gpkg = ras_locs_gpkg
+        # Unset means "use the published cross-section locations". Without them the
+        # crosswalk writes no ras_elev_table, and the cross-section calibration step
+        # has nothing to key on, so it would silently never run.
+        self.ras_locs_gpkg = ras_locs_gpkg or _published_xsec_locations()
         self.target_crs = target_crs
         self.branch_zero_id = branch_zero_id
         self.agree_buffer_m = agree_buffer_m
@@ -224,7 +239,6 @@ class AOIProcessingConfig:
         self.min_stream_length = min_stream_length
         self.crosswalk_max_distance_m = crosswalk_max_distance_m
         self.src_slope_source = src_slope_source
-        self.iris_slope_csv = iris_slope_csv
         self.hfab_slope_column = hfab_slope_column
         self.evaluate_crosswalk = evaluate_crosswalk
         self.convert_to_int16 = convert_to_int16
@@ -268,6 +282,18 @@ HucProcessingConfig = AOIProcessingConfig
 
 
 def process_branches(
+    cfg: AOIProcessingConfig, *, include_branch_zero: bool = False
+) -> list[BranchResult]:
+    # One writer per AOI. This and calibration both rewrite the per-branch SRCs
+    # and hydroTables in place, so a second run over the same AOI would
+    # interleave with this one and splice the CSVs.
+    attach_case_log(cfg.aoi_dir)
+    with log_errors(f"Branch processing {cfg.aoi_id}"):
+        with aoi_write_lock(cfg.aoi_dir, "branch processing"):
+            return _process_branches(cfg, include_branch_zero=include_branch_zero)
+
+
+def _process_branches(
     cfg: AOIProcessingConfig, *, include_branch_zero: bool = False
 ) -> list[BranchResult]:
     """Run the branch loop in parallel.
@@ -750,7 +776,6 @@ def _process_single_branch(cfg: AOIProcessingConfig, branch_id: str) -> BranchRe
             min_stream_length=cfg.min_stream_length,
             crosswalk_max_distance_m=cfg.crosswalk_max_distance_m,
             src_slope_source=cfg.src_slope_source,
-            iris_slope_csv=cfg.iris_slope_csv,
             hfab_slope_column=cfg.hfab_slope_column,
         ).run()
 
@@ -845,7 +870,12 @@ def _process_single_branch(cfg: AOIProcessingConfig, branch_id: str) -> BranchRe
         elapsed = time.time() - started
         msg = f"{exc}\n{traceback.format_exc()}"
         status = _classify_branch_error(msg)
-        branch_log.error(f"Branch {branch_id} {status} ({elapsed:.1f}s): {exc}")
+        # The step that blew up (CreateHAND, BranchZero, ...) already wrote the
+        # traceback through log_errors; don't print it a second time.
+        branch_log.error(
+            f"Branch {branch_id} {status} ({elapsed:.1f}s): {exc}",
+            exc_info=not already_logged(exc),
+        )
         if status in ("no_flowlines", "no_crosswalk", "too_many_hydroids"):
             if cfg.keep_failed_branches:
                 branch_log.warning(

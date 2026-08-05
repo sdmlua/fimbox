@@ -70,3 +70,11 @@ $RECYCLE.BIN/
 
 # ---- Project outputs ----
 out/
+# One-writer-per-AOI lock, created next to the AOI it guards.
+.fimbox-writer.lock
+
+# ---- Reference datasets ----
+# Nothing ships in the repo; fimbox.datasets fetches from S3 into a cache.
+# Point $FIMBOX_DATA_DIR at .fimbox_data/ to keep that cache beside the checkout.
+.fimbox_data/
+data/

@@ -9,6 +9,8 @@ import numpy as np
 import rasterio
 import rasterio.features
 
+from ...logging_utils import log_errors
+
 log = logging.getLogger(__name__)
 
 
@@ -66,7 +68,7 @@ class StreamBooleanRasterizer:
 
     def run(self) -> Path:
         log.info("Rasterizing NWM streams: %s", Path(self.streams_gpkg).name)
-        try:
+        with log_errors(f"StreamBooleanRasterizer (gpkg={self.streams_gpkg})"):
             n = _rasterize_boolean_grid(self.streams_gpkg, self.out_path, self.dem_path)
             log.info(
                 "Stream boolean grid written --> %s  (%d stream pixels)",
@@ -77,9 +79,6 @@ class StreamBooleanRasterizer:
                 log.warning(
                     "Stream boolean grid has 0 stream pixels — check CRS alignment"
                 )
-        except Exception:
-            log.exception("StreamBooleanRasterizer FAILED: gpkg=%s", self.streams_gpkg)
-            raise
         return self.out_path
 
 
@@ -92,7 +91,7 @@ class LevelPathBooleanRasterizer:
 
     def run(self) -> Path:
         log.info("Rasterizing level paths: %s", Path(self.levelpaths_gpkg).name)
-        try:
+        with log_errors(f"LevelPathBooleanRasterizer (gpkg={self.levelpaths_gpkg})"):
             n = _rasterize_boolean_grid(
                 self.levelpaths_gpkg, self.out_path, self.dem_path
             )
@@ -105,11 +104,6 @@ class LevelPathBooleanRasterizer:
                 log.warning(
                     "Level path boolean grid has 0 pixels — check CRS alignment"
                 )
-        except Exception:
-            log.exception(
-                "LevelPathBooleanRasterizer FAILED: gpkg=%s", self.levelpaths_gpkg
-            )
-            raise
         return self.out_path
 
 
@@ -122,7 +116,7 @@ class HeadwaterRasterizer:
 
     def run(self) -> Path:
         log.info("Rasterizing headwaters: %s", Path(self.headwaters_gpkg).name)
-        try:
+        with log_errors(f"HeadwaterRasterizer (gpkg={self.headwaters_gpkg})"):
             n = _rasterize_boolean_grid(
                 self.headwaters_gpkg, self.out_path, self.dem_path
             )
@@ -133,7 +127,4 @@ class HeadwaterRasterizer:
             )
             if n == 0:
                 log.warning("Headwater boolean grid has 0 pixels — check CRS alignment")
-        except Exception:
-            log.exception("HeadwaterRasterizer FAILED: gpkg=%s", self.headwaters_gpkg)
-            raise
         return self.out_path

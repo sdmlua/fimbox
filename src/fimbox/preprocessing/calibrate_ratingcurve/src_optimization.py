@@ -105,8 +105,14 @@ def update_rating_curve(
             "calb_coef_final",
         ):
             df_ht[c] = pd.NA
+    # Seed the baseline row by row. Filling only what is still empty matters once
+    # a second source runs: overwriting the whole column would hand it the first
+    # source's calibrated discharge as its baseline, and the coefficients would
+    # compound instead of each scaling from the same uncalibrated curve.
     if df_ht["precalb_discharge_cms"].isnull().values.any():
-        df_ht["precalb_discharge_cms"] = df_ht["discharge_cms"].values
+        df_ht["precalb_discharge_cms"] = pd.to_numeric(
+            df_ht["precalb_discharge_cms"], errors="coerce"
+        ).fillna(pd.to_numeric(df_ht["discharge_cms"], errors="coerce"))
 
     # Retain prior usgs/ras2fim adjustments so a later source can blend, not clobber.
     df_prev = pd.DataFrame()

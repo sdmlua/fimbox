@@ -112,8 +112,7 @@ cfg = fimbox.AOIProcessingConfig(
     # min_catchment_area: float = 0.25,          #drop catchments smaller than this (km2)
     # min_stream_length: float = 0.5,            #drop reaches shorter than this (km)
     # crosswalk_max_distance_m: float = 100.0,   #max snap distance for NWM crosswalk (m)
-    # src_slope_source: str = "iris_sword",      #reach slope source: "iris_sword" | "dem" | "hfab"
-    # iris_slope_csv: Optional[Path] = None,     #IRIS/SWORD slope table when used
+    # src_slope_source: str = "dem",             #reach slope source: "dem" (computed rise/run) | "hfab"
     # - execution -
     # evaluate_crosswalk: bool = False,          #write crosswalk diagnostics
     # convert_to_int16: bool = False,            #downcast HAND/HydroID rasters to Int16

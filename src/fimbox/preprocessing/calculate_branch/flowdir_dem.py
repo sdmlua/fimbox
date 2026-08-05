@@ -7,6 +7,8 @@ from typing import Optional
 
 import numpy as np
 
+from ...logging_utils import log_errors
+
 log = logging.getLogger(__name__)
 
 # WBT d8_pointer direction --> (row_offset, col_offset)
@@ -45,7 +47,7 @@ class FlowdirDEM:
 
     def run(self) -> Path:
         log.info("D8 flow direction start: %s", self.dem.name)
-        try:
+        with log_errors(f"D8 flow direction (dem={self.dem})"):
             # Invoke WBT D8Pointer via the concurrency-safe runner. WBT's own
             # run_tool() does a process-global os.chdir and returns 0 even when
             # it wrote nothing, which under parallel branches left flowdir
@@ -66,9 +68,6 @@ class FlowdirDEM:
             )
             log.info("D8 flow direction written --> %s", self.out_path.name)
             return self.out_path
-        except Exception:
-            log.exception("D8 flow direction FAILED: dem=%s", self.dem)
-            raise
 
 
 @dataclass

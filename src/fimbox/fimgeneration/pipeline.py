@@ -36,7 +36,12 @@ from typing import Optional, Sequence, Union
 import pandas as pd
 
 from .._workers import RAM_PER_WORKER_FIM_GB, resolve_workers
-from ..logging_utils import WATERSHED_DIR_NAME, aoi_root
+from ..logging_utils import (
+    WATERSHED_DIR_NAME,
+    aoi_root,
+    attach_case_log,
+    log_errors,
+)
 from .inundator import InundationResult, Inundator
 from .mosaic import BranchMosaic, MosaicResult
 
@@ -140,6 +145,15 @@ class FimGenerator:
         self.aoi_root = aoi_root(self.watershed_dir)
 
     def run(self) -> FimGenerationResult:
+        # Route this stage's log lines — successes and failures alike — into the
+        # AOI's combined processing.log, same as preprocessing and calibration.
+        # Only for a real AOI: attaching would otherwise mkdir a mistyped path.
+        if self.aoi_root.is_dir():
+            attach_case_log(self.aoi_root)
+        with log_errors(f"FIM generation {self.aoi_dir.name}"):
+            return self._run()
+
+    def _run(self) -> FimGenerationResult:
         if not self.aoi_dir.is_dir():
             raise NotADirectoryError(self.aoi_dir)
 
@@ -492,6 +506,8 @@ class generateFIM:
             if self.feature_id_csv is not None
             else self._root / "feature_id.csv"
         )
+        if self._root.is_dir():
+            attach_case_log(self._root)
 
     def _streamflow(self):
         from ..streamflow.pipeline import StreamflowPipeline
@@ -553,9 +569,6 @@ class generateFIM:
         """Run FimGenerator for each CSV. Outputs land in <AOI>/fim-outputs/
         named after the input CSV: an inundation extent always, plus a depth
         raster only when ``self.depth`` is True."""
-        import numpy as np
-        import rasterio
-
         out_dir = self._root / "fim-outputs"
         out_dir.mkdir(parents=True, exist_ok=True)
         results: list[FimGenerationResult] = []
@@ -563,47 +576,50 @@ class generateFIM:
             csv = Path(csv)
             base = csv.stem  # output names carry the input basename
             log.info(f"--- FIM generation: {csv.name} (depth={self.depth}) ---")
-            result = FimGenerator(
-                aoi_dir=self.aoi_dir,
-                forecast=csv,  # _load_forecast handles the discharge alias
-                n_workers=self.n_workers,
-                int16_mode=self.int16_mode,
-                depth_out=out_dir / f"{base}_depth.tif",
-                extent_out=out_dir / f"{base}_inundation.tif",
-            ).run()
-            # The mosaic always writes depth; drop it unless the user wants it.
-            if (
-                not self.depth
-                and result.depth_path
-                and Path(result.depth_path).exists()
-            ):
-                Path(result.depth_path).unlink()
-
-            # Overwrite inundation extent in-place as binary: wet (> 0) -> 1, else 0.
-            extent_path = out_dir / f"{base}_inundation.tif"
-            if extent_path.exists():
-                tmp_path = out_dir / f"{base}_inundation_tmp.tif"
-                with rasterio.open(extent_path) as src:
-                    meta = src.meta.copy()
-                    meta.update(
-                        dtype="uint8",
-                        nodata=255,
-                        compress="lzw",
-                        tiled=True,
-                        blockxsize=512,
-                        blockysize=512,
-                        BIGTIFF="YES",
-                    )
-                    with rasterio.open(tmp_path, "w", **meta) as dst:
-                        for _, window in src.block_windows(1):
-                            data = src.read(1, window=window)
-                            binary = np.where(data > 0, np.uint8(1), np.uint8(0))
-                            dst.write(binary, 1, window=window)
-                tmp_path.replace(extent_path)
-                log.info(f"Binary inundation written -> {extent_path.name}")
-
-            results.append(result)
+            with log_errors(f"FIM generation from {csv.name}"):
+                results.append(self._generate_one(csv, base, out_dir))
         return results
+
+    def _generate_one(self, csv: Path, base: str, out_dir: Path) -> FimGenerationResult:
+        import numpy as np
+        import rasterio
+
+        result = FimGenerator(
+            aoi_dir=self.aoi_dir,
+            forecast=csv,  # _load_forecast handles the discharge alias
+            n_workers=self.n_workers,
+            int16_mode=self.int16_mode,
+            depth_out=out_dir / f"{base}_depth.tif",
+            extent_out=out_dir / f"{base}_inundation.tif",
+        ).run()
+        # The mosaic always writes depth; drop it unless the user wants it.
+        if not self.depth and result.depth_path and Path(result.depth_path).exists():
+            Path(result.depth_path).unlink()
+
+        # Overwrite inundation extent in-place as binary: wet (> 0) -> 1, else 0.
+        extent_path = out_dir / f"{base}_inundation.tif"
+        if extent_path.exists():
+            tmp_path = out_dir / f"{base}_inundation_tmp.tif"
+            with rasterio.open(extent_path) as src:
+                meta = src.meta.copy()
+                meta.update(
+                    dtype="uint8",
+                    nodata=255,
+                    compress="lzw",
+                    tiled=True,
+                    blockxsize=512,
+                    blockysize=512,
+                    BIGTIFF="YES",
+                )
+                with rasterio.open(tmp_path, "w", **meta) as dst:
+                    for _, window in src.block_windows(1):
+                        data = src.read(1, window=window)
+                        binary = np.where(data > 0, np.uint8(1), np.uint8(0))
+                        dst.write(binary, 1, window=window)
+            tmp_path.replace(extent_path)
+            log.info(f"Binary inundation written -> {extent_path.name}")
+
+        return result
 
 
 # CLI

@@ -495,8 +495,9 @@ class _TiledOverpassDownloader(_OSMBoundaryIO):
         return self._client
 
     # tiling
-    def _make_tiles(self, minx: float, miny: float, maxx: float, maxy: float
-                    ) -> List[BBox]:
+    def _make_tiles(
+        self, minx: float, miny: float, maxx: float, maxy: float
+    ) -> List[BBox]:
         area = (maxx - minx) * (maxy - miny)
         n = max(1, math.ceil(area / self._TILE_AREA_DEG_SQ))
         # distribute tiles to respect the bbox aspect ratio
@@ -631,7 +632,9 @@ class _TiledOverpassDownloader(_OSMBoundaryIO):
             if not self.allow_partial:
                 # Refuse to write a layer with holes in it — downstream FIM
                 # would read the gaps as "no roads/bridges here".
-                raise RuntimeError(msg + "; set allow_partial=True to keep partial data")
+                raise RuntimeError(
+                    msg + "; set allow_partial=True to keep partial data"
+                )
             log.warning(msg + " — keeping partial data (allow_partial=True)")
 
         if not parts:

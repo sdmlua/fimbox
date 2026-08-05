@@ -107,10 +107,10 @@ class BranchZero:
 
     def run(self) -> dict:
         """Run all Phase-2 steps. Returns dict of output Path objects."""
-        from ...logging_utils import attach_case_log
+        from ...logging_utils import attach_case_log, log_errors
 
         attach_case_log(self.out_dir)
-        try:
+        with log_errors(f"BranchZero {self.branch_zero_id}"):
             log.info(f"--- BranchZero: branch_id={self.branch_zero_id} ---")
             log.info(f"out_dir: {self.out_dir}")
             log.info(f"dem: {self.dem_path}")
@@ -139,9 +139,6 @@ class BranchZero:
                 f"branch_id={self.branch_zero_id}\nfiles_written={len(result)}\n"
             )
             return result
-        except Exception:
-            log.exception("BranchZero failed")
-            raise
 
     def publish_shared_inputs(self) -> dict:
         """Clip just the AOI-root rasters — steps 1-2, the only ones anything

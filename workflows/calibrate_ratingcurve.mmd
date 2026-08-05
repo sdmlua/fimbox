@@ -7,14 +7,14 @@ flowchart LR
     end
     subgraph S2[" "]
         direction TB
-        G["<b>1 &middot; Geometry Adjustments</b><br/>thalweg notches &middot; longitudinal filter<br/>bathymetry (eHydro / AI)"]
+        G["<b>1 &middot; Geometry Adjustments</b><br/>slope &middot; thalweg notches &middot; longitudinal<br/>filter &middot; bathymetry (surveyed channels,<br/>predicted geometry fills the gaps)"]
         H["<b>2 &middot; Hydraulics</b><br/>bankfull stage &middot; channel / overbank<br/>subdivision (per reach, where a<br/>bankfull flow exists) &middot; nonmonotonic fix"]
         G --> H
     end
     subgraph S3[" "]
         direction TB
-        O["<b>3 &middot; Observation Calibration</b><br/>USGS rating curves &middot; spatial benchmark<br/>points &middot; manual coefficients<br/>&rarr; calb_coef_final per feature_id"]
-        AP["<b>Apply Coefficients</b><br/>discharge_cms =<br/>precalb_discharge_cms / calb_coef_final"]
+        O["<b>3 &middot; Observation Calibration</b><br/>gage ratings &rarr; cross-section ratings<br/>&rarr; flood-edge points &middot; later source wins<br/>per HydroID, earlier one fills the gaps<br/>&rarr; calb_coef_final per feature_id"]
+        AP["<b>Apply Coefficients</b><br/>discharge_cms =<br/>precalb_discharge_cms / calb_coef_final<br/>then manual: &divide; calb_coef_manual"]
         O --> AP
     end
     AG["<b>AOI Aggregation</b><br/>branch tables rolled up into<br/>hydroTable.csv +<br/>src_full_crosswalked.csv"]

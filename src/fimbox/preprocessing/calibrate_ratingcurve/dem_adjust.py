@@ -65,7 +65,7 @@ class ThalwegNotchesAdjustment:
         aoi_dir = resolve_aoi_dir(self.aoi_dir)
         aoi_id = aoi_id_of(aoi_dir)
         branches = list(iter_branches(aoi_dir, exclude_zero=True))
-        log.info(f"ThalwegNotchesAdjustment: {aoi_id} " f"({len(branches)} branches)")
+        log.info(f"ThalwegNotchesAdjustment: {aoi_id} ({len(branches)} branches)")
         return _run_branches(
             branches,
             _thalweg_one_branch,
@@ -235,7 +235,7 @@ class LongitudinalFlowFilter:
         aoi_dir = resolve_aoi_dir(self.aoi_dir)
         aoi_id = aoi_id_of(aoi_dir)
         branches = list(iter_branches(aoi_dir, exclude_zero=True))
-        log.info(f"LongitudinalFlowFilter: {aoi_id} " f"({len(branches)} branches)")
+        log.info(f"LongitudinalFlowFilter: {aoi_id} ({len(branches)} branches)")
         return _run_branches(
             branches,
             _longitudinal_one_branch,
@@ -362,9 +362,7 @@ def _build_chains(catch) -> list[list[int]]:
     headwaters = list(headwaters_rows[headwaters_rows["LakeID"] < 0]["HydroID"])
     # HydroID -> NextDownID up front: the walk used to re-scan the whole table
     # twice per step, which is what made big AOIs crawl.
-    next_of = dict(
-        zip(catch["HydroID"].astype(int).tolist(), next_ids.tolist())
-    )
+    next_of = dict(zip(catch["HydroID"].astype(int).tolist(), next_ids.tolist()))
     chains: list[list[int]] = []
     for hw in headwaters:
         chain = [hw]
@@ -466,19 +464,36 @@ class BathymetricAdjustment:
         results: dict[str, str] = {}
         if self.bathy_file_ehydro and Path(self.bathy_file_ehydro).is_file():
             log.info("--- eHydro bathymetry ---")
-            results["ehydro"] = self._apply(aoi_dir, self._ehydro_frame(aoi_dir))
+            results["ehydro"] = self._source(aoi_dir, "eHydro", self._ehydro_frame)
         else:
             log.info("eHydro bathymetry file absent — skipping eHydro step")
 
         if self.ai_toggle == 1:
             if self.bathy_file_aibased and Path(self.bathy_file_aibased).is_file():
                 log.info("--- AI-based bathymetry ---")
-                results["ai"] = self._apply(aoi_dir, self._ai_frame(aoi_dir))
+                results["ai"] = self._source(aoi_dir, "AI-based", self._ai_frame)
             else:
                 log.info("AI bathymetry file absent — skipping AI step")
         return results
 
-    def _apply(self, aoi_dir: Path, bathy: pd.DataFrame) -> str:
+    def _source(self, aoi_dir: Path, label: str, frame_fn) -> str:
+        # The two sources are independent — a bad file for one shouldn't cost
+        # the other, which is what happens when the whole step raises.
+        try:
+            bathy = frame_fn(aoi_dir)
+        except Exception:
+            log.exception(f"{label} bathymetry failed — skipping this source")
+            return f"FAIL {label} bathymetry"
+
+        # Say so out loud: an empty frame still writes every SRC, and reporting
+        # that as a success is how a no-op source hides for a whole release.
+        if bathy.empty:
+            log.warning(f"{label} bathymetry: no channels over this AOI")
+        else:
+            log.info(f"{label} bathymetry: {len(bathy):,} channels over this AOI")
+        return self._apply(aoi_dir, label, bathy)
+
+    def _apply(self, aoi_dir: Path, label: str, bathy: pd.DataFrame) -> str:
         # Inject the missing-geometry table into every branch SRC, in parallel.
         branches = list(iter_branches(aoi_dir, exclude_zero=False))
         log.info(f"BathymetricAdjustment: {len(branches)} branches")
@@ -489,16 +504,31 @@ class BathymetricAdjustment:
             self.n_workers,
             "BathymetricAdjustment",
         )
+        ok = sum(v.startswith("OK") for v in out.values())
         return (
-            f"OK bathymetry on {sum(v.startswith('OK') for v in out.values())} branches"
+            f"OK {label} bathymetry on {ok} branches"
+            if not bathy.empty
+            else (f"OK {label} bathymetry: nothing to add on {ok} branches")
         )
 
     def _ehydro_frame(self, aoi_dir: Path) -> pd.DataFrame:
         import geopandas as gpd
 
+        path = Path(self.bathy_file_ehydro)
         wbd = aoi_dir / "wbd8_clp.gpkg"
         mask = gpd.read_file(wbd) if wbd.is_file() else None
-        bathy = gpd.read_file(str(self.bathy_file_ehydro), mask=mask, engine="fiona")
+
+        if path.suffix.lower() in (".parquet", ".pq"):
+            # GeoParquet takes no reader-side mask, so read the national table
+            # (a few thousand surveys) and cut it to the AOI with the index.
+            bathy = gpd.read_parquet(path)
+            if mask is not None and not mask.empty and bathy.crs is not None:
+                hit = bathy.sindex.query(
+                    mask.to_crs(bathy.crs).union_all(), predicate="intersects"
+                )
+                bathy = bathy.iloc[sorted(set(hit))]
+        else:
+            bathy = gpd.read_file(str(path), mask=mask, engine="fiona")
         return bathy.rename(columns={"ID": "feature_id"})
 
     def _ai_frame(self, aoi_dir: Path) -> pd.DataFrame:
@@ -518,7 +548,9 @@ class BathymetricAdjustment:
         wbd = aoi_dir / "wbd.gpkg"
         nwm = gpd.read_file(streams)
         if wbd.is_file():
-            nwm = nwm.clip(gpd.read_file(wbd))
+            # wbd.gpkg is lat/lon while the streams are projected — clipping
+            # across CRSs silently returns nothing instead of failing.
+            nwm = nwm.clip(gpd.read_file(wbd).to_crs(nwm.crs))
 
         ml = ml.merge(nwm[["ID", "order_"]], left_on="hf_id", right_on="ID")
         ml = ml.rename(
@@ -568,44 +600,64 @@ def _reconcile_bathy(bathy: pd.DataFrame) -> pd.DataFrame:
     )
 
 
+_BATHY_MERGE_COLUMNS = [
+    "feature_id",
+    "missing_xs_area_m2",
+    "missing_wet_perimeter_m",
+    "Bathymetry_source",
+]
+
+
 def _bathy_one_branch(branch_dir: Path, bid: str, bathy: pd.DataFrame) -> str:
     # Merge missing geometry by feature_id, add it in, recompute discharge.
     src_path = branch_dir / f"src_full_crosswalked_{bid}.csv"
     if not src_path.is_file():
         return "SKIP no src"
     src = pd.read_csv(src_path, low_memory=False)
-    if "Bathymetry_source" in src.columns:
-        src = src.drop(columns="Bathymetry_source")
 
-    cols = [
-        "feature_id",
-        "missing_xs_area_m2",
-        "missing_wet_perimeter_m",
-        "Bathymetry_source",
-    ]
+    # What an earlier source already folded into this SRC. Everything below works
+    # off the difference against it, so the AI pass adds only its own depth on
+    # top of eHydro's, and re-running the step on an adjusted SRC is a no-op
+    # instead of burying the channel twice as deep.
+    zeros = pd.Series(0.0, index=src.index)
+    prev_area = pd.to_numeric(src.get("missing_xs_area_m2", zeros)).fillna(0.0)
+    prev_perim = pd.to_numeric(src.get("missing_wet_perimeter_m", zeros)).fillna(0.0)
+    prev_source = src.get("Bathymetry_source", pd.Series(pd.NA, index=src.index))
+    # Dropped before the merge, or pandas would suffix the incoming columns to
+    # _x / _y and every read of the plain name would raise.
+    src = src.drop(columns=_BATHY_MERGE_COLUMNS[1:], errors="ignore")
+
     if bathy.empty:
-        src["Bathymetry_source"] = ""
+        src["missing_xs_area_m2"] = prev_area
+        src["missing_wet_perimeter_m"] = prev_perim
+        src["Bathymetry_source"] = prev_source
         src.to_csv(src_path, index=False)
         return "OK no bathy overlap"
 
     # Collapse to one row per feature_id with OHRFC precedence (take the OHRFC
     # survey verbatim where present, else average the surveys), then merge.
-    reconciled = _reconcile_bathy(bathy[cols])
+    reconciled = _reconcile_bathy(bathy[_BATHY_MERGE_COLUMNS])
     src = src.merge(reconciled, on="feature_id", how="left", validate="many_to_one")
 
-    src["missing_xs_area_m2"] = src["missing_xs_area_m2"].fillna(0.0)
-    src["missing_wet_perimeter_m"] = src["missing_wet_perimeter_m"].fillna(0.0)
+    new_area = pd.to_numeric(src["missing_xs_area_m2"], errors="coerce").fillna(0.0)
+    new_perim = pd.to_numeric(src["missing_wet_perimeter_m"], errors="coerce").fillna(
+        0.0
+    )
+    # This source speaks only for the reaches it actually covers; elsewhere the
+    # earlier source's numbers stand.
+    covered = new_area.gt(0) | new_perim.gt(0)
+    src["missing_xs_area_m2"] = new_area.where(covered, prev_area)
+    src["missing_wet_perimeter_m"] = new_perim.where(covered, prev_perim)
+    src["Bathymetry_source"] = src["Bathymetry_source"].where(covered, prev_source)
 
     # Add the below-DEM area/perimeter into the geometry, then re-derive discharge.
+    add_area = src["missing_xs_area_m2"] - prev_area
+    add_perim = src["missing_wet_perimeter_m"] - prev_perim
     length_m = src["LENGTHKM"] * 1000.0
-    src["Volume (m3)"] = src["Volume (m3)"] + src["missing_xs_area_m2"] * length_m
-    src["BedArea (m2)"] = (
-        src["BedArea (m2)"] + src["missing_wet_perimeter_m"] * length_m
-    )
-    src["WettedPerimeter (m)"] = (
-        src["WettedPerimeter (m)"] + src["missing_wet_perimeter_m"]
-    )
-    src["WetArea (m2)"] = src["WetArea (m2)"] + src["missing_xs_area_m2"]
+    src["Volume (m3)"] = src["Volume (m3)"] + add_area * length_m
+    src["BedArea (m2)"] = src["BedArea (m2)"] + add_perim * length_m
+    src["WettedPerimeter (m)"] = src["WettedPerimeter (m)"] + add_perim
+    src["WetArea (m2)"] = src["WetArea (m2)"] + add_area
     src["HydraulicRadius (m)"] = (
         src["WetArea (m2)"] / src["WettedPerimeter (m)"]
     ).fillna(0)

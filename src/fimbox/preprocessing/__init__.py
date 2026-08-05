@@ -69,6 +69,7 @@ from .calibrate_ratingcurve import (
     reset_hydro_and_src,
     run_calibration,
     scan_logs,
+    slope_adjustment,
 )
 
 __all__ = [
@@ -126,6 +127,7 @@ __all__ = [
     "reset_hydro_and_src",
     "run_calibration",
     "scan_logs",
+    "slope_adjustment",
 ]
 
 # preprocess_area

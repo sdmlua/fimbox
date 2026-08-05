@@ -26,13 +26,26 @@ Conventions used across the codebase (enforce these in new code):
     - For a no-op skip, say `SKIP (exists): <filename>`.
     - For a missing/empty service response, log at WARNING, not INFO.
     - Never include step numbers like "Step 1/5" — section banners are enough.
+
+Errors follow one rule: nothing fails silently and nothing fails only on the
+terminal. Every failure is written to processing.log with its traceback, using
+:func:`log_errors`:
+
+    - Stage entry points wrap their body in `log_errors(label)`. The failure is
+      recorded, then re-raised for the caller.
+    - An optional step whose failure should not cost the run uses
+      `log_errors(label, reraise=False)` (or `log.exception(...)` when it
+      already sits in an except-block that does more than log).
+    - A recoverable/expected miss — a service with no features, an input the
+      user didn't supply — is a WARNING, not an ERROR.
 """
 
 from __future__ import annotations
 
 import logging
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Optional, Union
+from typing import Iterator, Optional, Union
 
 _ROOT_NAME = "fimbox"
 _FORMAT = "%(asctime)s [%(levelname)s] %(message)s"
@@ -128,6 +141,57 @@ def attach_case_log(
         root.addHandler(sh)
 
     return root
+
+
+def already_logged(exc: BaseException) -> bool:
+    """True when :func:`log_errors` has written this exception's traceback.
+
+    Lets an outer handler that does more than log — classifying the failure,
+    cleaning up after it — add its own line without repeating a traceback the
+    log already holds.
+    """
+    return bool(getattr(exc, "_fimbox_logged", False))
+
+
+@contextmanager
+def log_errors(
+    label: str,
+    *,
+    logger: Optional[logging.Logger] = None,
+    reraise: bool = True,
+) -> Iterator[None]:
+    """Record a failure in processing.log before it leaves the block.
+
+    Without this, an exception that aborts a stage only ever exists in the
+    caller's terminal or notebook cell — the log the run is judged by stops
+    mid-sentence with no reason. Wrap a stage entry point and the log ends with
+    the traceback that killed it::
+
+        with log_errors(f"Preprocessing {case_name}"):
+            ...
+
+    ``reraise=False`` turns it into "log and carry on", for optional steps that
+    should not cost the rest of the run.
+
+    Nested wrappers are safe: the innermost one writes the traceback and outer
+    ones let the same exception pass without repeating it.
+    """
+    log = logger or logging.getLogger(_ROOT_NAME)
+    try:
+        yield
+    except (KeyboardInterrupt, SystemExit):
+        # A Ctrl-C run still deserves a reason in the log for why it stops here.
+        log.warning("%s interrupted", label)
+        raise
+    except Exception as exc:
+        if not getattr(exc, "_fimbox_logged", False):
+            log.error("%s failed: %s", label, exc, exc_info=True)
+            try:
+                exc._fimbox_logged = True  # type: ignore[attr-defined]
+            except Exception:  # exotic exception types can refuse attributes
+                pass
+        if reraise:
+            raise
 
 
 def configure_cli_logging(level: int = logging.INFO) -> logging.Logger:

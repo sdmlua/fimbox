@@ -21,7 +21,7 @@ import logging
 from pathlib import Path
 from typing import Optional, Union
 
-from ..logging_utils import attach_case_log
+from ..logging_utils import attach_case_log, log_errors
 from . import _common as C
 from .nwm_forecast import NWMForecast
 from .nwm_retrospective import NWMRetrospective
@@ -61,14 +61,17 @@ class StreamflowPipeline:
     ) -> list[Path]:
         """Single ``date`` -> one CSV; ``start``/``end`` range -> one CSV per
         hour, or a single aggregated CSV when ``sortby`` is given."""
-        if not self.feature_id_csv.exists():
-            raise FileNotFoundError(f"feature_id CSV not found: {self.feature_id_csv}")
-        retro = NWMRetrospective(self.aoi_dir, self.feature_id_csv)
-        if date:
-            return [retro.at(date)]
-        if start and end:
-            return retro.to_fim_inputs(start, end, sortby=sortby)
-        raise ValueError("Provide date=, or start= and end=.")
+        with log_errors("Retrospective streamflow"):
+            if not self.feature_id_csv.exists():
+                raise FileNotFoundError(
+                    f"feature_id CSV not found: {self.feature_id_csv}"
+                )
+            retro = NWMRetrospective(self.aoi_dir, self.feature_id_csv)
+            if date:
+                return [retro.at(date)]
+            if start and end:
+                return retro.to_fim_inputs(start, end, sortby=sortby)
+            raise ValueError("Provide date=, or start= and end=.")
 
     def select(
         self,
@@ -81,9 +84,10 @@ class StreamflowPipeline:
         """Filter the ALREADY-downloaded retrospective archive to a narrower
         date/range and write FIM-ready CSVs — no new download. Use after a wide
         ``retrospective(...)`` fetch when you want to generate FIM for a subset."""
-        return NWMRetrospective(self.aoi_dir, self.feature_id_csv).select_from_archive(
-            date=date, start=start, end=end, sortby=sortby
-        )
+        with log_errors("Archive selection"):
+            return NWMRetrospective(
+                self.aoi_dir, self.feature_id_csv
+            ).select_from_archive(date=date, start=start, end=end, sortby=sortby)
 
     # forecast
     def forecast(
@@ -95,14 +99,17 @@ class StreamflowPipeline:
         sort_by: str = "maximum",
     ) -> list[Path]:
         """Operational short/medium/long-range forecast -> per-day FIM-ready CSVs."""
-        if not self.feature_id_csv.exists():
-            raise FileNotFoundError(f"feature_id CSV not found: {self.feature_id_csv}")
-        return NWMForecast(self.aoi_dir, self.feature_id_csv).to_fim_inputs(
-            forecast_range,
-            forecast_date=forecast_date,
-            hour=hour,
-            sort_by=sort_by,
-        )
+        with log_errors(f"{forecast_range} forecast streamflow"):
+            if not self.feature_id_csv.exists():
+                raise FileNotFoundError(
+                    f"feature_id CSV not found: {self.feature_id_csv}"
+                )
+            return NWMForecast(self.aoi_dir, self.feature_id_csv).to_fim_inputs(
+                forecast_range,
+                forecast_date=forecast_date,
+                hour=hour,
+                sort_by=sort_by,
+            )
 
 
 # CLI

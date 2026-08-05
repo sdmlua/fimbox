@@ -4,10 +4,11 @@ Date Updated: June 2026
 
 SRC calibration against observed data.
 
-ManualCalibrator applies a per-feature_id coefficient. UsgsRatingCalibrator and
-SpatialObsCalibrator drive the shared optimization engine (src_optimization.py)
-from USGS rating curves and benchmark inundation points respectively. All three
-recompute discharge per HydroID; ras2fim is left as a stub.
+ManualCalibrator applies a per-feature_id coefficient. The other three drive the
+shared optimization engine (src_optimization.py) from observations:
+UsgsRatingCalibrator from gage rating curves, Ras2fimCalibrator from hydraulic-
+model cross-section ratings, SpatialObsCalibrator from flood-edge points. All
+recompute discharge per HydroID.
 """
 
 from __future__ import annotations
@@ -27,7 +28,6 @@ from ._common import (
     PathLike,
     aoi_id_of,
     iter_branches,
-    not_yet_ported,
     read_table,
     resolve_aoi_dir,
 )
@@ -70,7 +70,7 @@ class ManualCalibrator:
         aoi_id = aoi_id_of(aoi_dir)
         log.info(f"--- ManualCalibrator: {aoi_id} ---")
 
-        calib = pd.read_csv(calib_path, index_col=False)
+        calib = read_table(calib_path, index_col=False)
         if "Unnamed: 0" in calib.columns:
             calib = calib.drop(columns=["Unnamed: 0"])
 
@@ -235,6 +235,16 @@ def _build_usgs_database(
     ]
     rc["feature_id"] = rc["feature_id"].astype(int)
 
+    return _sample_at_recurrence(rc, nwm_recur_file, "usgs")
+
+
+def _sample_at_recurrence(
+    rc: pd.DataFrame, nwm_recur_file: Path, tag: str
+) -> pd.DataFrame:
+    # Pick the point on each observed rating curve closest to every NWM
+    # recurrence flow, so both calibrators sample at the same known intervals.
+    # ``rc`` carries location_id, feature_id, hydroid, levpa_id, huc, hand,
+    # discharge_cms; ``tag`` ("usgs" / "ras2fim") only names the output columns.
     recur = read_table(nwm_recur_file, dtype={"feature_id": int})
     recur = recur.drop(columns=["Unnamed: 0"], errors="ignore").rename(
         columns={
@@ -256,7 +266,7 @@ def _build_usgs_database(
             (calc["discharge_cms"] - calc[col]) / calc["discharge_cms"]
         ).abs()
         calc["nwm_recur"] = col
-        calc["layer"] = f"_usgs-gage____{interval}-year"
+        calc["layer"] = f"_{tag}-gage____{interval}-year"
         calc = calc.rename(columns={col: "nwm_recur_flow_cms"})[
             [
                 "location_id",
@@ -275,10 +285,70 @@ def _build_usgs_database(
         final = pd.concat([final, calc], ignore_index=True)
         # Drop negative-HAND and >10%-variance samples so we sample at known flows.
         final = final[(final["hand"] > 0) & (final["check_variance"] < 0.1)]
-        final["submitter"] = "usgs_rating_" + final["location_id"].astype(str)
-        final["coll_time"] = "usgs_rating"
+        final["submitter"] = f"{tag}_rating_" + final["location_id"].astype(str)
+        final["coll_time"] = f"{tag}_rating"
 
     return final.rename(columns={"discharge_cms": "flow"})
+
+
+def _build_ras2fim_database(
+    ras_rc_csv: Path,
+    ras_elev_df: pd.DataFrame,
+    nwm_recur_file: Path,
+    aoi_id: str,
+) -> pd.DataFrame:
+    # Crosswalk cross-section ratings to HydroIDs, convert WSE to HAND, and
+    # sample at each recurrence flow. Mirrors _build_usgs_database; the ratings
+    # arrive already in metres, keyed on the cross-section id (fid_xs).
+    rc = read_table(
+        ras_rc_csv,
+        dtype={"fid_xs": object},
+        usecols=["fid_xs", "flow_cfs", "wse_m"],
+        encoding="unicode_escape",
+    ).rename(columns={"fid_xs": "location_id", "wse_m": "wse_navd88_m"})
+    rc["location_id"] = rc["location_id"].astype(str)
+    # flow_cms is unreliable in the source export — derive it from flow_cfs.
+    rc["discharge_cms"] = rc["flow_cfs"] * 0.0283168
+    rc = rc.drop(columns=["flow_cfs"])
+
+    elev = ras_elev_df.copy()
+    if "HUC8" not in elev.columns:
+        elev["HUC8"] = aoi_id
+    cross = elev[
+        [
+            "location_id",
+            "HydroID",
+            "feature_id",
+            "levpa_id",
+            "HUC8",
+            "dem_adj_elevation",
+        ]
+    ].rename(
+        columns={"dem_adj_elevation": "hand_datum", "HydroID": "hydroid", "HUC8": "huc"}
+    )
+    cross["location_id"] = cross["location_id"].astype(str)
+    cross = cross[cross.location_id.notnull()]
+
+    rc = rc.merge(cross, how="left", on="location_id")
+    rc = rc[rc["hydroid"].notna()]
+    if rc.empty:
+        return pd.DataFrame()
+
+    rc["hand"] = rc["wse_navd88_m"] - rc["hand_datum"]
+    rc = rc[
+        [
+            "location_id",
+            "feature_id",
+            "hydroid",
+            "levpa_id",
+            "huc",
+            "hand",
+            "discharge_cms",
+        ]
+    ]
+    rc["feature_id"] = rc["feature_id"].astype(int)
+
+    return _sample_at_recurrence(rc, nwm_recur_file, "ras2fim")
 
 
 def _trace_network(df: pd.DataFrame, start_id: int):
@@ -320,7 +390,28 @@ def _trace_network(df: pd.DataFrame, start_id: int):
 def _usgs_one_branch(
     branch_dir: Path, bid: str, usgs_df: pd.DataFrame, debug: bool
 ) -> str:
-    # Trace each gage's reach neighborhood, then run the optimization engine.
+    return _trace_and_calibrate(branch_dir, bid, usgs_df, debug, "usgs_rating", False)
+
+
+def _ras2fim_one_branch(
+    branch_dir: Path, bid: str, ras_df: pd.DataFrame, debug: bool
+) -> str:
+    # merge_prev_adj: runs after the USGS pass, so keep its coefficient wherever
+    # no cross-section covers the reach.
+    return _trace_and_calibrate(branch_dir, bid, ras_df, debug, "ras2fim_rating", True)
+
+
+def _trace_and_calibrate(
+    branch_dir: Path,
+    bid: str,
+    obs_df: pd.DataFrame,
+    debug: bool,
+    source_tag: str,
+    merge_prev_adj: bool,
+) -> str:
+    # Trace each observation's reach neighborhood, then run the optimization
+    # engine. Shared by the gage and cross-section calibrators — they differ
+    # only in which coefficient column the engine writes.
     import geopandas as gpd
 
     htable = branch_dir / f"hydroTable_{bid}.csv"
@@ -335,9 +426,9 @@ def _usgs_one_branch(
     if not htable.is_file() or not reaches.is_file():
         return "SKIP missing hydroTable/reaches"
 
-    gages = usgs_df[usgs_df["levpa_id"].astype(str) == str(bid)]
+    gages = obs_df[obs_df["levpa_id"].astype(str) == str(bid)]
     if gages.empty:
-        return "SKIP no gages in branch"
+        return "SKIP no observations in branch"
 
     net = gpd.read_file(reaches)[
         ["HydroID", "order_", "LengthKm", "NextDownID", "LakeID"]
@@ -368,8 +459,8 @@ def _usgs_one_branch(
         bid,
         catch,
         debug,
-        "usgs_rating",
-        merge_prev_adj=False,
+        source_tag,
+        merge_prev_adj=merge_prev_adj,
     )
 
 
@@ -506,10 +597,46 @@ def _fim_crs() -> str:
     return os.getenv("DEFAULT_FIM_PROJECTION_CRS", "EPSG:5070")
 
 
+def _aoi_footprint(aoi_dir: Path):
+    # Any AOI-wide layer will do — whichever the run happened to stage. Returns
+    # None if none is readable, in which case callers use every observation.
+    import geopandas as gpd
+
+    for name in ("wbd.gpkg", "wbd_buffered.gpkg", "wbd8_clp.gpkg"):
+        p = aoi_dir / name
+        if p.is_file():
+            try:
+                return gpd.read_file(p)
+            except Exception as exc:
+                log.debug(f"could not read {p}: {exc}")
+    for pattern in ("*_catchments_proj_subset.gpkg", "*_subset_streams.gpkg"):
+        for p in sorted(aoi_dir.glob(pattern)):
+            try:
+                return gpd.read_file(p)
+            except Exception as exc:
+                log.debug(f"could not read {p}: {exc}")
+    return None
+
+
+def _clip_to_aoi(points, aoi_dir: Path, label: str):
+    # The published observations are national. Cut them to the AOI's own bounding
+    # box once here, so the branch pool isn't handed millions of irrelevant rows.
+    footprint = _aoi_footprint(aoi_dir)
+    if footprint is None or footprint.empty:
+        log.info(f"{label}: no AOI footprint layer found — using all observations")
+        return points
+    try:
+        bounds = footprint.to_crs(points.crs).total_bounds
+        return points.cx[bounds[0] : bounds[2], bounds[1] : bounds[3]]
+    except Exception as exc:
+        log.info(f"{label}: could not clip to AOI ({exc}) — using all observations")
+        return points
+
+
 @dataclass
 class SpatialObsCalibrator:
-    # Calibrate from benchmark inundation points (per-AOI parquet): sample
-    # HAND/HydroID rasters at each point, run the engine, blend with prior USGS.
+    # Calibrate from flood-edge observation points: sample HAND/HydroID rasters
+    # at each point, run the engine, blend with prior USGS.
 
     aoi_dir: PathLike
     calib_points_file: Optional[PathLike] = None
@@ -530,11 +657,11 @@ class SpatialObsCalibrator:
             return {}
 
         points = gpd.read_parquet(self.calib_points_file)
+        points = _clip_to_aoi(points, aoi_dir, "SpatialObsCalibrator")
         if points.empty:
-            log.info(
-                f"SpatialObsCalibrator: no points in {self.calib_points_file} — skipping"
-            )
+            log.info(f"SpatialObsCalibrator: no points over {aoi_id} — skipping")
             return {}
+        log.info(f"SpatialObsCalibrator: {len(points):,} points over {aoi_id}")
 
         branches = list(iter_branches(aoi_dir, exclude_zero=False))
         log.info(f"SpatialObsCalibrator: {aoi_id} ({len(branches)} branches)")
@@ -547,13 +674,53 @@ class SpatialObsCalibrator:
         )
 
 
-# ras2fim — not ported yet (needs a ras_elev_table; shares the same engine)
 @dataclass
 class Ras2fimCalibrator:
+    # Calibrate from hydraulic-model cross-section rating curves at NWM
+    # recurrence flows: crosswalk cross-sections via ras_elev_table.csv, trace
+    # each one's reaches, run the engine. Same shape as UsgsRatingCalibrator,
+    # but merges over any coefficient the USGS pass already wrote.
+
     aoi_dir: PathLike
     ras_rating_curve_csv: PathLike
     nwm_recur_file: PathLike
     n_workers: Optional[int] = None
+    debug_outputs: bool = False
 
-    def run(self) -> None:
-        not_yet_ported("Ras2fimCalibrator")
+    def run(self) -> dict[str, str]:
+        aoi_dir = resolve_aoi_dir(self.aoi_dir)
+        aoi_id = aoi_id_of(aoi_dir)
+
+        for f in (self.ras_rating_curve_csv, self.nwm_recur_file):
+            if f is None or not Path(f).is_file():
+                log.info(f"Ras2fimCalibrator: input absent — skipping ({f})")
+                return {}
+        # Written by the gage crosswalk only where cross-sections land in the AOI,
+        # which for most areas is nowhere — absent is the normal case.
+        elev = aoi_dir / "ras_elev_table.csv"
+        if not elev.is_file():
+            log.info(
+                f"Ras2fimCalibrator: no ras_elev_table.csv at {aoi_dir} — skipping"
+            )
+            return {}
+
+        ras_df = _build_ras2fim_database(
+            Path(self.ras_rating_curve_csv),
+            pd.read_csv(elev, dtype={"location_id": object}),
+            Path(self.nwm_recur_file),
+            aoi_id,
+        )
+        if ras_df.empty:
+            log.info(f"Ras2fimCalibrator: no cross-sections crosswalked for {aoi_id}")
+            return {}
+        ras_df["levpa_id"] = ras_df["levpa_id"].astype("int64").astype(str)
+
+        branches = list(iter_branches(aoi_dir, exclude_zero=False))
+        log.info(f"Ras2fimCalibrator: {aoi_id} ({len(branches)} branches)")
+        return _run_branches(
+            branches,
+            _ras2fim_one_branch,
+            (ras_df, self.debug_outputs),
+            self.n_workers,
+            "Ras2fimCalibrator",
+        )

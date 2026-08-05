@@ -69,10 +69,11 @@ class BridgeDEMDiff:
     def run(self) -> Path:
         # Route logs to the AOI-root processing.log in the standard format,
         # same as every other stage.
-        from ...logging_utils import attach_case_log
+        from ...logging_utils import attach_case_log, log_errors
 
         attach_case_log(self.out_dir)
-        return self._run()
+        with log_errors(f"Bridge DEM diff {self.out_dir.name}"):
+            return self._run()
 
     def _run(self) -> Path:
         bridges = self._load_bridges()

@@ -10,16 +10,15 @@ CalibrationConfig, Calibrator, run_calibration   pipeline orchestrator
 BranchAggregator, aggregate_branches             per-branch -> AOI rollup
 HydroTableReset, reset_hydro_and_src             baseline reset for reruns
 ManualCalibrator, manual_calibration             per-feature_id manual ManningN
+SlopeAdjustment                                   swap the slope feeding Manning's
 SrcBankfull                                       identify bankfull stage
 SrcSubdiv                                         channel/overbank subdivision
 SrcNonmonotonic                                   force monotonic rating curves
 ThalwegNotchesAdjustment                          remove thalweg-notch artifacts
 LongitudinalFlowFilter                            smooth geometry along reaches
 BathymetricAdjustment                             add eHydro / AI channel depth
-
-Stubs
----------
-UsgsRatingCalibrator, Ras2fimCalibrator, SpatialObsCalibrator
+UsgsRatingCalibrator, Ras2fimCalibrator,          observation-driven calibration
+SpatialObsCalibrator
 """
 
 from __future__ import annotations
@@ -36,7 +35,7 @@ from .dem_adjust import (
 from .logscan import LogScanner, scan_logs
 from .pipeline import CalibrationConfig, Calibrator, run_calibration
 from .reset import HydroTableReset, reset_hydro_and_src
-from .src_adjust import SrcBankfull, SrcNonmonotonic, SrcSubdiv
+from .src_adjust import SlopeAdjustment, SrcBankfull, SrcNonmonotonic, SrcSubdiv
 from .src_calibrate import (
     ManualCalibrator,
     Ras2fimCalibrator,
@@ -65,6 +64,17 @@ def subdiv_chan_obank_src(aoi_dir, vmann_table, *, n_workers: Optional[int] = No
 
 def nonmonotonic_src_adjustment(aoi_dir):
     return SrcNonmonotonic(aoi_dir=aoi_dir).run()
+
+
+def slope_adjustment(
+    aoi_dir, slope_source="hfab", slope_table=None, *, n_workers: Optional[int] = None
+):
+    return SlopeAdjustment(
+        aoi_dir=aoi_dir,
+        slope_source=slope_source,
+        slope_table=slope_table,
+        n_workers=n_workers,
+    ).run()
 
 
 def thalweg_notches_adjustment(aoi_dir, *, n_workers: Optional[int] = None):
@@ -142,16 +152,17 @@ __all__ = [
     "LogScanner",
     "scan_logs",
     # SRC adjustments (implemented)
+    "SlopeAdjustment",
     "SrcBankfull",
     "SrcSubdiv",
     "SrcNonmonotonic",
-    # SRC calibration (manual implemented; others stubbed)
+    # SRC calibration
     "ManualCalibrator",
     "manual_calibration",
     "UsgsRatingCalibrator",
     "Ras2fimCalibrator",
     "SpatialObsCalibrator",
-    # DEM-side stubs
+    # DEM-side adjustments
     "ThalwegNotchesAdjustment",
     "LongitudinalFlowFilter",
     "BathymetricAdjustment",
@@ -159,6 +170,7 @@ __all__ = [
     "identify_src_bankfull",
     "subdiv_chan_obank_src",
     "nonmonotonic_src_adjustment",
+    "slope_adjustment",
     "thalweg_notches_adjustment",
     "longitudinal_flow_adjustment",
     "bathymetric_adjustment",

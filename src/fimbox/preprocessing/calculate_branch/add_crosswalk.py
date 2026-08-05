@@ -17,13 +17,14 @@ Hydraulic derivations (Manning's equation, in SI metres) per (HydroID, Stage):
     HydraulicRadius  = WetArea / WettedPerimeter
     Discharge        = (WetArea * HydraulicRadius^(2/3) * sqrt(SLOPE)) / ManningN
 
-Slope feeding Manning's equation is chosen by ``src_slope_source``. Three
-slope variants are carried as columns so the choice is transparent:
+Slope feeding Manning's equation is chosen by ``src_slope_source``. Both
+variants are carried as columns so the choice stays transparent, and both come
+from data already in hand — no external slope table is involved:
     SLOPE_RISE_RUN    DEM-derived rise/run slope (from src_base)
     SLOPE_HFAB        hydrofabric native slope (Slope/So, or a named column)
-    SLOPE_IRIS_SWORD  IRIS-SWORD slope merged from an external table by feature_id
-Default ``iris_sword`` uses SLOPE_IRIS_SWORD on streams of order >= 4 (within
-the valid slope range), falling back to SLOPE_RISE_RUN everywhere else.
+Default ``dem`` uses the computed rise/run slope throughout. Refining slope
+against a different source is a calibration concern, not a crosswalk one — see
+``SlopeAdjustment`` in ``fimbox.preprocessing.calibrate_ratingcurve``.
 
 Short-reach rating curve replacement (areasqkm < min_catchment_area AND
 LengthKm < min_stream_length AND LakeID < 0) borrows the stage-discharge
@@ -68,19 +69,10 @@ PathLike = Union[str, Path]
 SLOPE_MIN = 9.999e-7
 SLOPE_MAX = 0.5
 
-# Stream order at/above which the IRIS-SWORD slope is trusted over the
-# DEM rise/run slope (low-order DEM slopes are noisy but usually fine).
-IRIS_MIN_STREAM_ORDER = 4
-
 # Where each SRC slope source comes from:
-#   "iris_sword" (default) -> IRIS-SWORD slope for order_ >= IRIS_MIN_STREAM_ORDER
-#                             (and in range), else the DEM rise/run slope.
-#   "dem"                  -> DEM rise/run slope only (the column from src_base).
-#   "hfab"                 -> NWM hydrofabric slope (Slope/So), else DEM fallback.
-VALID_SLOPE_SOURCES = ("iris_sword", "dem", "hfab")
-
-# Key for the optional IRIS-SWORD slope CSV (fetched lazily via fimbox.datasets).
-DEFAULT_IRIS_SLOPE_KEY = "iris_sword_slopes"
+#   "dem" (default) -> DEM rise/run slope, the column computed into src_base.
+#   "hfab"          -> NWM hydrofabric slope (Slope/So), else DEM fallback.
+VALID_SLOPE_SOURCES = ("dem", "hfab")
 
 
 class NoCrosswalkError(RuntimeError):
@@ -104,8 +96,7 @@ def add_crosswalk(
     min_stream_length: float = 0.5,
     max_distance_m: float = 100.0,
     small_segments_csv: Optional[PathLike] = None,
-    src_slope_source: str = "iris_sword",
-    iris_slope_csv: Optional[PathLike] = None,
+    src_slope_source: str = "dem",
     hfab_slope_column: Optional[str] = None,
 ) -> dict[str, Path]:
     """
@@ -140,18 +131,6 @@ def add_crosswalk(
             f"src_slope_source must be one of {VALID_SLOPE_SOURCES}, "
             f"got {src_slope_source!r}"
         )
-    # IRIS-SWORD slope is only needed when that source is selected. Fall back
-    # to the table shipped with the package when the caller doesn't pass one.
-    if src_slope_source == "iris_sword":
-        if iris_slope_csv is not None:
-            iris_slope_csv = Path(iris_slope_csv)
-        else:
-            from fimbox.datasets import fetch_data
-
-            iris_slope_csv = fetch_data(DEFAULT_IRIS_SLOPE_KEY)
-    else:
-        iris_slope_csv = None
-
     log.info("add_crosswalk: reading inputs (src_slope_source=%s)", src_slope_source)
     catchments = gpd.read_file(str(catchments_gpkg), engine="fiona")
     flows = gpd.read_file(str(flows_gpkg), engine="fiona")
@@ -166,7 +145,7 @@ def add_crosswalk(
     # appear when overlay + explode created small fragments per HydroID.
     catchments = catchments.dissolve(by="HydroID").reset_index()
 
-    nwm = _prepare_nwm(nwm, iris_slope_csv, hfab_slope_column)
+    nwm = _prepare_nwm(nwm, hfab_slope_column)
 
     # Reproject NWM streams to the catchment CRS so sjoin_nearest distances
     # are in the same projected metres used elsewhere in the pipeline.
@@ -257,19 +236,15 @@ def add_crosswalk(
 # Internal helpers
 def _prepare_nwm(
     nwm: gpd.GeoDataFrame,
-    iris_slope_csv: Optional[Path] = None,
     hfab_slope_column: Optional[str] = None,
 ) -> gpd.GeoDataFrame:
     """Normalise the NWM streams gdf to a feature_id-indexed table.
 
-    Carries three slope columns alongside ``order_`` so the SRC builder can
-    pick one (see ``src_slope_source``):
-      * ``SLOPE_HFAB``        — the hydrofabric's native slope. Auto-detected
-                                from ``Slope`` (CONUS) / ``So`` (Alaska), or set
-                                explicitly via ``hfab_slope_column`` when the
-                                hydrofabric names it something else.
-      * ``SLOPE_IRIS_SWORD``  — merged from the IRIS-SWORD table by feature_id.
-    The DEM rise/run slope is not here — it rides through ``src_base``.
+    Carries ``SLOPE_HFAB`` alongside ``order_`` so the SRC builder can pick it
+    over the DEM slope (see ``src_slope_source``). Auto-detected from ``Slope``
+    (CONUS) / ``So`` (Alaska), or set explicitly via ``hfab_slope_column`` when
+    the hydrofabric names it something else. The DEM rise/run slope is not here
+    — it rides through ``src_base``.
     """
     if "ID" in nwm.columns:
         nwm = nwm.rename(columns={"ID": "feature_id"})
@@ -304,38 +279,6 @@ def _prepare_nwm(
             hfab_slope_column or "'Slope'/'So'",
         )
 
-    # IRIS-SWORD slope, merged in by feature_id from the external table.
-    nwm["SLOPE_IRIS_SWORD"] = np.nan
-    if iris_slope_csv is not None and Path(iris_slope_csv).is_file():
-        iris = pd.read_csv(iris_slope_csv)
-        if "id" in iris.columns and "feature_id" not in iris.columns:
-            iris = iris.rename(columns={"id": "feature_id"})
-        if "slope_iris_sword" in iris.columns:
-            iris = iris.rename(columns={"slope_iris_sword": "SLOPE_IRIS_SWORD"})
-        if {"feature_id", "SLOPE_IRIS_SWORD"}.issubset(iris.columns):
-            iris["feature_id"] = iris["feature_id"].astype(int)
-            iris = iris[["feature_id", "SLOPE_IRIS_SWORD"]].drop_duplicates(
-                "feature_id"
-            )
-            nwm = nwm.drop(columns=["SLOPE_IRIS_SWORD"]).merge(
-                iris, on="feature_id", how="left"
-            )
-            log.info(
-                "add_crosswalk: merged IRIS-SWORD slope for %d feature_ids",
-                iris["SLOPE_IRIS_SWORD"].notna().sum(),
-            )
-        else:
-            log.warning(
-                "add_crosswalk: IRIS slope csv %s lacks feature_id/slope_iris_sword "
-                "columns; SLOPE_IRIS_SWORD left NaN",
-                iris_slope_csv,
-            )
-    elif iris_slope_csv is not None:
-        log.warning(
-            "add_crosswalk: IRIS slope csv not found: %s; SLOPE_IRIS_SWORD left NaN",
-            iris_slope_csv,
-        )
-
     return nwm.set_index("feature_id")
 
 
@@ -363,11 +306,7 @@ def _build_crosswalk(
     joined["feature_id"] = joined["feature_id"].astype(int)
 
     keep = ["HydroID", "feature_id", "distance"]
-    slope_cols = [
-        c
-        for c in ("order_", "SLOPE_HFAB", "SLOPE_IRIS_SWORD")
-        if c in nwm_indexed.columns
-    ]
+    slope_cols = [c for c in ("order_", "SLOPE_HFAB") if c in nwm_indexed.columns]
     out = joined[keep].merge(
         nwm_indexed[slope_cols].reset_index(),
         on="feature_id",
@@ -423,11 +362,9 @@ def _find_short_segments(
 def _select_slope(base: pd.DataFrame, src_slope_source: str) -> pd.Series:
     """Pick the per-reach slope feeding Manning's equation.
 
-    ``iris_sword`` (default): IRIS-SWORD slope for streams of order
-    >= IRIS_MIN_STREAM_ORDER that are in range, else the DEM rise/run slope.
-    ``hfab``: hydrofabric slope where in range, else DEM. ``dem``: DEM only.
-    All fall back to the DEM rise/run slope when the preferred source is
-    missing, so SLOPE is never NaN."""
+    ``dem`` (default): the DEM rise/run slope computed into src_base.
+    ``hfab``: hydrofabric slope where in range, falling back to DEM, so SLOPE is
+    never NaN."""
 
     def _in_range(col: str) -> pd.Series:
         if col not in base.columns:
@@ -435,29 +372,19 @@ def _select_slope(base: pd.DataFrame, src_slope_source: str) -> pd.Series:
         v = pd.to_numeric(base[col], errors="coerce")
         return v.where((v >= SLOPE_MIN) & (v <= SLOPE_MAX))
 
-    # Range-filter the DEM fallback too — an out-of-range DEM slope (e.g. a
-    # 1000s artifact) must drop out, not survive to be floored to ~zero.
+    # Range-filter the DEM slope too — an out-of-range value (e.g. a 1000s
+    # artifact) must drop out, not survive to be floored to ~zero.
     dem = _in_range("SLOPE_RISE_RUN")
-
-    if src_slope_source == "dem":
-        return dem
-
     if src_slope_source == "hfab":
         return _in_range("SLOPE_HFAB").combine_first(dem)
-
-    # iris_sword: only trusted on higher-order streams, else DEM.
-    iris = _in_range("SLOPE_IRIS_SWORD")
-    if "order_" in base.columns:
-        order = pd.to_numeric(base["order_"], errors="coerce")
-        iris = iris.where(order >= IRIS_MIN_STREAM_ORDER)
-    return iris.combine_first(dem)
+    return dem
 
 
 def _build_src_full(
     src_base_csv: Path,
     flows: pd.DataFrame,
     mannings_n: float,
-    src_slope_source: str = "iris_sword",
+    src_slope_source: str = "dem",
 ) -> pd.DataFrame:
     """Compute per-stage Manning hydraulics from the base SRC table.
 
@@ -472,7 +399,7 @@ def _build_src_full(
     base["CatchId"] = base["CatchId"].astype(int)
     flow_cols = [
         c
-        for c in ("HydroID", "NextDownID", "order_", "SLOPE_HFAB", "SLOPE_IRIS_SWORD")
+        for c in ("HydroID", "NextDownID", "order_", "SLOPE_HFAB")
         if c in flows.columns
     ]
     base = base.merge(flows[flow_cols], left_on="CatchId", right_on="HydroID")
@@ -542,6 +469,7 @@ def _build_hydro_table(
         "BedArea (m2)",
         "TopWidth (m)",
         "LENGTHKM",
+        "AREASQKM",
         "WettedPerimeter (m)",
         "HydraulicRadius (m)",
         "WetArea (m2)",
@@ -549,7 +477,6 @@ def _build_hydro_table(
         "SLOPE",
         "SLOPE_RISE_RUN",
         "SLOPE_HFAB",
-        "SLOPE_IRIS_SWORD",
         "ManningN",
         "Stage",
         "Discharge (m3s-1)",

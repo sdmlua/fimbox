@@ -10,7 +10,8 @@ downstream branch and HAND steps expect.
 Output layout
 ------------
     <AOI_name>/                      -- AOI root (HUC<huc8> or boundary stem)
-      processing.log                 -- single combined log (preprocess + branches + FIM)
+      processing.log                 -- single combined log, INFO through ERROR
+                                        (preprocess + branches + calibration + FIM)
       feature_id.csv                 -- unique NWM feature_ids (written by FIM extract step)
       watershed-data/                -- ALL input data + processing + branches
         wbd.gpkg                         -- exact study boundary (HUC8 polygon or user file)
@@ -51,6 +52,7 @@ from ..logging_utils import (
     attach_case_log,
     default_output_dir,
     get_logger,
+    log_errors,
 )
 from .aoi_from_ids import (
     group_label,
@@ -91,9 +93,9 @@ _DEFAULT_BUFFER_M = 2000.0
 # tight to its catchments truncates the derived catchments at the edge and
 # leaves inundation nowhere to spread, so the synthetic rating curves describe
 # a narrower channel than the real one and the same discharge maps to a much
-# higher stage over a much smaller extent. inundation-mapping avoids this with
-# wbd_buffer=5000 on every HUC8; 1 km is the minimum that keeps a reach-id run
-# in the same regime. Raise it for wide floodplains.
+# higher stage over a much smaller extent. HUC8 runs buffer by 5 km for this
+# reason; 1 km is the minimum that keeps a reach-id run in the same regime.
+# Raise it for wide floodplains.
 _MIN_BUFFER_M = 1000.0
 
 _FILENAMES = {
@@ -474,16 +476,18 @@ class getAllInputData:
         self._setup_logger()
 
         # Load exact boundary, create buffer, apply DEM-domain and land/sea masks,
-        # then save the cleaned boundaries used by all later downloads.
-        self.boundary_gdf: gpd.GeoDataFrame = self._load_boundary()
-        self.buffer_gdf: gpd.GeoDataFrame = self._make_buffer()
+        # then save the cleaned boundaries used by all later downloads. A bad
+        # boundary kills the AOI before any step runs, so it is logged too.
+        with log_errors(f"AOI setup: {self.case_name}", logger=self.logger):
+            self.boundary_gdf: gpd.GeoDataFrame = self._load_boundary()
+            self.buffer_gdf: gpd.GeoDataFrame = self._make_buffer()
 
-        # Derive HUC2 once from the exact boundary for NLD preprocessing
-        self.huc2 = _derive_huc2_from_boundary(self.boundary_gdf)
-        self.logger.info(f"Derived HUC2: {self.huc2}")
+            # Derive HUC2 once from the exact boundary for NLD preprocessing
+            self.huc2 = _derive_huc2_from_boundary(self.boundary_gdf)
+            self.logger.info(f"Derived HUC2: {self.huc2}")
 
-        self._apply_dem_domain_and_landsea()
-        self._save_boundaries()
+            self._apply_dem_domain_and_landsea()
+            self._save_boundaries()
 
         self.logger.info(
             f"Case: {self.case_name}  |  AOI: {self.aoi_dir}  |  "
@@ -1008,13 +1012,14 @@ class getAllInputData:
     def run(self):
         self.logger.info(f"=== PreprocessAll: {self.case_name} ===")
         self.logger.info(f"Output: {self.case_dir}")
-        self.run_dem()
-        self.run_nhd()
-        self.run_nld()
-        self.run_osm()
-        self.run_gages()
-        self.logger.info("=== ALL STEPS COMPLETE ===")
-        self._log_summary()
+        with log_errors(f"Preprocessing {self.case_name}", logger=self.logger):
+            self.run_dem()
+            self.run_nhd()
+            self.run_nld()
+            self.run_osm()
+            self.run_gages()
+            self.logger.info("=== ALL STEPS COMPLETE ===")
+            self._log_summary()
 
     def _log_summary(self):
         # Data files live in watershed-data (self.case_dir); the combined log
