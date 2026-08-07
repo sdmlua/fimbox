@@ -22,9 +22,11 @@ variants are carried as columns so the choice stays transparent, and both come
 from data already in hand — no external slope table is involved:
     SLOPE_RISE_RUN    DEM-derived rise/run slope (from src_base)
     SLOPE_HFAB        hydrofabric native slope (Slope/So, or a named column)
-Default ``dem`` uses the computed rise/run slope throughout. Refining slope
-against a different source is a calibration concern, not a crosswalk one — see
-``SlopeAdjustment`` in ``fimbox.preprocessing.calibrate_ratingcurve``.
+Default ``dem`` builds every SRC on the rise/run slope. ``hfab`` opts into the
+hydrofabric slope instead, falling back to rise/run wherever it is missing or
+implausible. Layering IRIS-SWORD over that baseline is a calibration concern,
+not a crosswalk one — see ``SlopeAdjustment`` in
+``fimbox.preprocessing.calibrate_ratingcurve``.
 
 Short-reach rating curve replacement (areasqkm < min_catchment_area AND
 LengthKm < min_stream_length AND LakeID < 0) borrows the stage-discharge
@@ -362,9 +364,10 @@ def _find_short_segments(
 def _select_slope(base: pd.DataFrame, src_slope_source: str) -> pd.Series:
     """Pick the per-reach slope feeding Manning's equation.
 
-    ``dem`` (default): the DEM rise/run slope computed into src_base.
-    ``hfab``: hydrofabric slope where in range, falling back to DEM, so SLOPE is
-    never NaN."""
+    ``dem`` (default): the DEM rise/run slope computed into src_base, for every
+    reach.
+    ``hfab``: hydrofabric slope where in range, falling back to the DEM rise/run
+    slope wherever it is missing or implausible, so SLOPE is never NaN."""
 
     def _in_range(col: str) -> pd.Series:
         if col not in base.columns:

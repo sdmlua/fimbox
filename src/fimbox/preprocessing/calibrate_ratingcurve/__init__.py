@@ -66,12 +66,9 @@ def nonmonotonic_src_adjustment(aoi_dir):
     return SrcNonmonotonic(aoi_dir=aoi_dir).run()
 
 
-def slope_adjustment(
-    aoi_dir, slope_source="hfab", slope_table=None, *, n_workers: Optional[int] = None
-):
+def slope_adjustment(aoi_dir, slope_table=None, *, n_workers: Optional[int] = None):
     return SlopeAdjustment(
         aoi_dir=aoi_dir,
-        slope_source=slope_source,
         slope_table=slope_table,
         n_workers=n_workers,
     ).run()

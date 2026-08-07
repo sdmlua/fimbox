@@ -7,9 +7,9 @@ Synthetic rating curve (SRC) geometry-side adjustments.
 Four classes, one per routine:
 
   SlopeAdjustment    swap the reach slope feeding Manning's equation. Branch
-                     processing builds every SRC on the DEM's computed rise/run
-                     slope; this is where a surveyed slope table, or the
-                     hydrofabric's own slope, replaces it where it has cover.
+                     processing builds every SRC on the DEM's rise/run slope;
+                     this is where a surveyed slope table replaces it, on the
+                     order >= 4 reaches it covers.
   SrcBankfull        identify the in-channel bankfull stage for each HydroID
                      using an external table of NWM bankfull-recurrence flows.
   SrcSubdiv          subdivide each rating curve into channel + overbank
@@ -115,33 +115,30 @@ def _run_branches(
 # treated as missing rather than clipped into plausibility.
 SLOPE_MIN = 9.999e-7
 SLOPE_MAX = 0.5
+# The survey only resolves the larger channels, so the table is trusted on
+# order >= 4 and the headwaters keep their DEM slope.
+SLOPE_STREAM_ORDER_MIN = 4
 
 
 @dataclass
 class SlopeAdjustment:
-    # Re-derive SRC discharge on a different reach slope. Geometry is untouched:
-    # WetArea and HydraulicRadius are already in src_full, so only the sqrt(SLOPE)
-    # term changes. Reaches with no usable replacement keep the slope they had.
+    # Lay a feature_id -> slope table over the slope the crosswalk chose, on the
+    # order >= 4 reaches it covers. Geometry is untouched: WetArea and
+    # HydraulicRadius are already in src_full, so only the sqrt(SLOPE) term
+    # changes. Everything else keeps the slope it had.
 
     aoi_dir: PathLike
-    slope_source: str = "table"  # "table" = slope_table, "hfab" = the SLOPE_HFAB column
-    slope_table: Optional[PathLike] = None  # feature_id -> slope, when source="table"
+    slope_table: Optional[PathLike] = None  # feature_id -> slope
     n_workers: Optional[int] = None
     include_branch_zero: bool = True
 
     def run(self) -> dict[str, str]:
         aoi_dir = resolve_aoi_dir(self.aoi_dir)
-        if self.slope_source not in ("hfab", "table"):
-            raise ValueError(
-                f"slope_source must be 'hfab' or 'table', got {self.slope_source!r}"
-            )
-        table_path = None
-        if self.slope_source == "table":
-            if self.slope_table is None:
-                raise ValueError("slope_source='table' requires slope_table")
-            table_path = Path(self.slope_table)
-            if not table_path.is_file():
-                raise FileNotFoundError(f"slope table not found: {table_path}")
+        if self.slope_table is None:
+            raise ValueError("SlopeAdjustment requires slope_table")
+        table_path = Path(self.slope_table)
+        if not table_path.is_file():
+            raise FileNotFoundError(f"slope table not found: {table_path}")
 
         branches = list(
             iter_branches(aoi_dir, exclude_zero=not self.include_branch_zero)
@@ -150,13 +147,11 @@ class SlopeAdjustment:
             log.warning(f"SlopeAdjustment: no branches found under {aoi_dir}")
             return {}
 
-        log.info(
-            f"SlopeAdjustment: {len(branches)} branches (source={self.slope_source})"
-        )
+        log.info(f"SlopeAdjustment: {len(branches)} branches ({table_path.name})")
         return _run_branches(
             branches,
             _slope_one_branch,
-            (self.slope_source, table_path),
+            (table_path,),
             self.n_workers,
             "SlopeAdjustment",
         )
@@ -180,7 +175,7 @@ def _slope_column(table: pd.DataFrame) -> Optional[str]:
 
 
 def _slope_one_branch(
-    branch_dir: Path, bid: str, slope_source: str, table_path: Optional[Path]
+    branch_dir: Path, bid: str, table_path: Path
 ) -> str:
     src_path = branch_dir / f"src_full_crosswalked_{bid}.csv"
     if not src_path.is_file():
@@ -190,23 +185,25 @@ def _slope_one_branch(
     src.columns = src.columns.str.strip()
     if not {"SLOPE", HRADIUS_VAR, "WetArea (m2)", "ManningN"}.issubset(src.columns):
         return "SKIP missing hydraulic columns"
+    if "order_" not in src.columns:
+        # Without stream order the order>=4 gate cannot be honoured, and applying
+        # the table to every reach would reach far past what it can support.
+        return "SKIP no order_ column"
 
-    if slope_source == "hfab":
-        if "SLOPE_HFAB" not in src.columns:
-            return "SKIP no SLOPE_HFAB column"
-        new = pd.to_numeric(src["SLOPE_HFAB"], errors="coerce")
-    else:
-        table = read_table(table_path, dtype={"feature_id": int})
-        if "id" in table.columns and "feature_id" not in table.columns:
-            table = table.rename(columns={"id": "feature_id"})
-        col = _slope_column(table)
-        if col is None or "feature_id" not in table.columns:
-            return "SKIP slope table lacks feature_id/slope columns"
-        table = table[["feature_id", col]].drop_duplicates("feature_id")
-        src["feature_id"] = pd.to_numeric(src["feature_id"], errors="coerce")
-        new = src["feature_id"].map(table.set_index("feature_id")[col])
+    table = read_table(table_path, dtype={"feature_id": int})
+    if "id" in table.columns and "feature_id" not in table.columns:
+        table = table.rename(columns={"id": "feature_id"})
+    col = _slope_column(table)
+    if col is None or "feature_id" not in table.columns:
+        return "SKIP slope table lacks feature_id/slope columns"
+    table = table[["feature_id", col]].drop_duplicates("feature_id")
+    src["feature_id"] = pd.to_numeric(src["feature_id"], errors="coerce")
+    new = src["feature_id"].map(table.set_index("feature_id")[col])
 
+    # Eligible only where the value is plausible AND the reach is big enough.
+    order = pd.to_numeric(src["order_"], errors="coerce")
     new = new.where((new >= SLOPE_MIN) & (new <= SLOPE_MAX))
+    new = new.where(order >= SLOPE_STREAM_ORDER_MIN)
     applied = int(new.notna().sum())
     if not applied:
         return "SKIP no in-range replacement slopes"

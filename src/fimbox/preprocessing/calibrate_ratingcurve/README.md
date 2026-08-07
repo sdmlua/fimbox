@@ -36,9 +36,9 @@ The three observation-driven calibrators (`src_adjust_usgs`, `src_adjust_ras2fim
 | `logscan.py` | `LogScanner`: collect error/warning lines from logs into per-AOI summaries. |
 | `_common.py` | Shared helpers, dtype maps, and constants. |
 
-**Where slope comes from.** Branch processing builds every SRC on the DEM's own computed rise/run slope, and `SlopeAdjustment` is where a different slope gets applied. `slope_source="table"` (the default) reads a `feature_id -> slope` table, resolving to the published `reach_slope` dataset unless you point `slope_table` elsewhere; `slope_source="hfab"` uses the `SLOPE_HFAB` column the crosswalk already carries through. Only the `sqrt(SLOPE)` term is recomputed — geometry is untouched and the pre-adjustment value is kept as `preslope_SLOPE`. A reach keeps its DEM slope wherever the chosen source has no entry for it or the value falls outside `[9.999e-7, 0.5]`, so partial coverage is normal: `reach_slope` covers roughly 95k reaches, the ones the survey it derives from can actually observe.
+**Where slope comes from.** Branch processing sets the baseline on the DEM's own rise/run slope (`src_slope_source`, default `"dem"`; pass `"hfab"` to use the hydrofabric slope instead, with rise/run as its fallback). `SlopeAdjustment` then lays the IRIS-SWORD table over that baseline, which is what `iris_sword_slope` turns on and off. The table is applied only where the reach is order >= 4 **and** the value falls inside `[9.999e-7, 0.5]` — everything else keeps its rise/run slope, so partial coverage is the norm rather than a gap. Only the `sqrt(SLOPE)` term is recomputed; geometry is untouched and the pre-adjustment value is kept as `preslope_SLOPE`. Point `slope_table` at your own `feature_id -> slope` file to calibrate against your own slopes instead.
 
-**Input datasets.** Nothing ships in the repo. Each step's input defaults to `None`, which resolves to the published dataset via `fimbox.datasets` — fetched once from `s3://sdmlab/FIMbox/calibration_data/v1releaseAug2026/`, verified against a SHA256, and cached (set `$FIMBOX_DATA_DIR` to choose where). Thirteen national tables, one file each: `bankfull_flows`, `recurrence_flows`, `channel_roughness`, `channel_bathymetry`, `channel_geometry_predicted`, `gage_rating_curves`, `gage_quality_filter`, `gage_locations`, `reach_slope`, `flood_edge_points`, `xsec_rating_curves`, `xsec_locations`, `manual_coefficients`. The two observation tables are national, so `SpatialObsCalibrator` cuts them to the AOI's own footprint before dispatching to the branch pool — it looks for `wbd.gpkg`, then a buffered/clipped variant, then the staged catchments or streams, and falls back to using every observation if it can't read any of them.
+**Input datasets.** Nothing ships in the repo. Each step's input defaults to `None`, which resolves to the published dataset via `fimbox.datasets` — fetched once from `s3://sdmlab/FIMbox/calibration_data/v1releaseAug2026/`, verified against a SHA256, and cached (set `$FIMBOX_DATA_DIR` to choose where). Thirteen national tables, one file each: `bankfull_flows`, `recurrence_flows`, `channel_roughness`, `channel_bathymetry`, `channel_geometry_predicted`, `gage_rating_curves`, `gage_quality_filter`, `gage_locations`, `iris_sword_slope`, `flood_edge_points`, `xsec_rating_curves`, `xsec_locations`, `manual_coefficients`. The two observation tables are national, so `SpatialObsCalibrator` cuts them to the AOI's own footprint before dispatching to the branch pool — it looks for `wbd.gpkg`, then a buffered/clipped variant, then the staged catchments or streams, and falls back to using every observation if it can't read any of them.
 
 **One writer per AOI.** Every step rewrites the per-branch SRCs and hydroTables in place, so `run_calibration()` takes an exclusive lock (`.fimbox-writer.lock` in the AOI directory) for the length of the run and refuses to start if another run already holds it. Branch processing takes the same lock, so the two cannot overlap either. Two runs over one AOI would otherwise interleave their writes and leave spliced CSVs — files that still parse for a few thousand rows and then change shape mid-file. The lock is an OS file lock held by the process, so it is released even on a crash and never needs cleaning up by hand. Branch-level parallelism inside a run is unaffected: each worker owns its own branch.
 
@@ -60,7 +60,7 @@ cfg = CalibrationConfig(
     # - mode -
     calibration_rerun=True,                     #reset hydroTables to baseline before re-applying
     # - step toggles (all default True; pass False to unplug a step) -
-    # slope_adjustment: bool = True,            #re-derive discharge on a different reach slope
+    # iris_sword_slope: bool = True,            #lay IRIS-SWORD slopes over rise/run, order >= 4 only
     # thalweg_notches_adjustment: bool = True,  #remove thalweg-notch artifact rows, refill stage ladder
     # longitudinal_filter: bool = True,         #smooth hydraulic geometry along reach chains
     # bathymetry_adjust: bool = True,           #add missing in-channel area below the DEM
@@ -72,8 +72,7 @@ cfg = CalibrationConfig(
     # manual_calb_toggle: bool = True,          #apply per-feature_id manual coefficients
     # src_adjust_ras2fim: bool = True,          #calibrate against cross-section rating curves
     # - inputs: None -> fetch the published dataset; pass a path to use your own -
-    # slope_source: str = "table",              #"table" (slope_table) | "hfab" (SLOPE_HFAB column)
-    # slope_table: Optional[Path] = None,       #feature_id -> slope; None -> published reach_slope
+    # slope_table: Optional[Path] = None,       #feature_id -> slope; None -> published iris_sword_slope
     # bathy_file_ehydro: Optional[Path] = None, #surveyed channel bathymetry
     # bathy_file_aibased: Optional[Path] = None,#predicted channel geometry
     # ai_toggle: int = 1,                       #1 = also use predicted geometry

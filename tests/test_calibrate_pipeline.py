@@ -126,15 +126,14 @@ def test_calibrate_full_pipeline():
     cfg = CalibrationConfig(
         # reset — revert hydroTables to uncalibrated baseline before re-applying.
         # Set True when re-calibrating an AOI that was already calibrated.
-        calibration_rerun=True,
+        calibration_rerun=False,
         # aggregate_pre — assemble usgs/ras2fim elev tables before adjustments
         aggregate_pre=True,
-        # slope — re-derive discharge on a different slope than the DEM's rise/run.
-        # "hfab" reads the SLOPE_HFAB column already in the SRC, so slope_table is
-        # ignored; pass slope_source="table" to use the table instead.
-        slope_adjustment=True,
-        slope_source="hfab",
-        slope_table=dataset("reach_slope"),
+        # slope — lay IRIS-SWORD slopes over the crosswalk's hydrofabric/rise-run
+        # baseline. False keeps the baseline; slope_table=None fetches the
+        # published table, or point it at your own feature_id -> slope file.
+        iris_sword_slope=True,
+        slope_table=dataset("iris_sword_slope"),
         # thalweg — remove thalweg-notch artifact rows, refill stage ladder
         thalweg_notches_adjustment=True,
         # longitudinal — smooth hydraulic geometry along reach chains
@@ -258,14 +257,12 @@ def test_dataset_registry_resolves():
 # @_step
 # @_skip_no_aoi
 # def test_step_slope():
-#     """Re-derive discharge on a slope other than the DEM's rise/run.
-#     slope_source="hfab" reads the SLOPE_HFAB column already in the SRC and
-#     ignores slope_table; "table" reads the reach-slope dataset. Reaches the
-#     chosen source does not cover keep their DEM slope."""
+#     """Lay a feature_id -> slope table over the slope the crosswalk chose
+#     (hydrofabric, DEM rise/run where that is missing). Reaches the table does
+#     not cover keep the slope they already had."""
 #     results = SlopeAdjustment(
 #         aoi_dir=AOI_DIR,
-#         slope_source="table",
-#         slope_table=dataset("reach_slope"),
+#         slope_table=dataset("iris_sword_slope"),
 #         n_workers=JOB_BRANCH_LIMIT,
 #         include_branch_zero=True,
 #     ).run()

@@ -76,7 +76,9 @@ class CalibrationConfig:
 
     # --- step toggles ----
     # All on: this is the full pipeline. Pass False to unplug an individual step.
-    slope_adjustment: bool = True
+    # Layer the IRIS-SWORD reach slopes over the crosswalk's DEM rise/run baseline,
+    # on order >= 4 reaches the table covers. False leaves the baseline alone.
+    iris_sword_slope: bool = True
     thalweg_notches_adjustment: bool = True
     longitudinal_filter: bool = True
     bathymetry_adjust: bool = True
@@ -89,11 +91,8 @@ class CalibrationConfig:
     manual_calb_toggle: bool = True
 
     # --- input files: None -> fetch the published dataset, or pass your own ----
-    # Slope replacing the DEM rise/run slope the crosswalk built each SRC on.
-    # "table" (default) reads slope_table, which resolves to the published
-    # reach-slope dataset; "hfab" reads the SLOPE_HFAB column already carried
-    # through the SRC. Reaches the chosen source does not cover keep the DEM slope.
-    slope_source: str = "table"
+    # feature_id -> slope. None resolves to the published IRIS-SWORD table; point
+    # it at your own file to calibrate against your own slopes instead.
     slope_table: Optional[PathLike] = None
     bathy_file_ehydro: Optional[PathLike] = None
     bathy_file_aibased: Optional[PathLike] = None
@@ -175,27 +174,20 @@ class Calibrator:
             log.info("--- aggregate usgs + ras2fim elev tables ---")
             BranchAggregator(aoi_dir=aoi_dir, usgs_elev=True, ras_elev=True).run()
 
-        if cfg.slope_adjustment:
-            # "hfab" needs no external table — the column rides through the SRC.
-            slope_table = (
-                self._dataset("reach_slope", cfg.slope_table)
-                if cfg.slope_source == "table"
-                else None
+        if cfg.iris_sword_slope:
+            # Reaches the table misses keep the crosswalk's slope, so partial
+            # coverage just means a partial override.
+            slope_table = self._dataset("iris_sword_slope", cfg.slope_table)
+            self._needs(
+                "slope adjustment (IRIS-SWORD)",
+                slope_table,
+                lambda: SlopeAdjustment(
+                    aoi_dir=aoi_dir,
+                    slope_table=slope_table,
+                    n_workers=cfg.job_branch_limit,
+                    include_branch_zero=cfg.include_branch_zero,
+                ).run(),
             )
-            if cfg.slope_source == "table" and slope_table is None:
-                log.info("Skipping slope adjustment: no reach-slope table available")
-            else:
-                self._maybe(
-                    True,
-                    f"slope adjustment ({cfg.slope_source})",
-                    lambda: SlopeAdjustment(
-                        aoi_dir=aoi_dir,
-                        slope_source=cfg.slope_source,
-                        slope_table=slope_table,
-                        n_workers=cfg.job_branch_limit,
-                        include_branch_zero=cfg.include_branch_zero,
-                    ).run(),
-                )
 
         self._maybe(
             cfg.thalweg_notches_adjustment,
