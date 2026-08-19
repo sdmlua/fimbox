@@ -167,6 +167,7 @@ __all__ += [
 try:
     from .streamflow import (
         GeoglowsData,
+        NWMAnalysisAssim,
         NWMForecast,
         NWMRetrospective,
         StreamflowMetrics,
@@ -175,6 +176,7 @@ try:
         calculate_statistics,
         compute_metrics,
         get_usgs_fid_pairs,
+        getNWManalysisassim,
         getNWMforecast,
         getNWMretrospective,
         plot_comparison,
@@ -185,11 +187,13 @@ try:
     __all__ += [
         "NWMRetrospective",
         "NWMForecast",
+        "NWMAnalysisAssim",
         "USGSData",
         "GeoglowsData",
         "StreamflowPipeline",
         "getNWMretrospective",
         "getNWMforecast",
+        "getNWManalysisassim",
         "get_usgs_fid_pairs",
         "plot_nwm",
         "plot_usgs",

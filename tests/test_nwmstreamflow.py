@@ -14,6 +14,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from fimbox import (
+    getNWManalysisassim,
     getNWMretrospective,
 )
 
@@ -43,6 +44,21 @@ def test_retrospective_range_sortby():
 # def test_retrospective_feature_ids_list():
 #     # pass feature_ids directly instead of relying on the AOI's feature_id.csv
 #     getNWMretrospective(AOI_DIR, feature_ids=[FEATURE_ID], date=EVENT)
+
+
+# # analysis and assimilation (AnA) — different extraction combinations
+# def test_analysisassim_event_date():
+#     getNWManalysisassim(AOI_DIR, date=EVENT)
+
+
+# def test_analysisassim_range_continuous():
+#     # start + end, nothing else -> one CSV per hour
+#     getNWManalysisassim(AOI_DIR, start=START, end=END)
+
+
+# def test_analysisassim_range_sortby():
+#     # start + end + sortby -> one aggregated CSV
+#     getNWManalysisassim(AOI_DIR, start=START, end=END, sortby="maximum")
 
 
 # # forecast — different combinations

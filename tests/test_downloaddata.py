@@ -27,13 +27,13 @@ test_nwm_ids = [11239455, 11239689, 11235965]
 #     # nhd_data.process_flowlines()
 #     print(f"Process successful!")
 
-# def test_get_nfhl():
-#     fimbox.DownloadFEMANFHL(
-#         boundary=test_boundary,
-#         out_dir=OUT_DIR,
-#         out_name="fema_nfhl.gpkg",
-#         # log_path=None,
-#     )
+def test_get_nfhl():
+    fimbox.DownloadFEMANFHL(
+        boundary=test_boundary,
+        out_dir=OUT_DIR,
+        out_name="fema_nfhl.gpkg",
+        # log_path=None,
+    )
 
 # def test_download_nld():
 #     fimbox.DownloadNLD(

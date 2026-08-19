@@ -12,7 +12,9 @@ Given an AOI directory and its feature_id CSV, retrieve streamflow and route it:
 
 Retrospective is the default FIM source: a single datetime yields one CSV, a
 date range yields one CSV per hour (or one aggregated CSV with --sortby).
-Forecast (short/medium/long range) yields per-day aggregated CSVs.
+Analysis and Assimilation (AnA) follows the same shape, hourly from the NWM
+bucket instead of the teehr retrospective archive. Forecast (short/medium/long
+range) yields per-day aggregated CSVs.
 """
 
 from __future__ import annotations
@@ -23,6 +25,7 @@ from typing import Optional, Union
 
 from ..logging_utils import attach_case_log, log_errors
 from . import _common as C
+from .nwm_analysisassim import NWMAnalysisAssim
 from .nwm_forecast import NWMForecast
 from .nwm_retrospective import NWMRetrospective
 
@@ -89,6 +92,29 @@ class StreamflowPipeline:
                 self.aoi_dir, self.feature_id_csv
             ).select_from_archive(date=date, start=start, end=end, sortby=sortby)
 
+    # analysis and assimilation (AnA)
+    def analysis_assim(
+        self,
+        *,
+        date: Optional[str] = None,
+        start: Optional[str] = None,
+        end: Optional[str] = None,
+        sortby: Optional[str] = None,
+    ) -> list[Path]:
+        """Single ``date`` -> one CSV; ``start``/``end`` range -> one CSV per
+        hour, or a single aggregated CSV when ``sortby`` is given."""
+        with log_errors("Analysis assimilation streamflow"):
+            if not self.feature_id_csv.exists():
+                raise FileNotFoundError(
+                    f"feature_id CSV not found: {self.feature_id_csv}"
+                )
+            ana = NWMAnalysisAssim(self.aoi_dir, self.feature_id_csv)
+            if date:
+                return [ana.at(date)]
+            if start and end:
+                return ana.to_fim_inputs(start, end, sortby=sortby)
+            raise ValueError("Provide date=, or start= and end=.")
+
     # forecast
     def forecast(
         self,
@@ -129,7 +155,9 @@ def _main(argv: Optional[list[str]] = None) -> None:
         "--feature-id-csv", default=None, help="Defaults to <AOI>/feature_id.csv."
     )
     p.add_argument(
-        "--source", choices=["retrospective", "forecast"], default="retrospective"
+        "--source",
+        choices=["retrospective", "analysisassim", "forecast"],
+        default="retrospective",
     )
     p.add_argument(
         "--select",
@@ -172,6 +200,10 @@ def _main(argv: Optional[list[str]] = None) -> None:
         )
     elif args.source == "retrospective":
         out = pipe.retrospective(
+            date=args.date, start=args.start, end=args.end, sortby=args.sortby
+        )
+    elif args.source == "analysisassim":
+        out = pipe.analysis_assim(
             date=args.date, start=args.start, end=args.end, sortby=args.sortby
         )
     else:

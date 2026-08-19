@@ -8,6 +8,7 @@ Sources
 -------
 NWMRetrospective   NWM v3.0 retrospective hourly streamflow
 NWMForecast        NWM operational short/medium/long-range forecast (netCDF)
+NWMAnalysisAssim   NWM Analysis and Assimilation (AnA) hourly streamflow
 USGSData           USGS gage observations
 GeoglowsData       GEOGLOWS v2 retrospective (S3 zarr)
 
@@ -24,6 +25,7 @@ calculate_statistics                     KGE / NSE / PBias (NWM vs USGS)
 from __future__ import annotations
 
 from .geoglows import GeoglowsData
+from .nwm_analysisassim import NWMAnalysisAssim, getNWManalysisassim
 from .nwm_forecast import NWMForecast, getNWMforecast
 from .nwm_retrospective import NWMRetrospective, getNWMretrospective
 from .pipeline import StreamflowPipeline
@@ -35,12 +37,14 @@ __all__ = [
     # classes
     "NWMRetrospective",
     "NWMForecast",
+    "NWMAnalysisAssim",
     "USGSData",
     "GeoglowsData",
     "StreamflowPipeline",
     # function wrappers (FIMserv-style)
     "getNWMretrospective",
     "getNWMforecast",
+    "getNWManalysisassim",
     "get_usgs_fid_pairs",
     # plotting + statistics
     "plot_nwm",

@@ -1,7 +1,7 @@
 ### Streamflow Retrieval and Analysis
 <hr style="border: 1px solid blue;">
 
-**fimbox.streamflow** retrieves the discharge data that drives FIM generation and supports its evaluation: NWM v3.0 retrospective, NWM operational forecasts (short/medium/long range), GEOGLOWS v2 retrospective, and USGS gage observations. Retrieved series are archived under `<aoi>/streamflow/` and exported as FIM-ready CSVs (`feature_id, discharge_cms`) into `<aoi>/discharge-inputs/`. Plotting and statistics helpers compare NWM against USGS observations.
+**fimbox.streamflow** retrieves the discharge data that drives FIM generation and supports its evaluation: NWM v3.0 retrospective, NWM Analysis and Assimilation (AnA), NWM operational forecasts (short/medium/long range), GEOGLOWS v2 retrospective, and USGS gage observations. Retrieved series are archived under `<aoi>/streamflow/` and exported as FIM-ready CSVs (`feature_id, discharge_cms`) into `<aoi>/discharge-inputs/`. Plotting and statistics helpers compare NWM against USGS observations.
 
 **Workflow**
 
@@ -17,6 +17,7 @@ The module first pulls discharge for the AOI's feature IDs from the chosen sourc
 | File | What it contains |
 |---|---|
 | `nwm_retrospective.py` | `NWMRetrospective` class and `getNWMretrospective` wrapper: NWM v3.0 hourly retrospective to parquet archive + FIM CSVs. |
+| `nwm_analysisassim.py` | `NWMAnalysisAssim` class and `getNWManalysisassim` wrapper: NWM Analysis and Assimilation (AnA) hourly streamflow to parquet archive + FIM CSVs. |
 | `nwm_forecast.py` | `NWMForecast` class and `getNWMforecast` wrapper: operational forecast cycles to per-day FIM CSVs. |
 | `geoglows.py` | `GeoglowsData`: GEOGLOWS v2 retrospective from S3 zarr, mapped to feature_ids via a hydrotable. |
 | `usgs.py` | `USGSData` (fetch/series) and `get_usgs_fid_pairs`: USGS gage observations for comparison. |
@@ -42,6 +43,16 @@ csvs = fimbox.getNWMretrospective(
     # sortby: Optional[str] = None,        #"maximum"|"minimum"|"mean" -> one aggregated CSV; None -> per hour
 )
 
+# NWM Analysis and Assimilation (AnA) — gauge-assimilated best estimate of past conditions
+csvs = fimbox.getNWManalysisassim(
+    "out/my_basin",                        #AOI root directory
+    date="2020-05-20 12:00:00",            #single instant (YYYY-MM-DD HH:MM:SS) or day (YYYY-MM-DD)
+    # feature_ids / feature_id_csv,        #as above
+    # start: Optional[str] = None,         #range start (YYYY-MM-DD), used with end instead of date
+    # end: Optional[str] = None,           #range end (YYYY-MM-DD)
+    # sortby: Optional[str] = None,        #"maximum"|"minimum"|"median"|"mean" -> one aggregated CSV; None -> per hour
+)
+
 # NWM operational forecast
 csvs = fimbox.getNWMforecast(
     "out/my_basin",                        #AOI root directory
@@ -56,6 +67,7 @@ csvs = fimbox.getNWMforecast(
 pipe = fimbox.StreamflowPipeline("out/my_basin")
 csvs = pipe.retrospective(start="2020-05-19", end="2020-05-22", sortby="maximum")
 csvs = pipe.select(date="2020-05-20")      #from existing archive, no re-download
+csvs = pipe.analysis_assim(date="2020-05-20 12:00:00")
 csvs = pipe.forecast("mediumrange", forecast_date="2024-06-01", hour=12)
 
 # USGS observations

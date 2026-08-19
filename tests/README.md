@@ -15,7 +15,7 @@ The test suite doubles as the usage reference for `fimbox`: every stage of the w
 | `test_generate_dem_diff.py` | Bridge LiDAR rasters (`generateBridgeRaster`, with `status()` check) and `BridgeDEMDiff` mosaicking. |
 | `test_branchprocessing.py` | `BranchDerivation`, `AOIProcessingConfig`, `calculate_allbranches`, plus step-level tests for the BranchZero and CreateHAND substeps, and the single-reach branch-zero-only path (offline, staged in `tmp_path`). |
 | `test_calibrate_pipeline.py` | The full SRC calibration pipeline via one `run_calibration()` call with every `CalibrationConfig` parameter spelled out, plus one test per calibration stage. |
-| `test_nwmstreamflow.py` | Streamflow retrieval (`getNWMretrospective`, `getNWMforecast`, `USGSData`), plotting, and KGE/NSE/PBias statistics. |
+| `test_nwmstreamflow.py` | Streamflow retrieval (`getNWMretrospective`, `getNWManalysisassim`, `getNWMforecast`, `USGSData`), plotting, and KGE/NSE/PBias statistics. |
 | `test_fimgeneration.py` | FIM generation from `discharge-inputs/` CSVs with date/range selection and depth output options. |
 | `test_fimevaluation.py` | Benchmark FIM query/download via `queryBenchmarkFIM` (FIMbench) and candidate-vs-benchmark evaluation via `evaluateFIM` (FIMeval). |
 
